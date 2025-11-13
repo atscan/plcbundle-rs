@@ -33,6 +33,10 @@ struct Args {
     /// Use simple dot notation for faster matching (e.g., "operation.handle")
     #[arg(long = "simple")]
     simple: bool,
+
+    /// Batch size for output buffering (higher = less lock contention, more memory)
+    #[arg(long = "batch-size", default_value = "2000")]
+    batch_size: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,6 +56,14 @@ struct BundleMetadata {
 enum QueryEngine {
     JmesPath(jmespath::Expression<'static>),
     Simple(Vec<String>),
+}
+
+#[derive(Default)]
+struct Stats {
+    operations: usize,
+    matches: usize,
+    total_bytes: u64,
+    matched_bytes: u64,
 }
 
 fn parse_bundle_range(spec: &str, max_bundle: u32) -> Result<Vec<u32>> {
@@ -84,7 +96,6 @@ fn parse_bundle_range(spec: &str, max_bundle: u32) -> Result<Vec<u32>> {
     Ok(bundles)
 }
 
-// Fast path: simple dot notation query
 fn query_simple(value: &sonic_rs::Value, path: &[String]) -> Option<sonic_rs::Value> {
     let mut current = value;
     
@@ -95,31 +106,42 @@ fn query_simple(value: &sonic_rs::Value, path: &[String]) -> Option<sonic_rs::Va
     Some(current.clone())
 }
 
-// Batch output buffer to reduce lock contention
 struct OutputBuffer {
-    buffer: Vec<String>,
+    buffer: String,
     capacity: usize,
+    count: usize,
+    matched_bytes: u64,
 }
 
 impl OutputBuffer {
     fn new(capacity: usize) -> Self {
         Self {
-            buffer: Vec::with_capacity(capacity),
+            buffer: String::with_capacity(capacity * 100),
             capacity,
+            count: 0,
+            matched_bytes: 0,
         }
     }
 
-    fn push(&mut self, line: String) -> Option<Vec<String>> {
-        self.buffer.push(line);
-        if self.buffer.len() >= self.capacity {
-            Some(std::mem::replace(&mut self.buffer, Vec::with_capacity(self.capacity)))
-        } else {
-            None
-        }
+    fn push(&mut self, line: &str) -> bool {
+        self.matched_bytes += line.len() as u64 + 1; // +1 for newline
+        self.buffer.push_str(line);
+        self.buffer.push('\n');
+        self.count += 1;
+        self.count >= self.capacity
     }
 
-    fn flush(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.buffer)
+    fn flush(&mut self) -> String {
+        self.count = 0;
+        std::mem::replace(&mut self.buffer, String::with_capacity(self.capacity * 100))
+    }
+
+    fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    fn get_matched_bytes(&self) -> u64 {
+        self.matched_bytes
     }
 }
 
@@ -127,14 +149,14 @@ fn process_bundle_simple(
     bundle_path: &PathBuf,
     path: &[String],
     stdout_lock: &Mutex<()>,
-) -> Result<(usize, u64)> {
+    batch_size: usize,
+) -> Result<Stats> {
     let file = File::open(bundle_path)?;
     let decoder = zstd::Decoder::new(file)?;
-    let reader = BufReader::with_capacity(512 * 1024, decoder);
+    let reader = BufReader::with_capacity(1024 * 1024, decoder);
 
-    let mut matches = 0;
-    let mut uncompressed_bytes = 0u64;
-    let mut output_buffer = OutputBuffer::new(1000);
+    let mut stats = Stats::default();
+    let mut output_buffer = OutputBuffer::new(batch_size);
 
     for line in reader.lines() {
         let line = line?;
@@ -142,57 +164,55 @@ fn process_bundle_simple(
             continue;
         }
 
-        uncompressed_bytes += line.len() as u64 + 1;
+        stats.operations += 1;
+        stats.total_bytes += line.len() as u64 + 1;
 
         let data: sonic_rs::Value = sonic_rs::from_str(&line)?;
         
         if let Some(result) = query_simple(&data, path) {
             if !result.is_null() {
-                let output = if result.is_str() {
-                    result.as_str().unwrap().to_string()
-                } else {
-                    sonic_rs::to_string(&result)?
-                };
-                
-                matches += 1;
+                stats.matches += 1;
 
-                if let Some(batch) = output_buffer.push(output) {
-                    let _lock = stdout_lock.lock().unwrap();
-                    let stdout = io::stdout();
-                    let mut out = stdout.lock();
-                    for line in batch {
-                        writeln!(out, "{}", line)?;
+                if result.is_str() {
+                    if output_buffer.push(result.as_str().unwrap()) {
+                        let _lock = stdout_lock.lock().unwrap();
+                        let batch = output_buffer.flush();
+                        io::stdout().write_all(batch.as_bytes())?;
+                    }
+                } else {
+                    let output = sonic_rs::to_string(&result)?;
+                    if output_buffer.push(&output) {
+                        let _lock = stdout_lock.lock().unwrap();
+                        let batch = output_buffer.flush();
+                        io::stdout().write_all(batch.as_bytes())?;
                     }
                 }
             }
         }
     }
 
-    let remaining = output_buffer.flush();
-    if !remaining.is_empty() {
+    if !output_buffer.is_empty() {
         let _lock = stdout_lock.lock().unwrap();
-        let stdout = io::stdout();
-        let mut out = stdout.lock();
-        for line in remaining {
-            writeln!(out, "{}", line)?;
-        }
+        let batch = output_buffer.flush();
+        io::stdout().write_all(batch.as_bytes())?;
     }
 
-    Ok((matches, uncompressed_bytes))
+    stats.matched_bytes = output_buffer.get_matched_bytes();
+    Ok(stats)
 }
 
 fn process_bundle_jmespath(
     bundle_path: &PathBuf,
     expr: &jmespath::Expression<'_>,
     stdout_lock: &Mutex<()>,
-) -> Result<(usize, u64)> {
+    batch_size: usize,
+) -> Result<Stats> {
     let file = File::open(bundle_path)?;
     let decoder = zstd::Decoder::new(file)?;
-    let reader = BufReader::with_capacity(512 * 1024, decoder);
+    let reader = BufReader::with_capacity(1024 * 1024, decoder);
 
-    let mut matches = 0;
-    let mut uncompressed_bytes = 0u64;
-    let mut output_buffer = OutputBuffer::new(1000);
+    let mut stats = Stats::default();
+    let mut output_buffer = OutputBuffer::new(batch_size);
     
     for line in reader.lines() {
         let line = line?;
@@ -200,7 +220,8 @@ fn process_bundle_jmespath(
             continue;
         }
 
-        uncompressed_bytes += line.len() as u64 + 1;
+        stats.operations += 1;
+        stats.total_bytes += line.len() as u64 + 1;
 
         let data = jmespath::Variable::from_json(&line)
             .map_err(|e| anyhow::anyhow!("Failed to parse JSON: {}", e))?;
@@ -209,42 +230,66 @@ fn process_bundle_jmespath(
             .map_err(|e| anyhow::anyhow!("JMESPath search failed: {}", e))?;
         
         if !result.is_null() {
-            let output = if result.is_string() {
-                result.as_string().unwrap().to_string()
-            } else {
-                sonic_rs::to_string(&result)?
-            };
-            
-            matches += 1;
+            stats.matches += 1;
 
-            if let Some(batch) = output_buffer.push(output) {
-                let _lock = stdout_lock.lock().unwrap();
-                let stdout = io::stdout();
-                let mut out = stdout.lock();
-                for line in batch {
-                    writeln!(out, "{}", line)?;
+            if result.is_string() {
+                if output_buffer.push(result.as_string().unwrap()) {
+                    let _lock = stdout_lock.lock().unwrap();
+                    let batch = output_buffer.flush();
+                    io::stdout().write_all(batch.as_bytes())?;
+                }
+            } else {
+                let output = sonic_rs::to_string(&result)?;
+                if output_buffer.push(&output) {
+                    let _lock = stdout_lock.lock().unwrap();
+                    let batch = output_buffer.flush();
+                    io::stdout().write_all(batch.as_bytes())?;
                 }
             }
         }
     }
 
-    let remaining = output_buffer.flush();
-    if !remaining.is_empty() {
+    if !output_buffer.is_empty() {
         let _lock = stdout_lock.lock().unwrap();
-        let stdout = io::stdout();
-        let mut out = stdout.lock();
-        for line in remaining {
-            writeln!(out, "{}", line)?;
-        }
+        let batch = output_buffer.flush();
+        io::stdout().write_all(batch.as_bytes())?;
     }
 
-    Ok((matches, uncompressed_bytes))
+    stats.matched_bytes = output_buffer.get_matched_bytes();
+    Ok(stats)
+}
+
+fn format_number(n: usize) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    let mut count = 0;
+    
+    for c in s.chars().rev() {
+        if count > 0 && count % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+        count += 1;
+    }
+    
+    result.chars().rev().collect()
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Auto-detect thread count if 0
     let num_threads = if args.threads == 0 {
         std::thread::available_parallelism()
             .map(|n| n.get())
@@ -255,7 +300,6 @@ fn main() -> Result<()> {
 
     eprintln!("Using {} worker thread(s)", num_threads);
 
-    // Prepare query engine
     let query_engine = if args.simple {
         let path: Vec<String> = args.query.split('.').map(|s| s.to_string()).collect();
         eprintln!("Using simple query mode: {:?}", path);
@@ -264,10 +308,10 @@ fn main() -> Result<()> {
         let expr = jmespath::compile(&args.query)
             .map_err(|e| anyhow::anyhow!("Failed to compile JMESPath query: {}", e))?;
         let expr = Box::leak(Box::new(expr));
+        eprintln!("Using JMESPath query mode");
         QueryEngine::JmesPath(expr.clone())
     };
 
-    // Set thread pool size
     if num_threads > 1 {
         rayon::ThreadPoolBuilder::new()
             .num_threads(num_threads)
@@ -291,7 +335,7 @@ fn main() -> Result<()> {
         (1..=index.last_bundle).collect()
     };
 
-    eprintln!("Processing {} bundles with query: {}", bundle_numbers.len(), args.query);
+    eprintln!("Processing {} bundles with query: {}\n", bundle_numbers.len(), args.query);
 
     let pb = ProgressBar::new(bundle_numbers.len() as u64);
     pb.set_style(
@@ -301,10 +345,10 @@ fn main() -> Result<()> {
     );
 
     let stdout_lock = Mutex::new(());
-    let total_matches = Mutex::new(0usize);
-    let total_bytes = Arc::new(Mutex::new(0u64));
+    let total_stats = Arc::new(Mutex::new(Stats::default()));
     let start_time = Instant::now();
 
+    let batch_size = args.batch_size;
     let process_fn = |bundle_num: &u32| -> Result<()> {
         let bundle_path = bundle_dir.join(format!("{:06}.jsonl.zst", bundle_num));
         
@@ -313,19 +357,24 @@ fn main() -> Result<()> {
             return Ok(());
         }
 
-        let (matches, bytes) = match &query_engine {
-            QueryEngine::Simple(path) => process_bundle_simple(&bundle_path, path, &stdout_lock)?,
-            QueryEngine::JmesPath(expr) => process_bundle_jmespath(&bundle_path, expr, &stdout_lock)?,
+        let stats = match &query_engine {
+            QueryEngine::Simple(path) => process_bundle_simple(&bundle_path, path, &stdout_lock, batch_size)?,
+            QueryEngine::JmesPath(expr) => process_bundle_jmespath(&bundle_path, expr, &stdout_lock, batch_size)?,
         };
         
-        *total_matches.lock().unwrap() += matches;
-        *total_bytes.lock().unwrap() += bytes;
+        {
+            let mut total = total_stats.lock().unwrap();
+            total.operations += stats.operations;
+            total.matches += stats.matches;
+            total.total_bytes += stats.total_bytes;
+            total.matched_bytes += stats.matched_bytes;
+        }
         
         let elapsed = start_time.elapsed().as_secs_f64();
-        let bytes_processed = *total_bytes.lock().unwrap();
-        let mb_per_sec = (bytes_processed as f64 / 1_048_576.0) / elapsed;
+        let current_stats = total_stats.lock().unwrap();
+        let mb_per_sec = (current_stats.total_bytes as f64 / 1_048_576.0) / elapsed;
         
-        pb.set_message(format!("{} matches | {:.1} MB/s", *total_matches.lock().unwrap(), mb_per_sec));
+        pb.set_message(format!("{} matches | {:.1} MB/s", format_number(current_stats.matches), mb_per_sec));
         pb.inc(1);
         
         Ok(())
@@ -337,10 +386,27 @@ fn main() -> Result<()> {
         bundle_numbers.par_iter().try_for_each(process_fn)?;
     }
 
-    pb.finish_with_message("Done");
+    pb.finish_and_clear();
 
-    let final_matches = *total_matches.lock().unwrap();
-    eprintln!("\nTotal matches: {}", final_matches);
+    // Print final statistics
+    let final_stats = total_stats.lock().unwrap();
+    let elapsed = start_time.elapsed().as_secs_f64();
+    let ops_per_sec = final_stats.operations as f64 / elapsed;
+    let mb_per_sec = (final_stats.total_bytes as f64 / 1_048_576.0) / elapsed;
+    let match_percentage = if final_stats.operations > 0 {
+        (final_stats.matches as f64 / final_stats.operations as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    eprintln!("\n✓ Query complete");
+    eprintln!("  Total operations:   {} ops", format_number(final_stats.operations));
+    eprintln!("  Matches found:      {} ({:.2}%)", format_number(final_stats.matches), match_percentage);
+    eprintln!("  Total bytes:        {}", format_bytes(final_stats.total_bytes));
+    eprintln!("  Matched bytes:      {}", format_bytes(final_stats.matched_bytes));
+    eprintln!("  Time elapsed:       {:.2}s", elapsed);
+    eprintln!("  Throughput:         {} ops/sec | {:.1} MB/s", format_number(ops_per_sec as usize), mb_per_sec);
+    eprintln!("  Threads:            {}", num_threads);
 
     Ok(())
 }
