@@ -15,7 +15,7 @@ build-go: build
 	cd bindings/go && go build ./...
 
 build-go-example: build-go
-	cd bindings/go && go build -o ../../bundleq-go cmd/example/main.go
+	cd bindings/go && go build -o ../../plcbundle-go cmd/example/main.go
 
 release: ## Build optimized release binary
 	cargo build --release

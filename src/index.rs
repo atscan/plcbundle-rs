@@ -1,9 +1,11 @@
+// Replace your current src/index.rs with this:
+
 use anyhow::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};  // Add Serialize here
 use std::fs::File;
 use std::path::Path;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]  // Add Serialize here
 pub struct Index {
     pub version: String,
     pub origin: String,
@@ -14,7 +16,7 @@ pub struct Index {
     pub bundles: Vec<BundleMetadata>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]  // Add Serialize here
 pub struct BundleMetadata {
     pub bundle_number: u32,
     pub start_time: String,

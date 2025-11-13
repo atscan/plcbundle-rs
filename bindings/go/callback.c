@@ -1,7 +1,2 @@
-#include "_cgo_export.h"
-
-typedef int (*callback_fn_t)(const char*);
-
-callback_fn_t get_go_callback_ptr() {
-    return (callback_fn_t)goCallback;
-}
+// Callback utilities - currently unused
+// This file can be removed or used for future callback implementations

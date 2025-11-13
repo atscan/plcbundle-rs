@@ -1,4 +1,6 @@
-use crate::{Options, QueryEngine, Index};
+use crate::options::Options;
+use crate::query::QueryEngine;
+use crate::index::Index;
 use anyhow::Result;
 use rayon::prelude::*;
 use std::fs::File;

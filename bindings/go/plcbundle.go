@@ -2,186 +2,460 @@ package plcbundle
 
 // #cgo LDFLAGS: -L../../target/release -lplcbundle -lm -ldl -lpthread
 // #include <stdlib.h>
-// #include "callback.h"
-//
-// typedef struct {
-//     size_t operations;
-//     size_t matches;
-//     unsigned long long total_bytes;
-//     unsigned long long matched_bytes;
-// } CStats;
-//
-// typedef void* BundleqProcessor;
-//
-// extern BundleqProcessor bundleq_new(const char* bundle_dir, const char* query,
-//                                      _Bool simple_mode, size_t num_threads, size_t batch_size);
-// extern unsigned int* bundleq_parse_bundles(const char* spec, unsigned int max_bundle, size_t* out_len);
-// extern void bundleq_free_bundle_list(unsigned int* ptr, size_t len);
-// extern int bundleq_process(BundleqProcessor processor, const unsigned int* bundles, size_t count,
-//                             int (*callback)(const char*), CStats* out_stats);
-// extern unsigned int bundleq_get_last_bundle(const char* bundle_dir);
-// extern void bundleq_free(BundleqProcessor processor);
+// #include "plcbundle.h"
 import "C"
 import (
 	"fmt"
 	"runtime"
-	"sync"
 	"unsafe"
 )
 
-type Stats struct {
-	Operations   uint64
-	Matches      uint64
-	TotalBytes   uint64
-	MatchedBytes uint64
+// ============================================================================
+// Go types
+// ============================================================================
+
+type LoadOptions struct {
+	VerifyHash bool
+	Decompress bool
+	Cache      bool
 }
 
-type Processor struct {
-	ptr      C.BundleqProcessor
-	callback OutputCallback
-	mu       sync.Mutex
+type LoadResult struct {
+	Success        bool
+	OperationCount uint32
+	SizeBytes      uint64
+	Error          error
 }
 
-type OutputCallback func(batch string) error
+type Operation struct {
+	DID       string
+	OpType    string
+	CID       string
+	Nullified bool
+	CreatedAt string
+	JSON      string
+}
 
-var (
-	processorRegistry   = make(map[uintptr]*Processor)
-	processorRegistryMu sync.Mutex
+type OperationRequest struct {
+	BundleNum    uint32
+	OperationIdx uint
+}
+
+type VerifyResult struct {
+	Valid         bool
+	HashMatch     bool
+	CompressionOk bool
+	Error         error
+}
+
+type BundleInfo struct {
+	BundleNumber     uint32
+	OperationCount   uint32
+	DIDCount         uint32
+	CompressedSize   uint64
+	UncompressedSize uint64
+	StartTime        string
+	EndTime          string
+	Hash             string
+}
+
+type ManagerStats struct {
+	CacheHits           uint64
+	CacheMisses         uint64
+	BytesRead           uint64
+	OperationsProcessed uint64
+}
+
+type DIDIndexStats struct {
+	TotalDIDs       uint
+	TotalOperations uint
+	IndexSizeBytes  uint
+}
+
+type RebuildStats struct {
+	BundlesProcessed  uint32
+	OperationsIndexed uint64
+	UniqueDIDs        uint
+	DurationMs        uint64
+}
+
+type WarmUpStrategy uint8
+
+const (
+	WarmUpRecent WarmUpStrategy = 0
+	WarmUpAll    WarmUpStrategy = 1
+	WarmUpRange  WarmUpStrategy = 2
 )
 
-//export goCallback
-func goCallback(batch *C.char) C.int {
-	str := C.GoString(batch)
+// ============================================================================
+// BundleManager
+// ============================================================================
 
-	processorRegistryMu.Lock()
-	var callback OutputCallback
-	for _, p := range processorRegistry {
-		p.mu.Lock()
-		if p.callback != nil {
-			callback = p.callback
-			p.mu.Unlock()
-			break
-		}
-		p.mu.Unlock()
-	}
-	processorRegistryMu.Unlock()
-
-	if callback != nil {
-		if err := callback(str); err != nil {
-			return -1
-		}
-	}
-	return 0
+type BundleManager struct {
+	ptr C.CBundleManager
 }
 
-// NewProcessor creates a new bundle processor
-func NewProcessor(bundleDir, query string, simpleMode bool, numThreads, batchSize int) (*Processor, error) {
-	cBundleDir := C.CString(bundleDir)
-	defer C.free(unsafe.Pointer(cBundleDir))
-
-	cQuery := C.CString(query)
-	defer C.free(unsafe.Pointer(cQuery))
-
-	if numThreads == 0 {
-		numThreads = runtime.NumCPU()
-	}
-
-	ptr := C.bundleq_new(cBundleDir, cQuery, C._Bool(simpleMode), C.size_t(numThreads), C.size_t(batchSize))
-	if ptr == nil {
-		return nil, fmt.Errorf("failed to create processor")
-	}
-
-	p := &Processor{ptr: ptr}
-
-	processorRegistryMu.Lock()
-	processorRegistry[uintptr(ptr)] = p
-	processorRegistryMu.Unlock()
-
-	runtime.SetFinalizer(p, (*Processor).Close)
-	return p, nil
-}
-
-// ParseBundles parses bundle range specification
-func ParseBundles(spec string, maxBundle uint32) ([]uint32, error) {
-	cSpec := C.CString(spec)
-	defer C.free(unsafe.Pointer(cSpec))
-
-	var outLen C.size_t
-	ptr := C.bundleq_parse_bundles(cSpec, C.uint(maxBundle), &outLen)
-	if ptr == nil {
-		return nil, fmt.Errorf("failed to parse bundle range")
-	}
-	defer C.bundleq_free_bundle_list(ptr, outLen)
-
-	bundles := make([]uint32, int(outLen))
-	slice := unsafe.Slice(ptr, int(outLen))
-	for i, v := range slice {
-		bundles[i] = uint32(v)
-	}
-
-	return bundles, nil
-}
-
-// GetLastBundle returns the last bundle number from the index
-func GetLastBundle(bundleDir string) (uint32, error) {
+// NewBundleManager creates a new bundle manager
+func NewBundleManager(bundleDir string) (*BundleManager, error) {
 	cDir := C.CString(bundleDir)
 	defer C.free(unsafe.Pointer(cDir))
 
-	lastBundle := C.bundleq_get_last_bundle(cDir)
-	if lastBundle == 0 {
-		return 0, fmt.Errorf("failed to load index")
+	ptr := C.bundle_manager_new(cDir)
+	if ptr == nil {
+		return nil, fmt.Errorf("failed to create bundle manager")
 	}
 
-	return uint32(lastBundle), nil
+	m := &BundleManager{ptr: ptr}
+	runtime.SetFinalizer(m, (*BundleManager).Close)
+	return m, nil
 }
 
-// Process processes the bundles
-func (p *Processor) Process(bundles []uint32, callback OutputCallback) (Stats, error) {
-	if len(bundles) == 0 {
-		return Stats{}, fmt.Errorf("no bundles to process")
+// Close frees the bundle manager
+func (m *BundleManager) Close() {
+	if m.ptr != nil {
+		C.bundle_manager_free(m.ptr)
+		m.ptr = nil
+	}
+}
+
+// ============================================================================
+// Smart Loading
+// ============================================================================
+
+// LoadBundle loads a bundle with options
+func (m *BundleManager) LoadBundle(bundleNum uint32, opts *LoadOptions) (*LoadResult, error) {
+	var cOpts *C.CLoadOptions
+	if opts != nil {
+		cOpts = &C.CLoadOptions{
+			verify_hash: C._Bool(opts.VerifyHash),
+			decompress:  C._Bool(opts.Decompress),
+			cache:       C._Bool(opts.Cache),
+		}
 	}
 
-	p.mu.Lock()
-	p.callback = callback
-	p.mu.Unlock()
+	var cResult C.CLoadResult
+	result := C.bundle_manager_load_bundle(m.ptr, C.uint32_t(bundleNum), cOpts, &cResult)
 
-	defer func() {
-		p.mu.Lock()
-		p.callback = nil
-		p.mu.Unlock()
-	}()
+	loadResult := &LoadResult{
+		Success:        bool(cResult.success),
+		OperationCount: uint32(cResult.operation_count),
+		SizeBytes:      uint64(cResult.size_bytes),
+	}
 
-	var cStats C.CStats
+	if result != 0 {
+		if cResult.error_msg != nil {
+			loadResult.Error = fmt.Errorf("%s", C.GoString(cResult.error_msg))
+			C.bundle_manager_free_string(cResult.error_msg)
+		} else {
+			loadResult.Error = fmt.Errorf("load failed")
+		}
+	}
 
-	// Use the helper function from callback.c
-	result := C.bundleq_process(
-		p.ptr,
-		(*C.uint)(unsafe.Pointer(&bundles[0])),
-		C.size_t(len(bundles)),
-		C.get_go_callback_ptr(),
-		&cStats,
+	return loadResult, loadResult.Error
+}
+
+// ============================================================================
+// Batch Operations
+// ============================================================================
+
+// GetOperationsBatch retrieves multiple operations in a single call
+func (m *BundleManager) GetOperationsBatch(requests []OperationRequest) ([]Operation, error) {
+	if len(requests) == 0 {
+		return nil, nil
+	}
+
+	cRequests := make([]C.COperationRequest, len(requests))
+	for i, req := range requests {
+		cRequests[i] = C.COperationRequest{
+			bundle_num:    C.uint32_t(req.BundleNum),
+			operation_idx: C.size_t(req.OperationIdx),
+		}
+	}
+
+	var cOps *C.COperation
+	var count C.size_t
+
+	result := C.bundle_manager_get_operations_batch(
+		m.ptr,
+		&cRequests[0],
+		C.size_t(len(requests)),
+		&cOps,
+		&count,
 	)
 
 	if result != 0 {
-		return Stats{}, fmt.Errorf("processing failed")
+		return nil, fmt.Errorf("batch operation failed")
 	}
 
-	return Stats{
-		Operations:   uint64(cStats.operations),
-		Matches:      uint64(cStats.matches),
-		TotalBytes:   uint64(cStats.total_bytes),
-		MatchedBytes: uint64(cStats.matched_bytes),
-	}, nil
+	ops := cOperationsToGo(cOps, int(count))
+	C.bundle_manager_free_operations(cOps, count)
+
+	return ops, nil
 }
 
-// Close frees the processor
-func (p *Processor) Close() {
-	if p.ptr != nil {
-		processorRegistryMu.Lock()
-		delete(processorRegistry, uintptr(p.ptr))
-		processorRegistryMu.Unlock()
+// ============================================================================
+// DID Operations
+// ============================================================================
 
-		C.bundleq_free(p.ptr)
-		p.ptr = nil
+// GetDIDOperations retrieves all operations for a DID
+func (m *BundleManager) GetDIDOperations(did string) ([]Operation, error) {
+	cDID := C.CString(did)
+	defer C.free(unsafe.Pointer(cDID))
+
+	var cOps *C.COperation
+	var count C.size_t
+
+	result := C.bundle_manager_get_did_operations(m.ptr, cDID, &cOps, &count)
+	if result != 0 {
+		return nil, fmt.Errorf("failed to get DID operations")
 	}
+
+	ops := cOperationsToGo(cOps, int(count))
+	C.bundle_manager_free_operations(cOps, count)
+
+	return ops, nil
+}
+
+// BatchResolveDIDs resolves multiple DIDs and returns their operations
+func (m *BundleManager) BatchResolveDIDs(dids []string) (map[string][]Operation, error) {
+	if len(dids) == 0 {
+		return make(map[string][]Operation), nil
+	}
+
+	results := make(map[string][]Operation)
+
+	// Convert Go strings to C strings
+	cDIDs := make([]*C.char, len(dids))
+	for i, did := range dids {
+		cDIDs[i] = C.CString(did)
+		defer C.free(unsafe.Pointer(cDIDs[i]))
+	}
+
+	// This callback will be called for each DID
+	// Note: In actual implementation, you'd need to use cgo callbacks properly
+	// For now, we'll do sequential calls
+	for _, did := range dids {
+		ops, err := m.GetDIDOperations(did)
+		if err == nil {
+			results[did] = ops
+		}
+	}
+
+	return results, nil
+}
+
+// ============================================================================
+// Verification
+// ============================================================================
+
+// VerifyBundle verifies a single bundle
+func (m *BundleManager) VerifyBundle(bundleNum uint32, checkHash, checkChain bool) (*VerifyResult, error) {
+	var cResult C.CVerifyResult
+
+	result := C.bundle_manager_verify_bundle(
+		m.ptr,
+		C.uint32_t(bundleNum),
+		C._Bool(checkHash),
+		C._Bool(checkChain),
+		&cResult,
+	)
+
+	verifyResult := &VerifyResult{
+		Valid:         bool(cResult.valid),
+		HashMatch:     bool(cResult.hash_match),
+		CompressionOk: bool(cResult.compression_ok),
+	}
+
+	if result != 0 {
+		if cResult.error_msg != nil {
+			verifyResult.Error = fmt.Errorf("%s", C.GoString(cResult.error_msg))
+			C.bundle_manager_free_string(cResult.error_msg)
+		} else {
+			verifyResult.Error = fmt.Errorf("verification failed")
+		}
+	}
+
+	return verifyResult, verifyResult.Error
+}
+
+// VerifyChain verifies chain continuity
+func (m *BundleManager) VerifyChain(startBundle, endBundle uint32) error {
+	result := C.bundle_manager_verify_chain(
+		m.ptr,
+		C.uint32_t(startBundle),
+		C.uint32_t(endBundle),
+	)
+
+	if result != 0 {
+		return fmt.Errorf("chain verification failed")
+	}
+	return nil
+}
+
+// ============================================================================
+// Info
+// ============================================================================
+
+// GetBundleInfo retrieves bundle information
+func (m *BundleManager) GetBundleInfo(bundleNum uint32, includeOperations, includeDIDs bool) (*BundleInfo, error) {
+	var cInfo C.CBundleInfo
+
+	result := C.bundle_manager_get_bundle_info(
+		m.ptr,
+		C.uint32_t(bundleNum),
+		C._Bool(includeOperations),
+		C._Bool(includeDIDs),
+		&cInfo,
+	)
+
+	if result != 0 {
+		return nil, fmt.Errorf("failed to get bundle info")
+	}
+
+	info := &BundleInfo{
+		BundleNumber:     uint32(cInfo.bundle_number),
+		OperationCount:   uint32(cInfo.operation_count),
+		DIDCount:         uint32(cInfo.did_count),
+		CompressedSize:   uint64(cInfo.compressed_size),
+		UncompressedSize: uint64(cInfo.uncompressed_size),
+		StartTime:        C.GoString(cInfo.start_time),
+		EndTime:          C.GoString(cInfo.end_time),
+		Hash:             C.GoString(cInfo.hash),
+	}
+
+	// Free C strings
+	C.bundle_manager_free_string(cInfo.start_time)
+	C.bundle_manager_free_string(cInfo.end_time)
+	C.bundle_manager_free_string(cInfo.hash)
+
+	return info, nil
+}
+
+// ============================================================================
+// Cache Management
+// ============================================================================
+
+// PrefetchBundles prefetches bundles into cache
+func (m *BundleManager) PrefetchBundles(bundleNums []uint32) {
+	if len(bundleNums) == 0 {
+		return
+	}
+
+	C.bundle_manager_prefetch_bundles(
+		m.ptr,
+		(*C.uint32_t)(unsafe.Pointer(&bundleNums[0])),
+		C.size_t(len(bundleNums)),
+	)
+}
+
+// WarmUp warms up the cache with specified strategy
+func (m *BundleManager) WarmUp(strategy WarmUpStrategy, startBundle, endBundle uint32) error {
+	result := C.bundle_manager_warm_up(
+		m.ptr,
+		C.uint8_t(strategy),
+		C.uint32_t(startBundle),
+		C.uint32_t(endBundle),
+	)
+	if result != 0 {
+		return fmt.Errorf("warm up failed")
+	}
+	return nil
+}
+
+// ClearCaches clears all caches
+func (m *BundleManager) ClearCaches() {
+	C.bundle_manager_clear_caches(m.ptr)
+}
+
+// ============================================================================
+// DID Index
+// ============================================================================
+
+// RebuildDIDIndex rebuilds the DID index
+func (m *BundleManager) RebuildDIDIndex(progressCallback func(uint32, uint64)) (*RebuildStats, error) {
+	var cStats C.CRebuildStats
+
+	// Note: Progress callback would need proper cgo callback setup
+	// For now, we pass nil
+	result := C.bundle_manager_rebuild_did_index(m.ptr, nil, &cStats)
+
+	if result != 0 {
+		return nil, fmt.Errorf("failed to rebuild DID index")
+	}
+
+	stats := &RebuildStats{
+		BundlesProcessed:  uint32(cStats.bundles_processed),
+		OperationsIndexed: uint64(cStats.operations_indexed),
+		UniqueDIDs:        uint(cStats.unique_dids),
+		DurationMs:        uint64(cStats.duration_ms),
+	}
+
+	return stats, nil
+}
+
+// GetDIDIndexStats retrieves DID index statistics
+func (m *BundleManager) GetDIDIndexStats() (*DIDIndexStats, error) {
+	var cStats C.CDIDIndexStats
+
+	result := C.bundle_manager_get_did_index_stats(m.ptr, &cStats)
+	if result != 0 {
+		return nil, fmt.Errorf("failed to get DID index stats")
+	}
+
+	stats := &DIDIndexStats{
+		TotalDIDs:       uint(cStats.total_dids),
+		TotalOperations: uint(cStats.total_operations),
+		IndexSizeBytes:  uint(cStats.index_size_bytes),
+	}
+
+	return stats, nil
+}
+
+// ============================================================================
+// Observability
+// ============================================================================
+
+// GetStats retrieves manager statistics
+func (m *BundleManager) GetStats() (*ManagerStats, error) {
+	var cStats C.CManagerStats
+
+	result := C.bundle_manager_get_stats(m.ptr, &cStats)
+	if result != 0 {
+		return nil, fmt.Errorf("failed to get manager stats")
+	}
+
+	stats := &ManagerStats{
+		CacheHits:           uint64(cStats.cache_hits),
+		CacheMisses:         uint64(cStats.cache_misses),
+		BytesRead:           uint64(cStats.bytes_read),
+		OperationsProcessed: uint64(cStats.operations_processed),
+	}
+
+	return stats, nil
+}
+
+// ============================================================================
+// Helper functions
+// ============================================================================
+
+func cOperationsToGo(cOps *C.COperation, count int) []Operation {
+	if cOps == nil || count == 0 {
+		return nil
+	}
+
+	ops := make([]Operation, count)
+	slice := unsafe.Slice(cOps, count)
+
+	for i, cOp := range slice {
+		ops[i] = Operation{
+			DID:       C.GoString(cOp.did),
+			OpType:    C.GoString(cOp.op_type),
+			CID:       C.GoString(cOp.cid),
+			Nullified: bool(cOp.nullified),
+			CreatedAt: C.GoString(cOp.created_at),
+			JSON:      C.GoString(cOp.json),
+		}
+	}
+
+	return ops
 }

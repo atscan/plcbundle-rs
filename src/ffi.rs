@@ -1,59 +1,100 @@
-use crate::*;
-use crate::processor::Processor;
+use crate::manager::*;
+use crate::operations::*;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-pub struct COutputHandler {
-    callback: extern "C" fn(*const c_char) -> i32,
-}
+// ============================================================================
+// C-compatible types
+// ============================================================================
 
-impl OutputHandler for COutputHandler {
-    fn write_batch(&self, batch: &str) -> anyhow::Result<()> {
-        let c_str = CString::new(batch)?;
-        let result = (self.callback)(c_str.as_ptr());
-        if result != 0 {
-            anyhow::bail!("Callback returned error: {}", result);
-        }
-        Ok(())
-    }
+#[repr(C)]
+pub struct CBundleManager {
+    manager: Arc<BundleManager>,
 }
 
 #[repr(C)]
-pub struct CStats {
-    pub operations: usize,
-    pub matches: usize,
-    pub total_bytes: u64,
-    pub matched_bytes: u64,
-}
-
-impl From<Stats> for CStats {
-    fn from(s: Stats) -> Self {
-        CStats {
-            operations: s.operations,
-            matches: s.matches,
-            total_bytes: s.total_bytes,
-            matched_bytes: s.matched_bytes,
-        }
-    }
+pub struct CLoadOptions {
+    pub verify_hash: bool,
+    pub decompress: bool,
+    pub cache: bool,
 }
 
 #[repr(C)]
-pub struct BundleqProcessor {
-    processor: Box<Processor>,
+pub struct CLoadResult {
+    pub success: bool,
+    pub operation_count: u32,
+    pub size_bytes: u64,
+    pub error_msg: *mut c_char,
 }
 
-/// Create a new bundle processor
-/// Returns null on error
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct COperation {
+    pub did: *mut c_char,
+    pub op_type: *mut c_char,
+    pub cid: *mut c_char,
+    pub nullified: bool,
+    pub created_at: *mut c_char,
+    pub json: *mut c_char,
+}
+
+#[repr(C)]
+pub struct COperationRequest {
+    pub bundle_num: u32,
+    pub operation_idx: usize,
+}
+
+#[repr(C)]
+pub struct CVerifyResult {
+    pub valid: bool,
+    pub hash_match: bool,
+    pub compression_ok: bool,
+    pub error_msg: *mut c_char,
+}
+
+#[repr(C)]
+pub struct CBundleInfo {
+    pub bundle_number: u32,
+    pub operation_count: u32,
+    pub did_count: u32,
+    pub compressed_size: u64,
+    pub uncompressed_size: u64,
+    pub start_time: *mut c_char,
+    pub end_time: *mut c_char,
+    pub hash: *mut c_char,
+}
+
+#[repr(C)]
+pub struct CManagerStats {
+    pub cache_hits: u64,
+    pub cache_misses: u64,
+    pub bytes_read: u64,
+    pub operations_processed: u64,
+}
+
+#[repr(C)]
+pub struct CDIDIndexStats {
+    pub total_dids: usize,
+    pub total_operations: usize,
+    pub index_size_bytes: usize,
+}
+
+#[repr(C)]
+pub struct CRebuildStats {
+    pub bundles_processed: u32,
+    pub operations_indexed: u64,
+    pub unique_dids: usize,
+    pub duration_ms: u64,
+}
+
+// ============================================================================
+// BundleManager lifecycle
+// ============================================================================
+
 #[no_mangle]
-pub extern "C" fn bundleq_new(
-    bundle_dir: *const c_char,
-    query: *const c_char,
-    simple_mode: bool,
-    num_threads: usize,
-    batch_size: usize,
-) -> *mut BundleqProcessor {
+pub extern "C" fn bundle_manager_new(bundle_dir: *const c_char) -> *mut CBundleManager {
     let bundle_dir = unsafe {
         if bundle_dir.is_null() {
             return std::ptr::null_mut();
@@ -64,103 +105,201 @@ pub extern "C" fn bundleq_new(
         }
     };
 
-    let query = unsafe {
-        if query.is_null() {
-            return std::ptr::null_mut();
-        }
-        match CStr::from_ptr(query).to_str() {
-            Ok(s) => s,
-            Err(_) => return std::ptr::null_mut(),
-        }
-    };
-
-    let query_mode = if simple_mode {
-        QueryMode::Simple
-    } else {
-        QueryMode::JmesPath
-    };
-
-    let options = OptionsBuilder::new()
-        .directory(bundle_dir)
-        .query(query)
-        .query_mode(query_mode)
-        .num_threads(num_threads)
-        .batch_size(batch_size)
-        .build();
-
-    match Processor::new(options) {
-        Ok(processor) => Box::into_raw(Box::new(BundleqProcessor {
-            processor: Box::new(processor),
+    match BundleManager::new(bundle_dir) {
+        Ok(manager) => Box::into_raw(Box::new(CBundleManager {
+            manager: Arc::new(manager),
         })),
         Err(_) => std::ptr::null_mut(),
     }
 }
 
-/// Parse bundle range specification
-/// Returns array of bundle numbers and sets out_len
-/// Caller must free the returned pointer with bundleq_free_bundle_list
 #[no_mangle]
-pub extern "C" fn bundleq_parse_bundles(
-    spec: *const c_char,
-    max_bundle: u32,
-    out_len: *mut usize,
-) -> *mut u32 {
-    let spec = unsafe {
-        if spec.is_null() {
-            return std::ptr::null_mut();
-        }
-        match CStr::from_ptr(spec).to_str() {
-            Ok(s) => s,
-            Err(_) => return std::ptr::null_mut(),
-        }
-    };
-
-    match parse_bundle_range(spec, max_bundle) {
-        Ok(bundles) => {
-            unsafe { *out_len = bundles.len() };
-            let mut boxed = bundles.into_boxed_slice();
-            let ptr = boxed.as_mut_ptr();
-            std::mem::forget(boxed);
-            ptr
-        }
-        Err(_) => std::ptr::null_mut(),
-    }
-}
-
-/// Free bundle list
-#[no_mangle]
-pub extern "C" fn bundleq_free_bundle_list(ptr: *mut u32, len: usize) {
-    if !ptr.is_null() {
+pub extern "C" fn bundle_manager_free(manager: *mut CBundleManager) {
+    if !manager.is_null() {
         unsafe {
-            let _ = Box::from_raw(std::slice::from_raw_parts_mut(ptr, len));
+            let _ = Box::from_raw(manager);
         }
     }
 }
 
-/// Process bundles
-/// callback receives batches of output lines
-/// Returns 0 on success, -1 on error
+// ============================================================================
+// Smart Loading
+// ============================================================================
+
 #[no_mangle]
-pub extern "C" fn bundleq_process(
-    processor: *mut BundleqProcessor,
-    bundle_numbers: *const u32,
-    bundle_count: usize,
-    callback: extern "C" fn(*const c_char) -> i32,
-    out_stats: *mut CStats,
+pub extern "C" fn bundle_manager_load_bundle(
+    manager: *const CBundleManager,
+    bundle_num: u32,
+    options: *const CLoadOptions,
+    out_result: *mut CLoadResult,
 ) -> i32 {
-    if processor.is_null() || bundle_numbers.is_null() {
+    if manager.is_null() || out_result.is_null() {
         return -1;
     }
 
-    let processor = unsafe { &*processor };
-    let bundles = unsafe { std::slice::from_raw_parts(bundle_numbers, bundle_count) };
+    let manager = unsafe { &*manager };
 
-    let handler = Arc::new(COutputHandler { callback });
+    let load_opts = if options.is_null() {
+        LoadOptions::default()
+    } else {
+        let opts = unsafe { &*options };
+        LoadOptions {
+            cache: opts.cache,
+            decompress: opts.decompress,
+            filter: None,
+            limit: None,
+        }
+    };
 
-    match processor.processor.process(bundles, handler, None::<fn(usize, &Stats)>) {
-        Ok(stats) => {
-            if !out_stats.is_null() {
-                unsafe { *out_stats = stats.into() };
+    match manager.manager.load_bundle(bundle_num, load_opts) {
+        Ok(result) => {
+            unsafe {
+                (*out_result).success = true;
+                (*out_result).operation_count = result.operations.len() as u32;
+                (*out_result).size_bytes = 0; // TODO: calculate actual size
+                (*out_result).error_msg = std::ptr::null_mut();
+            }
+            0
+        }
+        Err(e) => {
+            let err_msg = CString::new(e.to_string()).unwrap();
+            unsafe {
+                (*out_result).success = false;
+                (*out_result).operation_count = 0;
+                (*out_result).size_bytes = 0;
+                (*out_result).error_msg = err_msg.into_raw();
+            }
+            -1
+        }
+    }
+}
+
+// ============================================================================
+// Batch Operations
+// ============================================================================
+
+#[no_mangle]
+pub extern "C" fn bundle_manager_get_operations_batch(
+    manager: *const CBundleManager,
+    requests: *const COperationRequest,
+    count: usize,
+    out_operations: *mut *mut COperation,
+    out_count: *mut usize,
+) -> i32 {
+    if manager.is_null() || requests.is_null() || out_operations.is_null() {
+        return -1;
+    }
+
+    let manager = unsafe { &*manager };
+    let requests_slice = unsafe { std::slice::from_raw_parts(requests, count) };
+
+    let mut op_requests = Vec::new();
+    for req in requests_slice {
+        op_requests.push(OperationRequest {
+            bundle: req.bundle_num,
+            index: Some(req.operation_idx),
+            filter: None,
+        });
+    }
+
+    match manager.manager.get_operations_batch(op_requests) {
+        Ok(operations) => {
+            let mut c_ops = Vec::new();
+            for op in operations {
+                c_ops.push(operation_to_c(op));
+            }
+            
+            unsafe {
+                *out_count = c_ops.len();
+                *out_operations = c_ops.as_mut_ptr();
+            }
+            std::mem::forget(c_ops);
+            0
+        }
+        Err(_) => -1,
+    }
+}
+
+// ============================================================================
+// DID Operations
+// ============================================================================
+
+#[no_mangle]
+pub extern "C" fn bundle_manager_get_did_operations(
+    manager: *const CBundleManager,
+    did: *const c_char,
+    out_operations: *mut *mut COperation,
+    out_count: *mut usize,
+) -> i32 {
+    if manager.is_null() || did.is_null() || out_operations.is_null() {
+        return -1;
+    }
+
+    let manager = unsafe { &*manager };
+    let did = unsafe {
+        match CStr::from_ptr(did).to_str() {
+            Ok(s) => s,
+            Err(_) => return -1,
+        }
+    };
+
+    match manager.manager.get_did_operations(did) {
+        Ok(operations) => {
+            let mut c_ops = Vec::new();
+            for op in operations {
+                c_ops.push(operation_to_c(op));
+            }
+            
+            unsafe {
+                *out_count = c_ops.len();
+                *out_operations = c_ops.as_mut_ptr();
+            }
+            std::mem::forget(c_ops);
+            0
+        }
+        Err(_) => -1,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn bundle_manager_batch_resolve_dids(
+    manager: *const CBundleManager,
+    dids: *const *const c_char,
+    did_count: usize,
+    callback: extern "C" fn(*const c_char, *const COperation, usize),
+) -> i32 {
+    if manager.is_null() || dids.is_null() {
+        return -1;
+    }
+
+    let manager = unsafe { &*manager };
+    let dids_slice = unsafe { std::slice::from_raw_parts(dids, did_count) };
+    
+    let mut did_strings = Vec::new();
+    for did_ptr in dids_slice {
+        let did = unsafe {
+            match CStr::from_ptr(*did_ptr).to_str() {
+                Ok(s) => s.to_string(),
+                Err(_) => return -1,
+            }
+        };
+        did_strings.push(did);
+    }
+
+    match manager.manager.batch_resolve_dids(did_strings) {
+        Ok(results) => {
+            for (did, operations) in results {
+                let c_did = CString::new(did).unwrap();
+                let c_ops: Vec<COperation> = operations
+                    .into_iter()
+                    .map(operation_to_c)
+                    .collect();
+
+                callback(c_did.as_ptr(), c_ops.as_ptr(), c_ops.len());
+
+                for op in c_ops {
+                    free_c_operation(op);
+                }
             }
             0
         }
@@ -168,39 +307,330 @@ pub extern "C" fn bundleq_process(
     }
 }
 
-/// Load index and return last bundle number
-/// Returns 0 on error
+// ============================================================================
+// Verification
+// ============================================================================
+
 #[no_mangle]
-pub extern "C" fn bundleq_get_last_bundle(bundle_dir: *const c_char) -> u32 {
-    let bundle_dir = unsafe {
-        if bundle_dir.is_null() {
-            return 0;
-        }
-        match CStr::from_ptr(bundle_dir).to_str() {
-            Ok(s) => PathBuf::from(s),
-            Err(_) => return 0,
-        }
+pub extern "C" fn bundle_manager_verify_bundle(
+    manager: *const CBundleManager,
+    bundle_num: u32,
+    check_hash: bool,
+    check_chain: bool,
+    out_result: *mut CVerifyResult,
+) -> i32 {
+    if manager.is_null() || out_result.is_null() {
+        return -1;
+    }
+
+    let manager = unsafe { &*manager };
+
+    let spec = VerifySpec {
+        check_hash,
+        check_content_hash: check_hash,
+        check_operations: true,
     };
 
-    match Index::load(&bundle_dir) {
-        Ok(index) => index.last_bundle,
-        Err(_) => 0,
-    }
-}
-
-/// Free the processor
-#[no_mangle]
-pub extern "C" fn bundleq_free(processor: *mut BundleqProcessor) {
-    if !processor.is_null() {
-        unsafe {
-            let _ = Box::from_raw(processor);
+    match manager.manager.verify_bundle(bundle_num, spec) {
+        Ok(result) => {
+            unsafe {
+                (*out_result).valid = result.valid;
+                (*out_result).hash_match = result.valid; // TODO: return actual hash match result
+                (*out_result).compression_ok = true; // TODO: return actual compression result
+                (*out_result).error_msg = std::ptr::null_mut();
+            }
+            0
+        }
+        Err(e) => {
+            let err_msg = CString::new(e.to_string()).unwrap();
+            unsafe {
+                (*out_result).valid = false;
+                (*out_result).hash_match = false;
+                (*out_result).compression_ok = false;
+                (*out_result).error_msg = err_msg.into_raw();
+            }
+            -1
         }
     }
 }
 
-/// Get last error message
 #[no_mangle]
-pub extern "C" fn bundleq_last_error() -> *const c_char {
-    // You could implement thread-local error storage here
-    std::ptr::null()
+pub extern "C" fn bundle_manager_verify_chain(
+    manager: *const CBundleManager,
+    start_bundle: u32,
+    end_bundle: u32,
+) -> i32 {
+    if manager.is_null() {
+        return -1;
+    }
+
+    let manager = unsafe { &*manager };
+
+    let spec = ChainVerifySpec {
+        start_bundle,
+        end_bundle: Some(end_bundle),
+        check_parent_links: true,
+    };
+
+    match manager.manager.verify_chain(spec) {
+        Ok(result) => {
+            if result.valid { 0 } else { -1 }
+        }
+        Err(_) => -1,
+    }
+}
+
+// ============================================================================
+// Info
+// ============================================================================
+
+#[no_mangle]
+pub extern "C" fn bundle_manager_get_bundle_info(
+    manager: *const CBundleManager,
+    bundle_num: u32,
+    include_operations: bool,
+    include_dids: bool,
+    out_info: *mut CBundleInfo,
+) -> i32 {
+    if manager.is_null() || out_info.is_null() {
+        return -1;
+    }
+
+    let manager = unsafe { &*manager };
+
+    let flags = InfoFlags {
+        include_operations,
+        include_size_info: true,
+    };
+
+    match manager.manager.get_bundle_info(bundle_num, flags) {
+        Ok(info) => {
+            unsafe {
+                (*out_info).bundle_number = info.metadata.bundle_number;
+                (*out_info).operation_count = info.metadata.operation_count;
+                (*out_info).did_count = info.metadata.did_count;
+                (*out_info).compressed_size = info.metadata.compressed_size;
+                (*out_info).uncompressed_size = info.metadata.uncompressed_size;
+                (*out_info).start_time = CString::new(info.metadata.start_time).unwrap().into_raw();
+                (*out_info).end_time = CString::new(info.metadata.end_time).unwrap().into_raw();
+                (*out_info).hash = CString::new(info.metadata.hash).unwrap().into_raw();
+            }
+            0
+        }
+        Err(_) => -1,
+    }
+}
+
+// ============================================================================
+// Cache Management
+// ============================================================================
+
+#[no_mangle]
+pub extern "C" fn bundle_manager_prefetch_bundles(
+    manager: *const CBundleManager,
+    bundle_nums: *const u32,
+    count: usize,
+) -> i32 {
+    if manager.is_null() || bundle_nums.is_null() {
+        return -1;
+    }
+
+    let manager = unsafe { &*manager };
+    let bundles = unsafe { std::slice::from_raw_parts(bundle_nums, count) };
+
+    match manager.manager.prefetch_bundles(bundles.to_vec()) {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn bundle_manager_warm_up(
+    manager: *const CBundleManager,
+    strategy: u8,
+    start_bundle: u32,
+    end_bundle: u32,
+) -> i32 {
+    if manager.is_null() {
+        return -1;
+    }
+
+    let manager = unsafe { &*manager };
+
+    let warm_strategy = match strategy {
+        0 => WarmUpStrategy::Recent(10), // Default count for recent
+        1 => WarmUpStrategy::All,
+        2 => WarmUpStrategy::Range(start_bundle, end_bundle),
+        _ => return -1,
+    };
+
+    let spec = WarmUpSpec {
+        strategy: warm_strategy,
+    };
+
+    match manager.manager.warm_up(spec) {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn bundle_manager_clear_caches(manager: *const CBundleManager) -> i32 {
+    if manager.is_null() {
+        return -1;
+    }
+
+    let manager = unsafe { &*manager };
+    manager.manager.clear_caches();
+    0
+}
+
+// ============================================================================
+// DID Index
+// ============================================================================
+
+#[no_mangle]
+pub extern "C" fn bundle_manager_rebuild_did_index(
+    manager: *const CBundleManager,
+    progress_callback: Option<extern "C" fn(u32, u32)>,
+    out_stats: *mut CRebuildStats,
+) -> i32 {
+    if manager.is_null() {
+        return -1;
+    }
+
+    let manager = unsafe { &*manager };
+    
+    let callback = progress_callback.map(|cb| {
+        Box::new(move |bundle: u32, ops: u32| {
+            cb(bundle, ops);
+        }) as Box<dyn Fn(u32, u32) + Send + Sync>
+    });
+
+    match manager.manager.rebuild_did_index(callback) {
+        Ok(stats) => {
+            if !out_stats.is_null() {
+                unsafe {
+                    (*out_stats).bundles_processed = stats.bundles_processed;
+                    (*out_stats).operations_indexed = stats.operations_indexed;
+                    (*out_stats).unique_dids = 0; // TODO: track unique DIDs
+                    (*out_stats).duration_ms = 0; // TODO: track duration
+                }
+            }
+            0
+        }
+        Err(_) => -1,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn bundle_manager_get_did_index_stats(
+    manager: *const CBundleManager,
+    out_stats: *mut CDIDIndexStats,
+) -> i32 {
+    if manager.is_null() || out_stats.is_null() {
+        return -1;
+    }
+
+    let manager = unsafe { &*manager };
+
+    let stats = manager.manager.get_did_index_stats();
+    unsafe {
+        (*out_stats).total_dids = stats.total_dids;
+        (*out_stats).total_operations = stats.total_entries;
+        (*out_stats).index_size_bytes = 0; // TODO: track actual index size
+    }
+    0
+}
+
+// ============================================================================
+// Observability
+// ============================================================================
+
+#[no_mangle]
+pub extern "C" fn bundle_manager_get_stats(
+    manager: *const CBundleManager,
+    out_stats: *mut CManagerStats,
+) -> i32 {
+    if manager.is_null() || out_stats.is_null() {
+        return -1;
+    }
+
+    let manager = unsafe { &*manager };
+
+    let stats = manager.manager.get_stats();
+    unsafe {
+        (*out_stats).cache_hits = stats.cache_hits;
+        (*out_stats).cache_misses = stats.cache_misses;
+        (*out_stats).bytes_read = stats.bundles_loaded; // TODO: track actual bytes read
+        (*out_stats).operations_processed = stats.operations_read;
+    }
+    0
+}
+
+// ============================================================================
+// Helper functions
+// ============================================================================
+
+fn operation_to_c(op: Operation) -> COperation {
+    COperation {
+        did: CString::new(op.did).unwrap().into_raw(),
+        op_type: CString::new(op.operation).unwrap().into_raw(),
+        cid: op.cid.map(|s| CString::new(s).unwrap().into_raw()).unwrap_or(std::ptr::null_mut()),
+        nullified: op.nullified,
+        created_at: CString::new(op.created_at).unwrap().into_raw(),
+        json: CString::new(op.extra.to_string()).unwrap().into_raw(),
+    }
+}
+
+fn free_c_operation(op: COperation) {
+    unsafe {
+        if !op.did.is_null() {
+            let _ = CString::from_raw(op.did);
+        }
+        if !op.op_type.is_null() {
+            let _ = CString::from_raw(op.op_type);
+        }
+        if !op.cid.is_null() {
+            let _ = CString::from_raw(op.cid);
+        }
+        if !op.created_at.is_null() {
+            let _ = CString::from_raw(op.created_at);
+        }
+        if !op.json.is_null() {
+            let _ = CString::from_raw(op.json);
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn bundle_manager_free_string(s: *mut c_char) {
+    if !s.is_null() {
+        unsafe {
+            let _ = CString::from_raw(s);
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn bundle_manager_free_operation(op: *mut COperation) {
+    if !op.is_null() {
+        unsafe {
+            let op_val = *op;
+            free_c_operation(op_val);
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn bundle_manager_free_operations(ops: *mut COperation, count: usize) {
+    if !ops.is_null() {
+        unsafe {
+            let ops_slice = std::slice::from_raw_parts(ops, count);
+            for op in ops_slice {
+                free_c_operation(*op);
+            }
+            let _ = Vec::from_raw_parts(ops, count, count);
+        }
+    }
 }
