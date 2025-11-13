@@ -245,6 +245,37 @@ func (m *BundleManager) BatchResolveDIDs(dids []string) (map[string][]Operation,
 }
 
 // ============================================================================
+// Query
+// ============================================================================
+
+// Query searches for operations across bundles
+func (m *BundleManager) Query(queryStr string, bundleStart, bundleEnd uint32) ([]Operation, error) {
+	cQuery := C.CString(queryStr)
+	defer C.free(unsafe.Pointer(cQuery))
+
+	var cOps *C.COperation
+	var count C.size_t
+
+	result := C.bundle_manager_query(
+		m.ptr,
+		cQuery,
+		C.uint32_t(bundleStart),
+		C.uint32_t(bundleEnd),
+		&cOps,
+		&count,
+	)
+
+	if result != 0 {
+		return nil, fmt.Errorf("query failed")
+	}
+
+	ops := cOperationsToGo(cOps, int(count))
+	C.bundle_manager_free_operations(cOps, count)
+
+	return ops, nil
+}
+
+// ============================================================================
 // Verification
 // ============================================================================
 

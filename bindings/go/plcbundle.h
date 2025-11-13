@@ -166,6 +166,30 @@ int bundle_manager_batch_resolve_dids(
 );
 
 // ============================================================================
+// Query
+// ============================================================================
+
+/**
+ * Query operations across bundles.
+ *
+ * @param manager The bundle manager
+ * @param query_str Query string (e.g., "did" or "type")
+ * @param bundle_start Start bundle number (0 for all bundles)
+ * @param bundle_end End bundle number (0 for all bundles)
+ * @param out_operations Output pointer to receive operations array
+ * @param out_count Output pointer to receive operation count
+ * @return 0 on success, -1 on error
+ */
+int bundle_manager_query(
+    CBundleManager manager,
+    const char* query_str,
+    uint32_t bundle_start,
+    uint32_t bundle_end,
+    COperation** out_operations,
+    size_t* out_count
+);
+
+// ============================================================================
 // Verification
 // ============================================================================
 

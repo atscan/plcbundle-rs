@@ -330,7 +330,7 @@ impl BundleManager {
     }
 
     // === Helpers ===
-    fn get_last_bundle(&self) -> u32 {
+    pub fn get_last_bundle(&self) -> u32 {
         self.index.read().unwrap().last_bundle
     }
 

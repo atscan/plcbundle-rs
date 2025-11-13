@@ -4,11 +4,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Operation {
     pub did: String,
-    pub operation: String,
+    #[serde(alias = "operation")]
+    pub operation: serde_json::Value,
     #[serde(default)]
     pub cid: Option<String>,
     #[serde(default)]
     pub nullified: bool,
+    #[serde(rename = "createdAt", alias = "created_at")]
     pub created_at: String,
     #[serde(flatten)]
     pub extra: serde_json::Value,

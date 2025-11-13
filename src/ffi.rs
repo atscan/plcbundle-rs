@@ -308,6 +308,64 @@ pub extern "C" fn bundle_manager_batch_resolve_dids(
 }
 
 // ============================================================================
+// Query
+// ============================================================================
+
+#[no_mangle]
+pub extern "C" fn bundle_manager_query(
+    manager: *const CBundleManager,
+    query_str: *const c_char,
+    bundle_start: u32,
+    bundle_end: u32,
+    out_operations: *mut *mut COperation,
+    out_count: *mut usize,
+) -> i32 {
+    if manager.is_null() || query_str.is_null() || out_operations.is_null() || out_count.is_null() {
+        return -1;
+    }
+
+    let manager = unsafe { &*manager };
+    let query = unsafe {
+        match CStr::from_ptr(query_str).to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => return -1,
+        }
+    };
+
+    // Determine bundle range
+    let (start, end) = if bundle_start == 0 && bundle_end == 0 {
+        // Query all bundles if not specified (like Rust CLI)
+        (1, manager.manager.get_last_bundle())
+    } else if bundle_end == 0 {
+        (bundle_start, bundle_start)
+    } else {
+        (bundle_start, bundle_end)
+    };
+
+    // Simple query: search through operations for matching fields
+    let mut c_ops = Vec::new();
+    for bundle_num in start..=end {
+        let result = manager.manager.load_bundle(bundle_num, LoadOptions::default());
+        if let Ok(load_result) = result {
+            for op in load_result.operations {
+                // Simple string matching in operation JSON
+                let op_json = op.operation.to_string();
+                if op_json.contains(&query) || op.did.contains(&query) {
+                    c_ops.push(operation_to_c(op));
+                }
+            }
+        }
+    }
+
+    unsafe {
+        *out_count = c_ops.len();
+        *out_operations = c_ops.as_mut_ptr();
+    }
+    std::mem::forget(c_ops);
+    0
+}
+
+// ============================================================================
 // Verification
 // ============================================================================
 
@@ -573,13 +631,19 @@ pub extern "C" fn bundle_manager_get_stats(
 // ============================================================================
 
 fn operation_to_c(op: Operation) -> COperation {
+    // Extract operation type from the operation object
+    let op_type = op.operation.get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+
     COperation {
         did: CString::new(op.did).unwrap().into_raw(),
-        op_type: CString::new(op.operation).unwrap().into_raw(),
+        op_type: CString::new(op_type).unwrap().into_raw(),
         cid: op.cid.map(|s| CString::new(s).unwrap().into_raw()).unwrap_or(std::ptr::null_mut()),
         nullified: op.nullified,
         created_at: CString::new(op.created_at).unwrap().into_raw(),
-        json: CString::new(op.extra.to_string()).unwrap().into_raw(),
+        json: CString::new(op.operation.to_string()).unwrap().into_raw(),
     }
 }
 
