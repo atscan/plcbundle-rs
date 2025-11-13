@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"plcbundle"
@@ -59,14 +60,62 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Processing %d bundles\n", len(bundleList))
 	}
 
-	fmt.Fprintf(os.Stderr, "Query: %s (simple mode: %v)\n\n", *query, *simple)
+	fmt.Fprintf(os.Stderr, "Query: %s (simple mode: %v)\n", *query, *simple)
+	fmt.Fprintf(os.Stderr, "Threads: %d | Batch size: %d\n\n", *threads, *batchSize)
+
+	// Track matches and output batches
+	var matchCount atomic.Uint64
+	var outputBatches atomic.Uint64
 	start := time.Now()
+
+	// Start progress updater with spinner
+	done := make(chan bool)
+	spinner := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	spinIdx := 0
+
+	go func() {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				matches := matchCount.Load()
+				batches := outputBatches.Load()
+				elapsed := time.Since(start).Seconds()
+
+				fmt.Fprintf(os.Stderr, "\r%s Processing... | Matches: %s | Batches: %d | Time: %.1fs   ",
+					spinner[spinIdx%len(spinner)],
+					formatNumber(matches),
+					batches,
+					elapsed,
+				)
+				spinIdx++
+			}
+		}
+	}()
 
 	// Process with callback
 	stats, err := processor.Process(bundleList, func(batch string) error {
+		// Count lines in batch (approximate match count)
+		lines := uint64(0)
+		for _, c := range batch {
+			if c == '\n' {
+				lines++
+			}
+		}
+		matchCount.Add(lines)
+		outputBatches.Add(1)
+
 		_, err := os.Stdout.WriteString(batch)
 		return err
 	})
+
+	// Stop progress updater
+	done <- true
+
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -77,11 +126,50 @@ func main() {
 		matchPct = float64(stats.Matches) / float64(stats.Operations) * 100
 	}
 
-	fmt.Fprintf(os.Stderr, "\n✓ Complete\n")
-	fmt.Fprintf(os.Stderr, "  Operations: %d\n", stats.Operations)
-	fmt.Fprintf(os.Stderr, "  Matches:    %d (%.2f%%)\n", stats.Matches, matchPct)
+	// Clear progress line and show final stats
+	fmt.Fprintf(os.Stderr, "\r%s\r", clearLine(80))
+	fmt.Fprintf(os.Stderr, "✓ Complete\n")
+	fmt.Fprintf(os.Stderr, "  Bundles:    %d\n", len(bundleList))
+	fmt.Fprintf(os.Stderr, "  Operations: %s\n", formatNumber(stats.Operations))
+	fmt.Fprintf(os.Stderr, "  Matches:    %s (%.2f%%)\n", formatNumber(stats.Matches), matchPct)
+	fmt.Fprintf(os.Stderr, "  Total:      %s\n", formatBytes(stats.TotalBytes))
+	fmt.Fprintf(os.Stderr, "  Matched:    %s\n", formatBytes(stats.MatchedBytes))
 	fmt.Fprintf(os.Stderr, "  Time:       %.2fs\n", elapsed.Seconds())
-	fmt.Fprintf(os.Stderr, "  Throughput: %.0f ops/sec | %.1f MB/s\n",
-		float64(stats.Operations)/elapsed.Seconds(),
-		float64(stats.TotalBytes)/elapsed.Seconds()/1024/1024)
+	fmt.Fprintf(os.Stderr, "  Throughput: %s ops/sec | %s/s\n",
+		formatNumber(uint64(float64(stats.Operations)/elapsed.Seconds())),
+		formatBytes(uint64(float64(stats.TotalBytes)/elapsed.Seconds())),
+	)
+}
+
+func clearLine(width int) string {
+	line := ""
+	for i := 0; i < width; i++ {
+		line += " "
+	}
+	return line
+}
+
+func formatNumber(n uint64) string {
+	s := fmt.Sprintf("%d", n)
+	result := ""
+	for i, c := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			result += ","
+		}
+		result += string(c)
+	}
+	return result
+}
+
+func formatBytes(bytes uint64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := uint64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
