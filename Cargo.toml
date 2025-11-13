@@ -1,21 +1,35 @@
 [package]
-name = "bundleq"
+name = "plcbundle"
 version = "0.1.0"
 edition = "2021"
+authors = ["Your Name <you@example.com>"]
+description = "High-performance PLC bundle query library"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yourusername/plcbundle-rs"
+
+[[bin]]
+name = "plcbundle-rs"
+path = "src/bin/plcbundle-rs.rs"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-access-json = "0.1"
-clap = { version = "4.5", features = ["derive"] }
+anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 sonic-rs = "0.5"
 jmespath = { version = "0.3", features = ["sync"] }
 zstd = "0.13"
-anyhow = "1.0"
-serde_json = "1"
-indicatif = "0.17"
 rayon = "1.10"
-simd-json = "0.13"
-libc = "0.2"
+
+# Optional CLI dependencies
+clap = { version = "4.5", features = ["derive"], optional = true }
+indicatif = { version = "0.17", optional = true }
+
+[dev-dependencies]
+tempfile = "3.8"
+
+[features]
+default = ["cli"]
+cli = ["clap", "indicatif"]

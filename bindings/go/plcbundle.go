@@ -1,6 +1,6 @@
 package plcbundle
 
-// #cgo LDFLAGS: -L../../target/release -lbundleq -lm -ldl -lpthread
+// #cgo LDFLAGS: -L../../target/release -lplcbundle -lm -ldl -lpthread
 // #include <stdlib.h>
 // #include "callback.h"
 //

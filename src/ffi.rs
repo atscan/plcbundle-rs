@@ -1,9 +1,9 @@
 use crate::*;
+use crate::processor::Processor;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::io::Write;
 
 pub struct COutputHandler {
     callback: extern "C" fn(*const c_char) -> i32,
@@ -41,7 +41,7 @@ impl From<Stats> for CStats {
 
 #[repr(C)]
 pub struct BundleqProcessor {
-    processor: Box<BundleProcessor>,
+    processor: Box<Processor>,
 }
 
 /// Create a new bundle processor
@@ -74,7 +74,21 @@ pub extern "C" fn bundleq_new(
         }
     };
 
-    match BundleProcessor::new(bundle_dir, query, simple_mode, num_threads, batch_size) {
+    let query_mode = if simple_mode {
+        QueryMode::Simple
+    } else {
+        QueryMode::JmesPath
+    };
+
+    let options = OptionsBuilder::new()
+        .directory(bundle_dir)
+        .query(query)
+        .query_mode(query_mode)
+        .num_threads(num_threads)
+        .batch_size(batch_size)
+        .build();
+
+    match Processor::new(options) {
         Ok(processor) => Box::into_raw(Box::new(BundleqProcessor {
             processor: Box::new(processor),
         })),
@@ -143,7 +157,7 @@ pub extern "C" fn bundleq_process(
 
     let handler = Arc::new(COutputHandler { callback });
 
-    match processor.processor.process_bundles(bundles, handler, None::<fn(usize, &Stats)>) {
+    match processor.processor.process(bundles, handler, None::<fn(usize, &Stats)>) {
         Ok(stats) => {
             if !out_stats.is_null() {
                 unsafe { *out_stats = stats.into() };
@@ -168,20 +182,11 @@ pub extern "C" fn bundleq_get_last_bundle(bundle_dir: *const c_char) -> u32 {
         }
     };
 
-    let index_path = bundle_dir.join("plc_bundles.json");
-    let file = match File::open(&index_path) {
-        Ok(f) => f,
-        Err(_) => return 0,
-    };
-
-    let index: Index = match sonic_rs::from_reader(file) {
-        Ok(i) => i,
-        Err(_) => return 0,
-    };
-
-    index.last_bundle
+    match Index::load(&bundle_dir) {
+        Ok(index) => index.last_bundle,
+        Err(_) => 0,
+    }
 }
-
 
 /// Free the processor
 #[no_mangle]
