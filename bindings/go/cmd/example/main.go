@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strconv"
@@ -29,6 +30,7 @@ func printUsage() {
 	fmt.Println("  warm-up        Warm up the cache")
 	fmt.Println("  rebuild-index  Rebuild the DID index")
 	fmt.Println("  index-stats    Display DID index statistics")
+	fmt.Println("  export         Export operations to file or stdout")
 	fmt.Println("  help           Show this help message")
 	fmt.Println("\nExamples:")
 	fmt.Println("  plcbundle-go -dir test_bundles load -bundle 1")
@@ -107,6 +109,8 @@ func main() {
 		cmdRebuildIndex(manager, args[1:])
 	case "index-stats":
 		cmdIndexStats(manager, args[1:])
+	case "export":
+		cmdExport(manager, args[1:])
 	case "help":
 		printUsage()
 	default:
@@ -486,4 +490,136 @@ func cmdIndexStats(manager *plcbundle.BundleManager, args []string) {
 	}
 	fmt.Printf("Index Size:            %d bytes (%.2f MB)\n",
 		stats.IndexSizeBytes, float64(stats.IndexSizeBytes)/1024/1024)
+}
+
+func cmdExport(manager *plcbundle.BundleManager, args []string) {
+	fs := flag.NewFlagSet("export", flag.ExitOnError)
+	rangeFlag := fs.String("range", "", "Bundle range (e.g., \"1-100\")")
+	all := fs.Bool("all", false, "Export all bundles")
+	count := fs.Uint64("count", 0, "Limit number of operations (0 = no limit)")
+	after := fs.String("after", "", "Export operations after timestamp (ISO 8601)")
+	did := fs.String("did", "", "Filter by DID")
+	opType := fs.String("op-type", "", "Filter by operation type")
+	format := fs.String("f", "jsonl", "Output format: jsonl, json, csv")
+	output := fs.String("o", "", "Output file (default: stdout)")
+	quiet := fs.Bool("q", false, "Suppress progress output")
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Export operations from bundles\n\n")
+		fmt.Fprintf(os.Stderr, "Usage: plcbundle-go export [OPTIONS]\n\n")
+		fmt.Fprintf(os.Stderr, "Options:\n")
+		fs.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nExamples:\n")
+		fmt.Fprintf(os.Stderr, "  plcbundle-go export --range 1-100\n")
+		fmt.Fprintf(os.Stderr, "  plcbundle-go export --all --count 50000\n")
+		fmt.Fprintf(os.Stderr, "  plcbundle-go export --all --after 2024-01-01T00:00:00Z\n")
+		fmt.Fprintf(os.Stderr, "  plcbundle-go export --range 1-100 --count 10000 --after 2024-01-01T00:00:00Z\n")
+	}
+
+	fs.Parse(args)
+
+	// Determine bundle range
+	var bundleStart, bundleEnd uint32
+	exportAll := *all
+
+	if !exportAll {
+		if *rangeFlag == "" {
+			log.Fatal("Must specify either --range or --all")
+		}
+
+		// Parse range like "1-100"
+		parts := strings.Split(*rangeFlag, "-")
+		if len(parts) == 2 {
+			start, err := strconv.ParseUint(parts[0], 10, 32)
+			if err != nil {
+				log.Fatalf("Invalid range start: %v", err)
+			}
+			end, err := strconv.ParseUint(parts[1], 10, 32)
+			if err != nil {
+				log.Fatalf("Invalid range end: %v", err)
+			}
+			bundleStart = uint32(start)
+			bundleEnd = uint32(end)
+		} else {
+			// Single bundle
+			num, err := strconv.ParseUint(*rangeFlag, 10, 32)
+			if err != nil {
+				log.Fatalf("Invalid bundle number: %v", err)
+			}
+			bundleStart = uint32(num)
+			bundleEnd = uint32(num)
+		}
+	}
+
+	// Determine format
+	var formatCode uint8
+	switch *format {
+	case "jsonl":
+		formatCode = 0
+	case "json":
+		formatCode = 1
+	case "csv":
+		formatCode = 2
+	default:
+		log.Fatalf("Invalid format: %s (use jsonl, json, or csv)", *format)
+	}
+
+	// Open output
+	var writer io.Writer
+	if *output == "" {
+		writer = os.Stdout
+	} else {
+		file, err := os.Create(*output)
+		if err != nil {
+			log.Fatalf("Failed to create output file: %v", err)
+		}
+		defer file.Close()
+		writer = file
+	}
+
+	// Create export spec
+	spec := plcbundle.ExportSpec{
+		BundleStart:    bundleStart,
+		BundleEnd:      bundleEnd,
+		ExportAll:      exportAll,
+		Format:         formatCode,
+		CountLimit:     *count,
+		AfterTimestamp: *after,
+		DIDFilter:      *did,
+		OpTypeFilter:   *opType,
+	}
+
+	// Progress callback
+	var progressCallback func(uint64, uint64)
+	if !*quiet {
+		progressCallback = func(records, bytes uint64) {
+			if records%10000 == 0 {
+				fmt.Fprintf(os.Stderr, "\r   Exported: %d operations (%.2f MB)", records, float64(bytes)/1024/1024)
+			}
+		}
+	}
+
+	// Export options
+	opts := &plcbundle.ExportOptions{
+		Writer:   writer,
+		Progress: progressCallback,
+	}
+
+	if !*quiet {
+		if exportAll {
+			fmt.Fprintf(os.Stderr, "📤 Exporting all bundles...\n")
+		} else {
+			fmt.Fprintf(os.Stderr, "📤 Exporting bundles %d-%d...\n", bundleStart, bundleEnd)
+		}
+	}
+
+	stats, err := manager.Export(spec, opts)
+	if err != nil {
+		log.Fatalf("Export failed: %v", err)
+	}
+
+	if !*quiet {
+		fmt.Fprintf(os.Stderr, "\r   Exported: %d operations (%.2f MB)\n", stats.RecordsWritten, float64(stats.BytesWritten)/1024/1024)
+		fmt.Fprintf(os.Stderr, "✅ Export complete\n")
+	}
 }

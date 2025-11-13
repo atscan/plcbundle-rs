@@ -17,6 +17,7 @@ pub use processor::{Processor, Stats, OutputHandler, parse_bundle_range};
 pub use query::QueryEngine;
 pub use index::{Index, BundleMetadata};
 pub use manager::{BundleManager, LoadOptions, LoadResult, QuerySpec, ExportSpec, 
+                  BundleRange, ExportFormat, CompressionType,
                   VerifySpec, VerifyResult, ChainVerifySpec, ChainVerifyResult,
                   BundleInfo, InfoFlags, RollbackSpec, RollbackPlan, RollbackResult,
                   WarmUpSpec, WarmUpStrategy, RebuildStats, DIDIndexStats, ManagerStats};

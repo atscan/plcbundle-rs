@@ -334,6 +334,10 @@ impl BundleManager {
         self.index.read().unwrap().last_bundle
     }
 
+    pub fn directory(&self) -> &PathBuf {
+        &self.directory
+    }
+
     fn clone_for_arc(&self) -> Self {
         Self {
             directory: self.directory.clone(),
@@ -459,6 +463,8 @@ pub struct ExportSpec {
     pub format: ExportFormat,
     pub filter: Option<OperationFilter>,
     pub compression: Option<CompressionType>,
+    pub count: Option<usize>,
+    pub after_timestamp: Option<String>,
 }
 
 #[derive(Debug, Clone)]

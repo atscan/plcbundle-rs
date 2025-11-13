@@ -89,6 +89,24 @@ pub struct CRebuildStats {
     pub duration_ms: u64,
 }
 
+#[repr(C)]
+pub struct CExportSpec {
+    pub bundle_start: u32,
+    pub bundle_end: u32,
+    pub export_all: bool,
+    pub format: u8, // 0=jsonl, 1=json, 2=csv
+    pub count_limit: u64, // 0 = no limit
+    pub after_timestamp: *const c_char, // NULL = no filter
+    pub did_filter: *const c_char, // NULL = no filter
+    pub op_type_filter: *const c_char, // NULL = no filter
+}
+
+#[repr(C)]
+pub struct CExportStats {
+    pub records_written: u64,
+    pub bytes_written: u64,
+}
+
 // ============================================================================
 // BundleManager lifecycle
 // ============================================================================
@@ -697,4 +715,281 @@ pub extern "C" fn bundle_manager_free_operations(ops: *mut COperation, count: us
             let _ = Vec::from_raw_parts(ops, count, count);
         }
     }
+}
+
+// ============================================================================
+// Export
+// ============================================================================
+
+/// Callback type for streaming export
+/// Returns 0 to continue, non-zero to stop
+pub type ExportCallback = extern "C" fn(data: *const c_char, len: usize, user_data: *mut std::ffi::c_void) -> i32;
+
+#[no_mangle]
+pub extern "C" fn bundle_manager_export(
+    manager: *const CBundleManager,
+    spec: *const CExportSpec,
+    callback: ExportCallback,
+    user_data: *mut std::ffi::c_void,
+    out_stats: *mut CExportStats,
+) -> i32 {
+    if manager.is_null() || spec.is_null() || callback as usize == 0 {
+        return -1;
+    }
+
+    let manager = unsafe { &*manager };
+    let spec = unsafe { &*spec };
+
+    use std::io::{BufRead, BufWriter, Write};
+    use std::fs::File;
+    use crate::index::Index;
+
+    // Get directory path
+    let dir_path = manager.manager.directory().clone();
+    // Load index
+    let index = match Index::load(&dir_path) {
+        Ok(idx) => idx,
+        Err(_) => return -1,
+    };
+
+    // Determine bundle range
+    let bundle_numbers: Vec<u32> = if spec.export_all {
+        (1..=index.last_bundle).collect()
+    } else if spec.bundle_end > 0 && spec.bundle_end >= spec.bundle_start {
+        (spec.bundle_start..=spec.bundle_end).collect()
+    } else {
+        vec![spec.bundle_start]
+    };
+
+    // Filter bundles by timestamp if specified
+    let bundle_numbers: Vec<u32> = if !spec.after_timestamp.is_null() {
+        let after_ts = unsafe {
+            match CStr::from_ptr(spec.after_timestamp).to_str() {
+                Ok(s) => s.to_string(),
+                Err(_) => return -1,
+            }
+        };
+        bundle_numbers.into_iter()
+            .filter_map(|num| {
+                if let Some(meta) = index.get_bundle(num) {
+                    if meta.end_time >= after_ts {
+                        Some(num)
+                    } else {
+                        None
+                    }
+                } else {
+                    Some(num)
+                }
+            })
+            .collect()
+    } else {
+        bundle_numbers
+    };
+
+    let mut exported_count = 0u64;
+    let mut bytes_written = 0u64;
+    let mut output_buffer = Vec::with_capacity(1024 * 1024);
+
+    // Determine if we need parsing
+    let needs_parsing = !spec.after_timestamp.is_null() || 
+                       !spec.did_filter.is_null() || 
+                       !spec.op_type_filter.is_null() ||
+                       spec.format == 1 || spec.format == 2; // JSON or CSV
+
+    // Process bundles
+    for bundle_num in bundle_numbers {
+        if spec.count_limit > 0 && exported_count >= spec.count_limit {
+            break;
+        }
+
+        let bundle_path = dir_path.join(format!("{:06}.jsonl.zst", bundle_num));
+        if !bundle_path.exists() {
+            continue;
+        }
+
+        let file = match File::open(&bundle_path) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+
+        let decoder = match zstd::Decoder::new(file) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+
+        let reader = std::io::BufReader::with_capacity(1024 * 1024, decoder);
+
+        if !needs_parsing {
+            // Fast path: no parsing
+            for line in reader.lines() {
+                if spec.count_limit > 0 && exported_count >= spec.count_limit {
+                    break;
+                }
+
+                let line = match line {
+                    Ok(l) => l,
+                    Err(_) => continue,
+                };
+
+                if line.is_empty() {
+                    continue;
+                }
+
+                output_buffer.extend_from_slice(line.as_bytes());
+                output_buffer.push(b'\n');
+                exported_count += 1;
+                bytes_written += line.len() as u64 + 1;
+
+                // Flush buffer when large
+                if output_buffer.len() >= 1024 * 1024 {
+                    let result = callback(output_buffer.as_ptr() as *const c_char, output_buffer.len(), user_data);
+                    if result != 0 {
+                        break;
+                    }
+                    output_buffer.clear();
+                }
+            }
+        } else {
+            // Slow path: parse and filter
+            use sonic_rs::JsonValueTrait;
+
+            let after_ts = if !spec.after_timestamp.is_null() {
+                Some(unsafe {
+                    CStr::from_ptr(spec.after_timestamp).to_str().unwrap().to_string()
+                })
+            } else {
+                None
+            };
+
+            let did_filter = if !spec.did_filter.is_null() {
+                Some(unsafe {
+                    CStr::from_ptr(spec.did_filter).to_str().unwrap().to_string()
+                })
+            } else {
+                None
+            };
+
+            let op_type_filter = if !spec.op_type_filter.is_null() {
+                Some(unsafe {
+                    CStr::from_ptr(spec.op_type_filter).to_str().unwrap().to_string()
+                })
+            } else {
+                None
+            };
+
+            for line in reader.lines() {
+                if spec.count_limit > 0 && exported_count >= spec.count_limit {
+                    break;
+                }
+
+                let line = match line {
+                    Ok(l) => l,
+                    Err(_) => continue,
+                };
+
+                if line.is_empty() {
+                    continue;
+                }
+
+                // Parse JSON
+                let data: sonic_rs::Value = match sonic_rs::from_str(&line) {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+
+                // Apply filters
+                if let Some(ref after_ts) = after_ts {
+                    if let Some(created_at) = data.get("createdAt").or_else(|| data.get("created_at")) {
+                        if let Some(ts_str) = created_at.as_str() {
+                            if ts_str < after_ts.as_str() {
+                                continue;
+                            }
+                        } else {
+                            continue;
+                        }
+                    } else {
+                        continue;
+                    }
+                }
+
+                if let Some(ref did_filter) = did_filter {
+                    if let Some(did_val) = data.get("did") {
+                        if let Some(did_str) = did_val.as_str() {
+                            if did_str != did_filter {
+                                continue;
+                            }
+                        } else {
+                            continue;
+                        }
+                    } else {
+                        continue;
+                    }
+                }
+
+                if let Some(ref op_type_filter) = op_type_filter {
+                    if let Some(op_val) = data.get("operation") {
+                        let matches = if op_val.is_str() {
+                            op_val.as_str().unwrap() == op_type_filter
+                        } else if op_val.is_object() {
+                            if let Some(typ_val) = op_val.get("type") {
+                                typ_val.is_str() && typ_val.as_str().unwrap() == op_type_filter
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+                        if !matches {
+                            continue;
+                        }
+                    } else {
+                        continue;
+                    }
+                }
+
+                // Format
+                let formatted = match spec.format {
+                    0 => line, // JSONL - use original
+                    1 => sonic_rs::to_string_pretty(&data).unwrap_or_default(), // JSON
+                    2 => {
+                        let did = data.get("did").and_then(|v| v.as_str()).unwrap_or("");
+                        let op = data.get("operation").map(|v| sonic_rs::to_string(v).unwrap_or_default()).unwrap_or_default();
+                        let created_at = data.get("createdAt").or_else(|| data.get("created_at"))
+                            .and_then(|v| v.as_str()).unwrap_or("");
+                        let nullified = data.get("nullified").and_then(|v| v.as_bool()).unwrap_or(false);
+                        format!("{},{},{},{}", did, op, created_at, nullified)
+                    }
+                    _ => line,
+                };
+
+                output_buffer.extend_from_slice(formatted.as_bytes());
+                output_buffer.push(b'\n');
+                exported_count += 1;
+                bytes_written += formatted.len() as u64 + 1;
+
+                // Flush buffer when large
+                if output_buffer.len() >= 1024 * 1024 {
+                    let result = callback(output_buffer.as_ptr() as *const c_char, output_buffer.len(), user_data);
+                    if result != 0 {
+                        break;
+                    }
+                    output_buffer.clear();
+                }
+            }
+        }
+    }
+
+    // Flush remaining buffer
+    if !output_buffer.is_empty() {
+        callback(output_buffer.as_ptr() as *const c_char, output_buffer.len(), user_data);
+    }
+
+    if !out_stats.is_null() {
+        unsafe {
+            (*out_stats).records_written = exported_count;
+            (*out_stats).bytes_written = bytes_written;
+        }
+    }
+
+    0
 }

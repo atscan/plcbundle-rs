@@ -1,12 +1,18 @@
 package plcbundle
 
 // #cgo LDFLAGS: -L../../target/release -lplcbundle -lm -ldl -lpthread
+// #cgo CFLAGS: -I.
 // #include <stdlib.h>
+// #include <stddef.h>
 // #include "plcbundle.h"
+// extern int exportCallbackBridge(const char* data, size_t len, void* user_data);
 import "C"
 import (
 	"fmt"
+	"io"
 	"runtime"
+	"strings"
+	"sync"
 	"unsafe"
 )
 
@@ -77,6 +83,22 @@ type RebuildStats struct {
 	OperationsIndexed uint64
 	UniqueDIDs        uint
 	DurationMs        uint64
+}
+
+type ExportSpec struct {
+	BundleStart    uint32
+	BundleEnd      uint32
+	ExportAll      bool
+	Format         uint8  // 0=jsonl, 1=json, 2=csv
+	CountLimit     uint64 // 0 = no limit
+	AfterTimestamp string // Empty = no filter
+	DIDFilter      string // Empty = no filter
+	OpTypeFilter   string // Empty = no filter
+}
+
+type ExportStats struct {
+	RecordsWritten uint64
+	BytesWritten   uint64
 }
 
 type WarmUpStrategy uint8
@@ -463,6 +485,155 @@ func (m *BundleManager) GetStats() (*ManagerStats, error) {
 	}
 
 	return stats, nil
+}
+
+// ============================================================================
+// Export
+// ============================================================================
+
+// ExportOptions configures export behavior
+type ExportOptions struct {
+	// Writer receives exported data in batches
+	Writer io.Writer
+	// Progress callback (optional)
+	Progress func(records, bytes uint64)
+}
+
+// Export exports operations according to the spec
+func (m *BundleManager) Export(spec ExportSpec, opts *ExportOptions) (*ExportStats, error) {
+	if opts == nil || opts.Writer == nil {
+		return nil, fmt.Errorf("writer is required")
+	}
+
+	// Convert Go spec to C spec
+	cSpec := C.CExportSpec{
+		bundle_start:    C.uint32_t(spec.BundleStart),
+		bundle_end:      C.uint32_t(spec.BundleEnd),
+		export_all:      C._Bool(spec.ExportAll),
+		format:          C.uint8_t(spec.Format),
+		count_limit:     C.uint64_t(spec.CountLimit),
+		after_timestamp: nil,
+		did_filter:      nil,
+		op_type_filter:  nil,
+	}
+
+	// Convert string filters to C strings
+	var afterTs, didFilter, opTypeFilter *C.char
+	if spec.AfterTimestamp != "" {
+		afterTs = C.CString(spec.AfterTimestamp)
+		defer C.free(unsafe.Pointer(afterTs))
+		cSpec.after_timestamp = afterTs
+	}
+
+	if spec.DIDFilter != "" {
+		didFilter = C.CString(spec.DIDFilter)
+		defer C.free(unsafe.Pointer(didFilter))
+		cSpec.did_filter = didFilter
+	}
+
+	if spec.OpTypeFilter != "" {
+		opTypeFilter = C.CString(spec.OpTypeFilter)
+		defer C.free(unsafe.Pointer(opTypeFilter))
+		cSpec.op_type_filter = opTypeFilter
+	}
+
+	// Create callback context
+	ctx := &exportCallbackCtx{
+		writer:   opts.Writer,
+		progress: opts.Progress,
+	}
+
+	var cStats C.CExportStats
+	
+	// Use a global callback registry to work around cgo limitations
+	exportCallbackID := registerExportCallback(ctx)
+	defer unregisterExportCallback(exportCallbackID)
+
+	// Use C bridge function that calls the Go-exported function
+	result := C.bundle_manager_export(
+		m.ptr,
+		&cSpec,
+		(C.ExportCallback)(C.exportCallbackBridge),
+		unsafe.Pointer(uintptr(exportCallbackID)),
+		&cStats,
+	)
+
+	if result != 0 {
+		return nil, fmt.Errorf("export failed")
+	}
+
+	stats := &ExportStats{
+		RecordsWritten: uint64(cStats.records_written),
+		BytesWritten:   uint64(cStats.bytes_written),
+	}
+
+	return stats, nil
+}
+
+// ============================================================================
+// Export callback registry
+// ============================================================================
+
+type exportCallbackCtx struct {
+	writer   io.Writer
+	progress func(uint64, uint64)
+	records  uint64
+	bytes    uint64
+}
+
+var (
+	exportCallbacks   = make(map[uintptr]*exportCallbackCtx)
+	exportCallbackMux sync.Mutex
+	exportCallbackID  uintptr = 1
+)
+
+func registerExportCallback(ctx *exportCallbackCtx) uintptr {
+	exportCallbackMux.Lock()
+	defer exportCallbackMux.Unlock()
+	id := exportCallbackID
+	exportCallbackID++
+	exportCallbacks[id] = ctx
+	return id
+}
+
+func unregisterExportCallback(id uintptr) {
+	exportCallbackMux.Lock()
+	defer exportCallbackMux.Unlock()
+	delete(exportCallbacks, id)
+}
+
+//export exportCallbackGo
+func exportCallbackGo(data *C.char, len C.size_t, userData unsafe.Pointer) C.int {
+	id := uintptr(userData)
+	exportCallbackMux.Lock()
+	ctx, ok := exportCallbacks[id]
+	exportCallbackMux.Unlock()
+
+	if !ok || ctx == nil {
+		return 1
+	}
+
+	if data == nil || len == 0 {
+		return 0
+	}
+
+	// Copy C data to Go slice
+	goData := C.GoBytes(unsafe.Pointer(data), C.int(len))
+	_, err := ctx.writer.Write(goData)
+	if err != nil {
+		return 1 // Stop on error
+	}
+
+	ctx.bytes += uint64(len)
+	// Estimate records (rough - count newlines)
+	ctx.records += uint64(strings.Count(string(goData), "\n"))
+
+	// Call progress callback if provided
+	if ctx.progress != nil {
+		ctx.progress(ctx.records, ctx.bytes)
+	}
+
+	return 0 // Continue
 }
 
 // ============================================================================

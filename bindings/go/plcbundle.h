@@ -84,6 +84,22 @@ typedef struct {
     uint64_t duration_ms;
 } CRebuildStats;
 
+typedef struct {
+    uint32_t bundle_start;
+    uint32_t bundle_end;
+    bool export_all;
+    uint8_t format;  // 0=jsonl, 1=json, 2=csv
+    uint64_t count_limit;  // 0 = no limit
+    const char* after_timestamp;  // NULL = no filter
+    const char* did_filter;  // NULL = no filter
+    const char* op_type_filter;  // NULL = no filter
+} CExportSpec;
+
+typedef struct {
+    uint64_t records_written;
+    uint64_t bytes_written;
+} CExportStats;
+
 // Warm-up strategies
 #define WARMUP_RECENT 0
 #define WARMUP_ALL 1
@@ -300,6 +316,26 @@ int bundle_manager_get_did_index_stats(
 int bundle_manager_get_stats(
     CBundleManager manager,
     CManagerStats* out_stats
+);
+
+// ============================================================================
+// Export
+// ============================================================================
+
+/**
+ * Export operations with streaming callback.
+ * callback(data, len, user_data) is called for each batch of data.
+ * Returns 0 to continue, non-zero to stop.
+ * Returns 0 on success, -1 on error.
+ */
+typedef int (*ExportCallback)(const char* data, size_t len, void* user_data);
+
+int bundle_manager_export(
+    CBundleManager manager,
+    const CExportSpec* spec,
+    ExportCallback callback,
+    void* user_data,
+    CExportStats* out_stats  // NULL if stats not needed
 );
 
 // ============================================================================
