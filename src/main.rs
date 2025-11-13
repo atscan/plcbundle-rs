@@ -3,6 +3,7 @@ use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use serde::Deserialize;
+use sonic_rs::JsonValueTrait;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -25,9 +26,13 @@ struct Args {
     #[arg(short = 'b', long = "bundles", value_name = "BUNDLES")]
     bundles: Option<String>,
 
-    /// Worker threads
-    #[arg(short = 'j', long = "threads", default_value = "1")]
+    /// Worker threads (0 = auto-detect)
+    #[arg(short = 'j', long = "threads", default_value = "0")]
     threads: usize,
+
+    /// Use simple dot notation for faster matching (e.g., "operation.handle")
+    #[arg(long = "simple")]
+    simple: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -42,6 +47,11 @@ struct Index {
 struct BundleMetadata {
     bundle_number: u32,
     operation_count: u32,
+}
+
+enum QueryEngine {
+    JmesPath(jmespath::Expression<'static>),
+    Simple(Vec<String>),
 }
 
 fn parse_bundle_range(spec: &str, max_bundle: u32) -> Result<Vec<u32>> {
@@ -74,55 +84,157 @@ fn parse_bundle_range(spec: &str, max_bundle: u32) -> Result<Vec<u32>> {
     Ok(bundles)
 }
 
-fn process_bundle(
+// Fast path: simple dot notation query
+fn query_simple(value: &sonic_rs::Value, path: &[String]) -> Option<sonic_rs::Value> {
+    let mut current = value;
+    
+    for key in path {
+        current = current.get(key)?;
+    }
+    
+    Some(current.clone())
+}
+
+// Batch output buffer to reduce lock contention
+struct OutputBuffer {
+    buffer: Vec<String>,
+    capacity: usize,
+}
+
+impl OutputBuffer {
+    fn new(capacity: usize) -> Self {
+        Self {
+            buffer: Vec::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    fn push(&mut self, line: String) -> Option<Vec<String>> {
+        self.buffer.push(line);
+        if self.buffer.len() >= self.capacity {
+            Some(std::mem::replace(&mut self.buffer, Vec::with_capacity(self.capacity)))
+        } else {
+            None
+        }
+    }
+
+    fn flush(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.buffer)
+    }
+}
+
+fn process_bundle_simple(
+    bundle_path: &PathBuf,
+    path: &[String],
+    stdout_lock: &Mutex<()>,
+) -> Result<(usize, u64)> {
+    let file = File::open(bundle_path)?;
+    let decoder = zstd::Decoder::new(file)?;
+    let reader = BufReader::with_capacity(512 * 1024, decoder);
+
+    let mut matches = 0;
+    let mut uncompressed_bytes = 0u64;
+    let mut output_buffer = OutputBuffer::new(1000);
+
+    for line in reader.lines() {
+        let line = line?;
+        if line.is_empty() {
+            continue;
+        }
+
+        uncompressed_bytes += line.len() as u64 + 1;
+
+        let data: sonic_rs::Value = sonic_rs::from_str(&line)?;
+        
+        if let Some(result) = query_simple(&data, path) {
+            if !result.is_null() {
+                let output = if result.is_str() {
+                    result.as_str().unwrap().to_string()
+                } else {
+                    sonic_rs::to_string(&result)?
+                };
+                
+                matches += 1;
+
+                if let Some(batch) = output_buffer.push(output) {
+                    let _lock = stdout_lock.lock().unwrap();
+                    let stdout = io::stdout();
+                    let mut out = stdout.lock();
+                    for line in batch {
+                        writeln!(out, "{}", line)?;
+                    }
+                }
+            }
+        }
+    }
+
+    let remaining = output_buffer.flush();
+    if !remaining.is_empty() {
+        let _lock = stdout_lock.lock().unwrap();
+        let stdout = io::stdout();
+        let mut out = stdout.lock();
+        for line in remaining {
+            writeln!(out, "{}", line)?;
+        }
+    }
+
+    Ok((matches, uncompressed_bytes))
+}
+
+fn process_bundle_jmespath(
     bundle_path: &PathBuf,
     expr: &jmespath::Expression<'_>,
     stdout_lock: &Mutex<()>,
 ) -> Result<(usize, u64)> {
-    // Open and decompress bundle
-    let file = File::open(bundle_path)
-        .context("Failed to open bundle file")?;
-    let decoder = zstd::Decoder::new(file)
-        .context("Failed to create zstd decoder")?;
-    let reader = BufReader::with_capacity(256 * 1024, decoder);
+    let file = File::open(bundle_path)?;
+    let decoder = zstd::Decoder::new(file)?;
+    let reader = BufReader::with_capacity(512 * 1024, decoder);
 
     let mut matches = 0;
     let mut uncompressed_bytes = 0u64;
+    let mut output_buffer = OutputBuffer::new(1000);
     
-    // Process each line (operation)
     for line in reader.lines() {
         let line = line?;
-        if line.trim().is_empty() {
+        if line.is_empty() {
             continue;
         }
 
-        // Count uncompressed bytes
-        uncompressed_bytes += line.len() as u64 + 1; // +1 for newline
+        uncompressed_bytes += line.len() as u64 + 1;
 
-        // Parse JSON and evaluate JMESPath expression
         let data = jmespath::Variable::from_json(&line)
             .map_err(|e| anyhow::anyhow!("Failed to parse JSON: {}", e))?;
         
         let result = expr.search(&data)
             .map_err(|e| anyhow::anyhow!("JMESPath search failed: {}", e))?;
         
-        // Check if result is not null
         if !result.is_null() {
-            let _lock = stdout_lock.lock().unwrap();
-            let stdout = io::stdout();
-            let mut out = stdout.lock();
-            
-            // Convert result to JSON string
             let output = if result.is_string() {
-                // For string results, output without quotes
                 result.as_string().unwrap().to_string()
             } else {
-                // For other types, serialize to JSON
                 sonic_rs::to_string(&result)?
             };
             
-            writeln!(out, "{}", output)?;
             matches += 1;
+
+            if let Some(batch) = output_buffer.push(output) {
+                let _lock = stdout_lock.lock().unwrap();
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                for line in batch {
+                    writeln!(out, "{}", line)?;
+                }
+            }
+        }
+    }
+
+    let remaining = output_buffer.flush();
+    if !remaining.is_empty() {
+        let _lock = stdout_lock.lock().unwrap();
+        let stdout = io::stdout();
+        let mut out = stdout.lock();
+        for line in remaining {
+            writeln!(out, "{}", line)?;
         }
     }
 
@@ -132,33 +244,47 @@ fn process_bundle(
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Compile JMESPath expression once
-    let expr = jmespath::compile(&args.query)
-        .map_err(|e| anyhow::anyhow!("Failed to compile JMESPath query: {}", e))?;
+    // Auto-detect thread count if 0
+    let num_threads = if args.threads == 0 {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+    } else {
+        args.threads
+    };
+
+    eprintln!("Using {} worker thread(s)", num_threads);
+
+    // Prepare query engine
+    let query_engine = if args.simple {
+        let path: Vec<String> = args.query.split('.').map(|s| s.to_string()).collect();
+        eprintln!("Using simple query mode: {:?}", path);
+        QueryEngine::Simple(path)
+    } else {
+        let expr = jmespath::compile(&args.query)
+            .map_err(|e| anyhow::anyhow!("Failed to compile JMESPath query: {}", e))?;
+        let expr = Box::leak(Box::new(expr));
+        QueryEngine::JmesPath(expr.clone())
+    };
 
     // Set thread pool size
-    if args.threads > 1 {
+    if num_threads > 1 {
         rayon::ThreadPoolBuilder::new()
-            .num_threads(args.threads)
+            .num_threads(num_threads)
             .build_global()
             .context("Failed to initialize thread pool")?;
     }
 
-    // Determine bundle directory
     let bundle_dir = args.dir.unwrap_or_else(|| PathBuf::from("."));
     let index_path = bundle_dir.join("plc_bundles.json");
 
-    // Load index
     eprintln!("Loading index from {:?}...", index_path);
-    let index_file = File::open(&index_path)
-        .context("Failed to open plc_bundles.json")?;
-    let index: Index = sonic_rs::from_reader(index_file)
-        .context("Failed to parse index")?;
+    let index_file = File::open(&index_path)?;
+    let index: Index = sonic_rs::from_reader(index_file)?;
 
     eprintln!("Index version: {}, origin: {}", index.version, index.origin);
     eprintln!("Total bundles available: {}", index.last_bundle);
 
-    // Determine which bundles to process
     let bundle_numbers = if let Some(spec) = args.bundles {
         parse_bundle_range(&spec, index.last_bundle)?
     } else {
@@ -167,7 +293,6 @@ fn main() -> Result<()> {
 
     eprintln!("Processing {} bundles with query: {}", bundle_numbers.len(), args.query);
 
-    // Create progress bar
     let pb = ProgressBar::new(bundle_numbers.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
@@ -175,23 +300,23 @@ fn main() -> Result<()> {
             .progress_chars("=>-"),
     );
 
-    // Shared stdout lock for thread safety
     let stdout_lock = Mutex::new(());
     let total_matches = Mutex::new(0usize);
     let total_bytes = Arc::new(Mutex::new(0u64));
     let start_time = Instant::now();
 
-    // Process bundles
     let process_fn = |bundle_num: &u32| -> Result<()> {
         let bundle_path = bundle_dir.join(format!("{:06}.jsonl.zst", bundle_num));
         
         if !bundle_path.exists() {
-            eprintln!("Warning: Bundle {} not found, skipping", bundle_num);
             pb.inc(1);
             return Ok(());
         }
 
-        let (matches, bytes) = process_bundle(&bundle_path, &expr, &stdout_lock)?;
+        let (matches, bytes) = match &query_engine {
+            QueryEngine::Simple(path) => process_bundle_simple(&bundle_path, path, &stdout_lock)?,
+            QueryEngine::JmesPath(expr) => process_bundle_jmespath(&bundle_path, expr, &stdout_lock)?,
+        };
         
         *total_matches.lock().unwrap() += matches;
         *total_bytes.lock().unwrap() += bytes;
@@ -206,7 +331,7 @@ fn main() -> Result<()> {
         Ok(())
     };
 
-    if args.threads == 1 {
+    if num_threads == 1 {
         bundle_numbers.iter().try_for_each(process_fn)?;
     } else {
         bundle_numbers.par_iter().try_for_each(process_fn)?;
