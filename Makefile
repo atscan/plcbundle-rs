@@ -10,6 +10,13 @@ help:
 build: ## Build in debug mode
 	cargo build
 
+build-go: build
+	@echo "Building Go bindings..."
+	cd bindings/go && go build ./...
+
+build-go-example: build-go
+	cd bindings/go && go build -o ../../bundleq-go cmd/example/main.go
+
 release: ## Build optimized release binary
 	cargo build --release
 	@echo ""
