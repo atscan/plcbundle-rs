@@ -26,7 +26,7 @@ pub use query::QueryEngine;
 pub use index::{Index, BundleMetadata};
 pub use manager::{BundleManager, LoadOptions, LoadResult, OperationResult, QuerySpec, ExportSpec,
                   BundleRange, ExportFormat, CompressionType,
-                  VerifySpec, VerifyResult, ChainVerifySpec, ChainVerifyResult,
+                  VerifySpec, VerifyResult, ChainVerifySpec, ChainVerifyResult, SyncResult,
                   BundleInfo, InfoFlags, RollbackSpec, RollbackPlan, RollbackResult,
                   WarmUpSpec, WarmUpStrategy, RebuildStats, DIDIndexStats, ManagerStats, ResolveResult,
                   RollbackFileStats};

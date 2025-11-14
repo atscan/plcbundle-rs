@@ -11,6 +11,20 @@ use std::sync::{Arc, RwLock};
 use std::io::Write;
 use chrono::{DateTime, Utc};
 
+/// Result of a sync_next_bundle operation
+#[derive(Debug, Clone)]
+pub enum SyncResult {
+    /// Successfully created a bundle
+    BundleCreated(u32),
+    /// Caught up to latest PLC data, mempool has partial operations
+    CaughtUp {
+        next_bundle: u32,
+        mempool_count: usize,
+        new_ops: usize,
+        fetch_duration_ms: u64,
+    },
+}
+
 pub struct BundleManager {
     directory: PathBuf,
     index: Arc<RwLock<Index>>,
@@ -809,7 +823,7 @@ impl BundleManager {
     }
 
     /// Fetch and save next bundle from PLC directory
-    pub async fn sync_next_bundle(&mut self, client: &crate::sync::PLCClient) -> Result<u32> {
+    pub async fn sync_next_bundle(&mut self, client: &crate::sync::PLCClient) -> Result<SyncResult> {
         use crate::sync::{get_boundary_cids, strip_boundary_duplicates, BUNDLE_SIZE};
         use std::time::Instant;
 
@@ -990,15 +1004,18 @@ impl BundleManager {
         
         // Check if we have enough operations
         let allow_partial = final_stats.count >= (BUNDLE_SIZE * 9 / 10); // At least 90%
-        
+
         if final_stats.count < BUNDLE_SIZE {
             if !allow_partial {
                 if caught_up {
-                    anyhow::bail!(
-                        "Insufficient operations: have {}, need {} (caught up to latest PLC data)",
-                        final_stats.count,
-                        BUNDLE_SIZE
-                    );
+                    // Caught up to latest PLC data without enough ops for a full bundle
+                    // Return CaughtUp result instead of error
+                    return Ok(SyncResult::CaughtUp {
+                        next_bundle: next_bundle_num,
+                        mempool_count: final_stats.count,
+                        new_ops: total_fetched - total_dupes - total_boundary_dupes,
+                        fetch_duration_ms: fetch_total_duration.as_millis() as u64,
+                    });
                 } else {
                     anyhow::bail!(
                         "Insufficient operations: have {}, need {} (max attempts reached)",
@@ -1007,7 +1024,7 @@ impl BundleManager {
                     );
                 }
             }
-            
+
             // Log partial bundle warning
             if self.verbose {
                 log::info!("  ✓ Collected {} unique ops from {} fetches ({:.1}% dedup)",
@@ -1077,7 +1094,7 @@ impl BundleManager {
         log::debug!("Bundle done = {}, finish duration = {}ms",
             next_bundle_num, save_duration.as_millis());
 
-        Ok(next_bundle_num)
+        Ok(SyncResult::BundleCreated(next_bundle_num))
     }
 
     /// Run single sync cycle
@@ -1089,7 +1106,7 @@ impl BundleManager {
 
         loop {
             match self.sync_next_bundle(client).await {
-                Ok(_) => {
+                Ok(SyncResult::BundleCreated(_)) => {
                     synced += 1;
 
                     // Check if we've reached the limit
@@ -1099,7 +1116,10 @@ impl BundleManager {
                         }
                     }
                 }
-                Err(e) if e.to_string().contains("Caught up") => break,
+                Ok(SyncResult::CaughtUp { .. }) => {
+                    // Caught up to latest PLC data
+                    break;
+                }
                 Err(e) => return Err(e),
             }
 

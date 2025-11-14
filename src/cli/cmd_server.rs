@@ -349,30 +349,29 @@ async fn run_server_sync_loop(
     // Note: This will block other operations during sync, but sync is infrequent
     let manager_mutex = Arc::new(Mutex::new(()));
     let mut total_synced = 0u32;
+    let mut is_initial_sync = true;
+    let mut initial_sync_start_bundle = 0u32;
+
+    eprintln!("[Sync] Starting initial sync...");
 
     if verbose {
-        eprintln!("[Sync] Starting sync loop (interval: {:?})", interval);
+        eprintln!("[Sync] Sync loop interval: {:?}", interval);
     }
 
     loop {
-        // Calculate remaining bundles to sync
-        let remaining = if max_bundles > 0 {
-            Some((max_bundles.saturating_sub(total_synced)) as usize)
-        } else {
-            None
-        };
-
         // Try to acquire lock for sync operation
-        // If we can't get it immediately, wait a bit and try again
         let sync_result = {
             let _guard = manager_mutex.lock().await;
 
             // Get mutable access by cloning and recreating
-            // This is a workaround since BundleManager doesn't use interior mutability for sync
-            // In a production system, we'd want to refactor sync methods to use &self
             let dir = manager.directory().clone();
             let mut manager_clone = match BundleManager::new(dir) {
-                Ok(m) => m.with_verbose(verbose),
+                Ok(m) => {
+                    if is_initial_sync && initial_sync_start_bundle == 0 {
+                        initial_sync_start_bundle = m.get_last_bundle();
+                    }
+                    m.with_verbose(verbose || is_initial_sync)
+                },
                 Err(e) => {
                     eprintln!("[Sync] Failed to recreate manager: {}", e);
                     sleep(interval).await;
@@ -380,18 +379,19 @@ async fn run_server_sync_loop(
                 }
             };
 
-            // Run sync with remaining limit
-            manager_clone.sync_once(&client, remaining).await
+            // Run single sync attempt
+            manager_clone.sync_next_bundle(&client).await
         };
 
         match sync_result {
-            Ok(synced) => {
-                total_synced += synced as u32;
+            Ok(plcbundle::SyncResult::BundleCreated(bundle_num)) => {
+                total_synced += 1;
 
-                if verbose && synced > 0 {
-                    eprintln!("[Sync] Synced {} bundle(s) (total: {})", synced, total_synced);
-                } else if verbose && synced == 0 {
-                    eprintln!("[Sync] Already up to date");
+                // During initial sync, always show progress
+                if is_initial_sync {
+                    eprintln!("[Sync] ✓ Bundle {:06} synced ({} bundles)", bundle_num, total_synced);
+                } else if verbose {
+                    eprintln!("[Sync] ✓ Bundle {:06} created (total: {})", bundle_num, total_synced);
                 }
 
                 // Check max bundles limit
@@ -402,14 +402,29 @@ async fn run_server_sync_loop(
                     break;
                 }
             }
-            Err(e) => {
-                if e.to_string().contains("Caught up") {
-                    if verbose {
-                        eprintln!("[Sync] Caught up to latest PLC data");
+            Ok(plcbundle::SyncResult::CaughtUp { next_bundle, mempool_count, new_ops, fetch_duration_ms }) => {
+                // Caught up - initial sync is complete
+                if is_initial_sync {
+                    is_initial_sync = false;
+                    eprintln!("[Sync] ✓ Initial sync complete ({} bundles synced)", total_synced);
+                    if mempool_count > 0 {
+                        eprintln!("[Sync] ✓ Mempool: {} operations", mempool_count);
                     }
+                    eprintln!("[Sync] Now monitoring for new operations (interval: {:?})...", interval);
                 } else {
-                    eprintln!("[Sync] Error during sync: {}", e);
+                    // Show mempool status when caught up during monitoring
+                    // Always show if there are new ops, or show all updates in verbose mode
+                    if new_ops > 0 {
+                        eprintln!("[Sync] ✓ Bundle {:06} | mempool: {} ({:+}) | time: {}ms",
+                            next_bundle, mempool_count, new_ops as i32, fetch_duration_ms);
+                    } else if verbose {
+                        eprintln!("[Sync] ✓ Bundle {:06} | mempool: {} | time: {}ms",
+                            next_bundle, mempool_count, fetch_duration_ms);
+                    }
                 }
+            }
+            Err(e) => {
+                eprintln!("[Sync] Error during sync: {}", e);
             }
         }
 
