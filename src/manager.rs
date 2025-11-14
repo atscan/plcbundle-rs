@@ -730,8 +730,26 @@ impl BundleManager {
         }
 
         // Take 10,000 operations and create bundle
-        // TODO: Implement bundle saving
-        eprintln!("TODO: Create and save bundle {}", next_bundle_num);
+        let operations = {
+            let mut mempool = self.mempool.write().unwrap();
+            let mem = mempool.as_mut().ok_or_else(|| anyhow::anyhow!("Mempool not initialized"))?;
+            mem.take(crate::sync::BUNDLE_SIZE)?
+        };
+
+        if operations.is_empty() {
+            anyhow::bail!("No operations to create bundle");
+        }
+
+        if self.verbose {
+            log::info!("Creating bundle {} with {} operations", next_bundle_num, operations.len());
+        }
+
+        // Save bundle to disk
+        self.save_bundle(next_bundle_num, operations)?;
+
+        if self.verbose {
+            log::info!("Bundle {} created successfully", next_bundle_num);
+        }
 
         Ok(next_bundle_num)
     }
@@ -751,6 +769,128 @@ impl BundleManager {
         }
 
         Ok(synced)
+    }
+
+    /// Save bundle to disk with compression and index updates
+    fn save_bundle(&mut self, bundle_num: u32, operations: Vec<Operation>) -> Result<()> {
+        use std::collections::HashSet;
+        use std::fs::File;
+        use std::io::Write;
+
+        if operations.is_empty() {
+            anyhow::bail!("Cannot save empty bundle");
+        }
+
+        // Extract metadata
+        let start_time = operations.first().unwrap().created_at.clone();
+        let end_time = operations.last().unwrap().created_at.clone();
+        let operation_count = operations.len() as u32;
+
+        // Count unique DIDs
+        let unique_dids: HashSet<String> = operations.iter().map(|op| op.did.clone()).collect();
+        let did_count = unique_dids.len() as u32;
+
+        // Serialize to JSONL and compute content hash
+        let mut uncompressed_data = Vec::new();
+        for op in &operations {
+            let json = sonic_rs::to_string(op)?;
+            uncompressed_data.extend_from_slice(json.as_bytes());
+            uncompressed_data.push(b'\n');
+        }
+        let uncompressed_size = uncompressed_data.len() as u64;
+
+        // Calculate content hash (uncompressed)
+        let content_hash = {
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(&uncompressed_data);
+            hasher.finalize().to_hex().to_string()
+        };
+
+        // Compress
+        let compressed_data = zstd::encode_all(uncompressed_data.as_slice(), 3)?;
+        let compressed_size = compressed_data.len() as u64;
+
+        // Calculate compressed hash
+        let compressed_hash = {
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(&compressed_data);
+            hasher.finalize().to_hex().to_string()
+        };
+
+        // Get parent hash (previous bundle's compressed hash)
+        let parent = if bundle_num > 1 {
+            self.index
+                .read()
+                .unwrap()
+                .get_bundle(bundle_num - 1)
+                .map(|b| b.compressed_hash.clone())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Get cursor (last operation timestamp)
+        let cursor = end_time.clone();
+
+        // Write to disk
+        let bundle_path = self.directory.join(format!("{:06}.jsonl.zst", bundle_num));
+        let mut file = File::create(&bundle_path)?;
+        file.write_all(&compressed_data)?;
+        file.flush()?;
+
+        if self.verbose {
+            log::debug!(
+                "Saved bundle {} ({} ops, {} DIDs, {} → {} bytes, {:.1}% compression)",
+                bundle_num,
+                operation_count,
+                did_count,
+                uncompressed_size,
+                compressed_size,
+                100.0 * (1.0 - compressed_size as f64 / uncompressed_size as f64)
+            );
+        }
+
+        // Update DID index
+        let did_ops: Vec<(String, bool)> = operations
+            .iter()
+            .map(|op| (op.did.clone(), op.nullified))
+            .collect();
+        
+        self.did_index.write().unwrap().update_for_bundle(bundle_num, did_ops)?;
+
+        // Update main index
+        let bundle_metadata = crate::index::BundleMetadata {
+            bundle_number: bundle_num,
+            start_time,
+            end_time,
+            operation_count,
+            did_count,
+            hash: content_hash.clone(), // For compatibility
+            content_hash,
+            parent,
+            compressed_hash,
+            compressed_size,
+            uncompressed_size,
+            cursor,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        // Add to index
+        {
+            let mut index = self.index.write().unwrap();
+            index.bundles.push(bundle_metadata);
+            index.last_bundle = bundle_num;
+            index.updated_at = chrono::Utc::now().to_rfc3339();
+            index.total_size_bytes += compressed_size;
+            index.total_uncompressed_size_bytes += uncompressed_size;
+
+            // Save index to disk
+            let index_path = self.directory.join("plc_bundles.json");
+            let index_json = serde_json::to_string_pretty(&*index)?;
+            std::fs::write(index_path, index_json)?;
+        }
+
+        Ok(())
     }
 
     // === Helpers ===
