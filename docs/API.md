@@ -36,6 +36,7 @@ export_to_writer<W: Write>(spec: ExportSpec, writer: W) -> Result<ExportStats>
 
 // === DID Operations ===
 get_did_operations(did: &str) -> Result<Vec<Operation>>
+resolve_did(did: &str) -> Result<DIDDocument>
 batch_resolve_dids(dids: Vec<String>) -> Result<HashMap<String, Vec<Operation>>>
 
 // === Verification ===

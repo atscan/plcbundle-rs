@@ -23,6 +23,8 @@ jmespath = { version = "0.3", features = ["sync"] }
 zstd = "0.13"
 rayon = "1.10"
 blake3 = "1.5"
+memmap2 = "0.9"
+chrono = "0.4"
 
 # Optional CLI dependencies
 clap = { version = "4.5", features = ["derive"], optional = true }

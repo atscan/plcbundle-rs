@@ -183,6 +183,45 @@ enum Commands {
         format: InfoFormat,
     },
 
+    /// DID operations and queries
+    ///
+    /// Query and analyze DIDs in the bundle repository. All commands
+    /// require a DID index to be built for optimal performance.
+    #[command(
+        after_help = "Examples:\n  \
+            # Resolve DID to current document\n  \
+            plcbundle did resolve did:plc:524tuhdhh3m7li5gycdn6boe\n\n  \
+            # Lookup all operations for a DID (TODO)\n  \
+            plcbundle did lookup did:plc:524tuhdhh3m7li5gycdn6boe\n\n  \
+            # Show complete audit log (TODO)\n  \
+            plcbundle did history did:plc:524tuhdhh3m7li5gycdn6boe"
+    )]
+    Did {
+        #[command(subcommand)]
+        command: DIDCommands,
+    },
+
+    /// DID index management
+    ///
+    /// Manage the DID position index which maps DIDs to their bundle locations.
+    /// This index enables fast O(1) DID lookups and is required for DID
+    /// resolution and query operations.
+    #[command(
+        after_help = "Examples:\n  \
+            # Build DID position index\n  \
+            plcbundle index build\n\n  \
+            # Repair DID index (rebuild from bundles)\n  \
+            plcbundle index repair\n\n  \
+            # Show DID index statistics\n  \
+            plcbundle index stats\n\n  \
+            # Verify DID index integrity\n  \
+            plcbundle index verify"
+    )]
+    Index {
+        #[command(subcommand)]
+        command: IndexCommands,
+    },
+
     /// Interactive shell mode
     #[cfg(feature = "interactive")]
     Shell {
@@ -260,6 +299,128 @@ enum OpCommands {
     Find {
         /// CID to search for
         cid: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum DIDCommands {
+    /// Resolve DID to current W3C DID document
+    #[command(alias = "doc", alias = "document")]
+    Resolve {
+        /// DID to resolve
+        did: String,
+
+        /// Verbose output
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Find all operations for a DID (TODO)
+    #[command(alias = "find", alias = "get")]
+    Lookup {
+        /// DID to lookup
+        did: String,
+
+        /// Verbose output
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Show complete DID audit log (TODO)
+    #[command(alias = "log", alias = "audit")]
+    History {
+        /// DID to show history for
+        did: String,
+
+        /// Verbose output
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+
+        /// Compact one-line format
+        #[arg(long)]
+        compact: bool,
+
+        /// Include nullified operations
+        #[arg(long)]
+        include_nullified: bool,
+    },
+
+    /// Process multiple DIDs from file or stdin (TODO)
+    Batch {
+        /// Action: lookup, resolve, export
+        #[arg(long, default_value = "lookup")]
+        action: String,
+
+        /// Number of parallel workers
+        #[arg(long, default_value = "4")]
+        workers: usize,
+
+        /// Output file
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Read from stdin
+        #[arg(long)]
+        stdin: bool,
+    },
+
+    /// Show DID activity statistics (TODO)
+    Stats {
+        /// DID to show stats for (omit for global stats)
+        did: Option<String>,
+
+        /// Show global index stats
+        #[arg(long)]
+        global: bool,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum IndexCommands {
+    /// Build DID position index
+    #[command(
+        after_help = "Examples:\n  \
+            # Build index\n  \
+            plcbundle index build\n\n  \
+            # Force rebuild from scratch\n  \
+            plcbundle index build --force"
+    )]
+    Build {
+        /// Rebuild even if index exists
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Repair DID index
+    #[command(alias = "rebuild")]
+    Repair {},
+
+    /// Show DID index statistics
+    #[command(alias = "info")]
+    Stats {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Verify DID index integrity
+    #[command(alias = "check")]
+    Verify {
+        /// Verbose output
+        #[arg(short, long)]
+        verbose: bool,
     },
 }
 
@@ -398,6 +559,43 @@ fn main() -> Result<()> {
             format,
         } => {
             cmd_stats(cli.dir, bundles, stat_type, format)?;
+        }
+
+        Commands::Did { command } => {
+            match command {
+                DIDCommands::Resolve { did, verbose } => {
+                    commands::did::cmd_did_resolve(cli.dir, did, verbose)?;
+                }
+                DIDCommands::Lookup { did, verbose, json } => {
+                    commands::did::cmd_did_lookup(cli.dir, did, verbose, json)?;
+                }
+                DIDCommands::History { did, verbose, json, compact, include_nullified } => {
+                    commands::did::cmd_did_history(cli.dir, did, verbose, json, compact, include_nullified)?;
+                }
+                DIDCommands::Batch { action, workers, output, stdin } => {
+                    commands::did::cmd_did_batch(cli.dir, action, workers, output, stdin)?;
+                }
+                DIDCommands::Stats { did, global, json } => {
+                    commands::did::cmd_did_stats(cli.dir, did, global, json)?;
+                }
+            }
+        }
+
+        Commands::Index { command } => {
+            match command {
+                IndexCommands::Build { force } => {
+                    commands::index::cmd_index_build(cli.dir, force)?;
+                }
+                IndexCommands::Repair {} => {
+                    commands::index::cmd_index_repair(cli.dir)?;
+                }
+                IndexCommands::Stats { json } => {
+                    commands::index::cmd_index_stats(cli.dir, json)?;
+                }
+                IndexCommands::Verify { verbose } => {
+                    commands::index::cmd_index_verify(cli.dir, verbose)?;
+                }
+            }
         }
     }
 

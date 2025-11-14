@@ -1,5 +1,7 @@
 // Command modules
+pub mod did;
 pub mod export;
+pub mod index;
 pub mod info;
 pub mod op;
 pub mod query;

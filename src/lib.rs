@@ -11,6 +11,7 @@ pub mod cache;
 pub mod verification;
 pub mod iterators;
 pub mod bundle_format;
+pub mod resolver;
 
 // Re-export main types
 pub use options::{Options, OptionsBuilder, QueryMode};
@@ -24,3 +25,4 @@ pub use manager::{BundleManager, LoadOptions, LoadResult, OperationResult, Query
                   WarmUpSpec, WarmUpStrategy, RebuildStats, DIDIndexStats, ManagerStats};
 pub use operations::{Operation, OperationFilter, OperationRequest};
 pub use iterators::{QueryIterator, ExportIterator, RangeIterator};
+pub use resolver::{DIDDocument, DIDState, resolve_did_document, build_did_state, validate_did_format};

@@ -14,7 +14,7 @@ pub struct BundleManager {
     directory: PathBuf,
     index: Arc<RwLock<Index>>,
     cache: Arc<cache::BundleCache>,
-    did_index: Arc<RwLock<did_index::DIDIndex>>,
+    did_index: Arc<RwLock<did_index::Manager>>,
     stats: Arc<RwLock<ManagerStats>>,
 }
 
@@ -37,7 +37,7 @@ pub struct DIDIndexStats {
 impl BundleManager {
     pub fn new(directory: PathBuf) -> Result<Self> {
         let index = Index::load(&directory)?;
-        let did_index = did_index::DIDIndex::load_or_create(&directory)?;
+        let did_index = did_index::Manager::new(directory.clone())?;
         
         Ok(Self {
             directory: directory.clone(),
@@ -239,6 +239,22 @@ impl BundleManager {
         Ok(operations)
     }
 
+    /// Resolve DID to current W3C DID Document
+    pub fn resolve_did(&self, did: &str) -> Result<crate::resolver::DIDDocument> {
+        // Validate DID format
+        crate::resolver::validate_did_format(did)?;
+
+        // Get all operations for this DID
+        let operations = self.get_did_operations(did)?;
+
+        if operations.is_empty() {
+            anyhow::bail!("DID not found: {}", did);
+        }
+
+        // Resolve to DID document
+        crate::resolver::resolve_did_document(did, &operations)
+    }
+
     pub fn batch_resolve_dids(&self, dids: Vec<String>) -> Result<HashMap<String, Vec<Operation>>> {
         let mut results = HashMap::new();
         
@@ -408,31 +424,56 @@ impl BundleManager {
         F: Fn(u32, u32) + Send + Sync,
     {
         let last_bundle = self.get_last_bundle();
-        let mut new_index = did_index::DIDIndex::new();
+        let new_index = did_index::Manager::new(self.directory.clone())?;
         let mut stats = RebuildStats::default();
         
+        // Collect all bundles with their operations
+        let mut bundles_data = Vec::new();
         for bundle_num in 1..=last_bundle {
             if let Some(ref cb) = progress_cb {
                 cb(bundle_num, last_bundle);
             }
             
             if let Ok(result) = self.load_bundle(bundle_num, LoadOptions::default()) {
-                for op in result.operations {
-                    new_index.add_operation(bundle_num, &op.did);
-                    stats.operations_indexed += 1;
-                }
+                let operations: Vec<(String, bool)> = result.operations
+                    .iter()
+                    .map(|op| (op.did.clone(), op.nullified))
+                    .collect();
+                
+                stats.operations_indexed += operations.len() as u64;
                 stats.bundles_processed += 1;
+                
+                bundles_data.push((bundle_num, operations));
             }
         }
         
-        new_index.save(&self.directory)?;
+        // Build index from scratch
+        new_index.build_from_scratch(bundles_data, |current, total| {
+            if let Some(ref cb) = progress_cb {
+                cb(current as u32, total as u32);
+            }
+        })?;
+        
         *self.did_index.write().unwrap() = new_index;
         
         Ok(stats)
     }
 
     pub fn get_did_index_stats(&self) -> DIDIndexStats {
-        self.did_index.read().unwrap().get_stats()
+        let stats_map = self.did_index.read().unwrap().get_stats();
+        
+        // Convert to old format
+        DIDIndexStats {
+            total_dids: stats_map.get("total_dids")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0) as usize,
+            total_entries: 0, // Not tracked in new version
+            avg_operations_per_did: 0.0, // Not tracked in new version
+        }
+    }
+
+    pub fn get_did_index(&self) -> Arc<RwLock<did_index::Manager>> {
+        Arc::clone(&self.did_index)
     }
 
     // === Observability ===
@@ -698,3 +739,4 @@ pub struct RebuildStats {
     pub bundles_processed: u32,
     pub operations_indexed: u64,
 }
+
