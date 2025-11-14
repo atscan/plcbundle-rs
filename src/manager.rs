@@ -1096,7 +1096,7 @@ impl BundleManager {
 
         // Take operations and create bundle
         log::debug!("Calling operations.SaveBundle with bundle={}", next_bundle_num);
-        
+
         let operations = {
             let mut mempool = self.mempool.write().unwrap();
             let mem = mempool.as_mut().ok_or_else(|| anyhow::anyhow!("Mempool not initialized"))?;
@@ -1108,7 +1108,7 @@ impl BundleManager {
         if operations.is_empty() {
             anyhow::bail!("No operations to create bundle");
         }
-        
+
         // Bundles must contain exactly BUNDLE_SIZE operations
         if operations.len() != constants::BUNDLE_SIZE {
             anyhow::bail!(
@@ -1120,22 +1120,26 @@ impl BundleManager {
 
         log::debug!("SaveBundle SUCCESS, setting bundle fields");
 
+        // CRITICAL: Clear mempool BEFORE saving to ensure atomicity
+        // If interrupted after this point, the operations are no longer in mempool
+        // and won't be re-fetched on restart, preventing duplicate/inconsistent bundles.
+        // If save fails after clearing, we bail out and the operations are lost,
+        // but this is better than creating bundles with inconsistent content.
+        self.clear_mempool()?;
+
         // Save bundle to disk with timing breakdown
         // During initial sync, skip DID index updates (will be done in batches every 100 bundles)
         let save_start = Instant::now();
-        let (serialize_time, compress_time, hash_time, did_index_time, index_write_time) = 
+        let (serialize_time, compress_time, hash_time, did_index_time, index_write_time) =
             self.save_bundle_with_timing(next_bundle_num, operations, skip_did_index)?;
         let save_duration = save_start.elapsed();
-        
+
         // Show timing breakdown in verbose mode only
         if *self.verbose.lock().unwrap() {
             log::debug!("  Save timing: serialize={:.1}ms, compress={:.1}ms, hash={:.1}ms, did_index={:.1}ms, index_write={:.1}ms, total={:.1}ms",
                 serialize_time.as_millis(), compress_time.as_millis(), hash_time.as_millis(),
                 did_index_time.as_millis(), index_write_time.as_millis(), save_duration.as_millis());
         }
-
-        // Clear mempool after successful bundle save
-        self.clear_mempool()?;
 
         log::debug!("Adding bundle {} to index", next_bundle_num);
         log::debug!("Index now has {} bundles", next_bundle_num);
