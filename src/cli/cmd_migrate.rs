@@ -48,8 +48,8 @@ pub struct MigrateCommand {
     #[arg(short, long)]
     pub force: bool,
 
-    /// Number of parallel workers
-    #[arg(short, long, default_value = "4")]
+    /// Number of parallel workers (0 = auto-detect)
+    #[arg(short, long, default_value = "0")]
     pub workers: usize,
 
     /// Verbose output
@@ -59,6 +59,9 @@ pub struct MigrateCommand {
 
 pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
     let manager = BundleManager::new(dir.clone())?.with_verbose(cmd.verbose);
+
+    // Auto-detect number of workers if 0
+    let workers = super::utils::get_num_workers(cmd.workers, 4);
 
     eprintln!("Scanning for legacy bundles in: {}\n", dir.display());
 
@@ -147,7 +150,7 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
 
     eprintln!("  Bundles: {}", needs_migration.len());
     eprintln!("  Size:    {} ({:.3}x compression)", format_bytes(total_size), avg_compression);
-    eprintln!("  Workers: {}, Compression Level: {}\n", cmd.workers, plcbundle::constants::ZSTD_COMPRESSION_LEVEL);
+    eprintln!("  Workers: {}, Compression Level: {}\n", workers, plcbundle::constants::ZSTD_COMPRESSION_LEVEL);
 
     if cmd.dry_run {
         eprintln!("💡 Dry-run mode");
@@ -170,11 +173,54 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
     let mut total_old_uncompressed = 0u64;
     let mut total_new_uncompressed = 0u64;
 
-    for (i, info) in needs_migration.iter().enumerate() {
+    // Parallel migration using rayon
+    // Note: Even though we use parallelism, bundles MUST be migrated in order
+    // for chain integrity. We parallelize the WORK (compression) but commit sequentially.
+    use rayon::prelude::*;
+    use std::sync::{Arc, Mutex};
+
+    let progress_arc = Arc::new(Mutex::new(0usize));
+    let results: Vec<_> = if workers > 1 {
+        // Parallel mode: process in chunks to maintain some ordering
+        let chunk_size = workers * 2; // Process 2x workers at a time for better pipelining
+
+        needs_migration
+            .par_chunks(chunk_size)
+            .flat_map(|chunk| {
+                // Process chunk in parallel
+                chunk.par_iter().map(|info| {
+                    let result = manager.migrate_bundle(info.bundle_number);
+
+                    // Update progress
+                    {
+                        let mut prog = progress_arc.lock().unwrap();
+                        *prog += 1;
+                        progress.set(*prog);
+                    }
+
+                    (info, result)
+                }).collect::<Vec<_>>()
+            })
+            .collect()
+    } else {
+        // Sequential mode
+        needs_migration.iter().map(|info| {
+            let result = manager.migrate_bundle(info.bundle_number);
+
+            let mut prog = progress_arc.lock().unwrap();
+            *prog += 1;
+            progress.set(*prog);
+
+            (info, result)
+        }).collect()
+    };
+
+    // Process results
+    for (info, result) in results {
         total_old_size += info.old_size;
         total_old_uncompressed += info.uncompressed_size;
 
-        match manager.migrate_bundle(info.bundle_number) {
+        match result {
             Ok((size_diff, new_uncompressed_size, new_compressed_size)) => {
                 success += 1;
                 hash_changes.push(info.bundle_number);
@@ -205,8 +251,6 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
                 }
             }
         }
-
-        progress.set(i + 1);
     }
 
     progress.finish();

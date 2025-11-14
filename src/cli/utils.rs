@@ -101,3 +101,21 @@ pub fn display_path(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
+/// Get number of worker threads, auto-detecting if workers == 0
+///
+/// # Arguments
+/// * `workers` - Number of workers requested (0 = auto-detect)
+/// * `fallback` - Fallback value if auto-detection fails (default: 4)
+///
+/// # Returns
+/// Number of worker threads to use
+pub fn get_num_workers(workers: usize, fallback: usize) -> usize {
+    if workers == 0 {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(fallback)
+    } else {
+        workers
+    }
+}
+
