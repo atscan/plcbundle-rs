@@ -311,6 +311,10 @@ enum Commands {
     /// Compare repositories
     #[command(alias = "compare")]
     Diff(commands::diff::DiffCommand),
+
+    /// Start HTTP server
+    #[command(alias = "serve")]
+    Server(commands::server::ServerCommand),
 }
 
 #[derive(Subcommand)]
@@ -703,6 +707,9 @@ fn main() -> Result<()> {
 
         Commands::Diff(cmd) => {
             commands::diff::run(cmd, cli.dir)?;
+        }
+        Commands::Server(cmd) => {
+            commands::server::run(cmd, cli.dir)?;
         }
     }
 

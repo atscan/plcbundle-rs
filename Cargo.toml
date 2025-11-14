@@ -39,9 +39,18 @@ log = { version = "0.4", optional = true }
 env_logger = { version = "0.11", optional = true }
 sha2 = "0.10.9"
 
+# Server dependencies
+axum = { version = "0.7", optional = true }
+tower = { version = "0.4", optional = true }
+tower-http = { version = "0.5", features = ["cors"], optional = true }
+tokio-tungstenite = { version = "0.24", optional = true }
+tokio-util = { version = "0.7", features = ["io"], optional = true }
+futures = { version = "0.3", optional = true }
+
 [dev-dependencies]
 tempfile = "3.8"
 
 [features]
 default = ["cli"]
 cli = ["clap", "indicatif", "log", "env_logger"]
+server = ["axum", "tower", "tower-http", "tokio-tungstenite", "tokio-util", "futures"]

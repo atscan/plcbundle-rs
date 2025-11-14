@@ -16,4 +16,5 @@ pub mod sync;
 pub mod utils;
 pub mod verify;
 pub mod diff;
+pub mod server;
 

@@ -1331,6 +1331,79 @@ impl BundleManager {
         })
     }
 
+    // === Server API Methods ===
+    
+    /// Get PLC origin from index
+    pub fn get_plc_origin(&self) -> String {
+        self.index.read().unwrap().origin.clone()
+    }
+    
+    /// Stream bundle raw (compressed) data
+    /// Returns a reader that can be used to stream the compressed bundle file
+    pub fn stream_bundle_raw(&self, bundle_num: u32) -> Result<std::fs::File> {
+        let bundle_path = self.directory.join(format!("{:06}.jsonl.zst", bundle_num));
+        if !bundle_path.exists() {
+            anyhow::bail!("Bundle {} not in index", bundle_num);
+        }
+        Ok(std::fs::File::open(bundle_path)?)
+    }
+    
+    /// Stream bundle decompressed (JSONL) data
+    /// Returns a reader that decompresses the bundle on-the-fly
+    pub fn stream_bundle_decompressed(&self, bundle_num: u32) -> Result<Box<dyn std::io::Read + Send>> {
+        let file = self.stream_bundle_raw(bundle_num)?;
+        Ok(Box::new(zstd::Decoder::new(file)?))
+    }
+    
+    /// Get current cursor (global position of last operation)
+    /// Cursor = (last_bundle * 10000) + mempool_ops_count
+    pub fn get_current_cursor(&self) -> u64 {
+        let index = self.index.read().unwrap();
+        let bundled_ops = index.last_bundle as u64 * 10000;
+        
+        // Add mempool operations if available
+        let mempool_guard = self.mempool.read().unwrap();
+        let mempool_ops = if let Some(mp) = mempool_guard.as_ref() {
+            mp.get_operations().len() as u64
+        } else {
+            0
+        };
+        
+        bundled_ops + mempool_ops
+    }
+    
+    /// Resolve handle to DID or validate DID format
+    /// Returns (did, handle_resolve_time_ms)
+    /// For now, handles are not supported (returns error), only DIDs are validated
+    pub fn resolve_handle_or_did(&self, input: &str) -> Result<(String, u64)> {
+        use std::time::Instant;
+        
+        // Check if it's a DID
+        if input.starts_with("did:") {
+            // Validate DID format
+            crate::resolver::validate_did_format(input)?;
+            return Ok((input.to_string(), 0));
+        }
+        
+        // Handle resolution not implemented yet
+        anyhow::bail!("Handle resolution not implemented. Input '{}' appears to be a handle", input);
+    }
+    
+    /// Get resolver statistics
+    /// Returns a HashMap with resolver performance metrics
+    pub fn get_resolver_stats(&self) -> HashMap<String, serde_json::Value> {
+        // For now, return empty stats
+        // TODO: Track resolver statistics
+        HashMap::new()
+    }
+    
+    /// Get handle resolver base URL
+    /// Returns None if handle resolver is not configured
+    pub fn get_handle_resolver_base_url(&self) -> Option<String> {
+        // Handle resolver not implemented yet
+        None
+    }
+
     pub fn clone_for_arc(&self) -> Self {
         Self {
             directory: self.directory.clone(),

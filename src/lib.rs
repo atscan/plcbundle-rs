@@ -15,6 +15,8 @@ pub mod resolver;
 pub mod mempool;
 pub mod sync;
 pub mod remote;
+#[cfg(feature = "server")]
+pub mod server;
 
 // Re-export main types
 pub use options::{Options, OptionsBuilder, QueryMode};
