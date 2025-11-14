@@ -3,7 +3,6 @@
 use anyhow::Result;
 use regex::Regex;
 use serde::Deserialize;
-use std::sync::Arc;
 use std::time::Duration;
 
 /// Default handle resolver URL

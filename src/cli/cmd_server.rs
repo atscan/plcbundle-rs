@@ -1,14 +1,17 @@
 // Server command - start HTTP server
 use anyhow::{Result, Context};
 use clap::Args;
-use plcbundle::BundleManager;
-use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::signal;
 use tokio::time::Duration;
-use chrono::Utc;
 
+#[cfg(feature = "server")]
+use plcbundle::BundleManager;
+#[cfg(feature = "server")]
+use std::sync::Arc;
+#[cfg(feature = "server")]
+use tokio::signal;
+#[cfg(feature = "server")]
+use chrono::Utc;
 #[cfg(feature = "server")]
 use plcbundle::server::{Server, ServerConfig};
 
@@ -109,10 +112,8 @@ pub fn run(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
 
 #[cfg(feature = "server")]
 fn run_server(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
-    use axum::Router;
-    use std::net::SocketAddr;
     use tokio::runtime::Runtime;
-    
+
     // Create tokio runtime for async operations
     let rt = Runtime::new().context("Failed to create tokio runtime")?;
     rt.block_on(run_server_async(cmd, dir))
@@ -120,7 +121,6 @@ fn run_server(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
 
 #[cfg(feature = "server")]
 async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
-    use axum::Router;
     use std::net::SocketAddr;
 
     // Initialize manager with handle resolver if configured

@@ -216,6 +216,7 @@ mod tests {
                 nullified: false,
                 created_at: "2024-01-01T00:00:00Z".into(),
                 extra: serde_json::Value::Null,
+                raw_json: None,
             },
             Operation {
                 did: "did:plc:2".into(),
@@ -224,6 +225,7 @@ mod tests {
                 nullified: false,
                 created_at: "2024-01-01T00:00:01Z".into(),
                 extra: serde_json::Value::Null,
+                raw_json: None,
             },
             Operation {
                 did: "did:plc:3".into(),
@@ -232,6 +234,7 @@ mod tests {
                 nullified: false,
                 created_at: "2024-01-01T00:00:01Z".into(), // Same time as cid2
                 extra: serde_json::Value::Null,
+                raw_json: None,
             },
         ];
 
@@ -254,6 +257,7 @@ mod tests {
                 nullified: false,
                 created_at: "2024-01-01T00:00:00Z".into(),
                 extra: serde_json::Value::Null,
+                raw_json: None,
             },
             Operation {
                 did: "did:plc:2".into(),
@@ -262,6 +266,7 @@ mod tests {
                 nullified: false,
                 created_at: "2024-01-01T00:00:01Z".into(),
                 extra: serde_json::Value::Null,
+                raw_json: None,
             },
         ];
 

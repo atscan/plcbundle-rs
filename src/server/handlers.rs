@@ -35,10 +35,10 @@ pub fn create_router(
     let mut router = Router::new()
         .route("/", get(handle_root))
         .route("/index.json", get(handle_index_json))
-        .route("/bundle/:number", get(handle_bundle))
-        .route("/data/:number", get(handle_bundle_data))
-        .route("/jsonl/:number", get(handle_bundle_jsonl))
-        .route("/op/:pointer", get(handle_operation))
+        .route("/bundle/{number}", get(handle_bundle))
+        .route("/data/{number}", get(handle_bundle_data))
+        .route("/jsonl/{number}", get(handle_bundle_jsonl))
+        .route("/op/{pointer}", get(handle_operation))
         .route("/status", get(handle_status))
         .route("/mempool", get(handle_mempool))
         .route("/debug/memory", get(handle_debug_memory))
@@ -51,7 +51,7 @@ pub fn create_router(
     }
 
     // DID resolution routes (if enabled) - must be last to catch all other paths
-    router = router.route("/*path", get(handle_did_routing_guard));
+    router = router.route("/{*path}", get(handle_did_routing_guard));
 
     router
         .layer(

@@ -111,7 +111,7 @@ pub struct CExportStats {
 // BundleManager lifecycle
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn bundle_manager_new(bundle_dir: *const c_char) -> *mut CBundleManager {
     let bundle_dir = unsafe {
         if bundle_dir.is_null() {
@@ -131,7 +131,7 @@ pub extern "C" fn bundle_manager_new(bundle_dir: *const c_char) -> *mut CBundleM
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn bundle_manager_free(manager: *mut CBundleManager) {
     if !manager.is_null() {
         unsafe {
@@ -144,7 +144,7 @@ pub extern "C" fn bundle_manager_free(manager: *mut CBundleManager) {
 // Smart Loading
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn bundle_manager_load_bundle(
     manager: *const CBundleManager,
     bundle_num: u32,
@@ -196,7 +196,7 @@ pub extern "C" fn bundle_manager_load_bundle(
 // Batch Operations
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn bundle_manager_get_operations_batch(
     manager: *const CBundleManager,
     requests: *const COperationRequest,
@@ -242,7 +242,7 @@ pub extern "C" fn bundle_manager_get_operations_batch(
 // DID Operations
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn bundle_manager_get_did_operations(
     manager: *const CBundleManager,
     did: *const c_char,
@@ -279,7 +279,7 @@ pub extern "C" fn bundle_manager_get_did_operations(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn bundle_manager_batch_resolve_dids(
     manager: *const CBundleManager,
     dids: *const *const c_char,
@@ -329,7 +329,7 @@ pub extern "C" fn bundle_manager_batch_resolve_dids(
 // Query
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn bundle_manager_query(
     manager: *const CBundleManager,
     query_str: *const c_char,
@@ -387,7 +387,7 @@ pub extern "C" fn bundle_manager_query(
 // Verification
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn bundle_manager_verify_bundle(
     manager: *const CBundleManager,
     bundle_num: u32,
@@ -431,7 +431,7 @@ pub extern "C" fn bundle_manager_verify_bundle(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn bundle_manager_verify_chain(
     manager: *const CBundleManager,
     start_bundle: u32,
@@ -461,7 +461,7 @@ pub extern "C" fn bundle_manager_verify_chain(
 // Info
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn bundle_manager_get_bundle_info(
     manager: *const CBundleManager,
     bundle_num: u32,
@@ -502,7 +502,7 @@ pub extern "C" fn bundle_manager_get_bundle_info(
 // Cache Management
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn bundle_manager_prefetch_bundles(
     manager: *const CBundleManager,
     bundle_nums: *const u32,
@@ -521,7 +521,7 @@ pub extern "C" fn bundle_manager_prefetch_bundles(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn bundle_manager_warm_up(
     manager: *const CBundleManager,
     strategy: u8,
@@ -551,7 +551,7 @@ pub extern "C" fn bundle_manager_warm_up(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn bundle_manager_clear_caches(manager: *const CBundleManager) -> i32 {
     if manager.is_null() {
         return -1;
@@ -566,7 +566,7 @@ pub extern "C" fn bundle_manager_clear_caches(manager: *const CBundleManager) ->
 // DID Index
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn bundle_manager_rebuild_did_index(
     manager: *const CBundleManager,
     progress_callback: Option<extern "C" fn(u32, u32)>,
@@ -600,7 +600,7 @@ pub extern "C" fn bundle_manager_rebuild_did_index(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn bundle_manager_get_did_index_stats(
     manager: *const CBundleManager,
     out_stats: *mut CDIDIndexStats,
@@ -624,7 +624,7 @@ pub extern "C" fn bundle_manager_get_did_index_stats(
 // Observability
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn bundle_manager_get_stats(
     manager: *const CBundleManager,
     out_stats: *mut CManagerStats,
@@ -686,7 +686,7 @@ fn free_c_operation(op: COperation) {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn bundle_manager_free_string(s: *mut c_char) {
     if !s.is_null() {
         unsafe {
@@ -695,7 +695,7 @@ pub extern "C" fn bundle_manager_free_string(s: *mut c_char) {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn bundle_manager_free_operation(op: *mut COperation) {
     if !op.is_null() {
         unsafe {
@@ -705,7 +705,7 @@ pub extern "C" fn bundle_manager_free_operation(op: *mut COperation) {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn bundle_manager_free_operations(ops: *mut COperation, count: usize) {
     if !ops.is_null() {
         unsafe {
@@ -726,7 +726,7 @@ pub extern "C" fn bundle_manager_free_operations(ops: *mut COperation, count: us
 /// Returns 0 to continue, non-zero to stop
 pub type ExportCallback = extern "C" fn(data: *const c_char, len: usize, user_data: *mut std::ffi::c_void) -> i32;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn bundle_manager_export(
     manager: *const CBundleManager,
     spec: *const CExportSpec,

@@ -2,16 +2,17 @@
 
 use crate::server::handlers::ServerState;
 use axum::{
+    body::Bytes,
     extract::{Query, State, ws::WebSocketUpgrade},
     response::Response,
 };
+use axum::extract::ws::Message;
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
 
 const BUNDLE_SIZE: u32 = 10000;
-const PING_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Deserialize)]
 pub struct CursorQuery {
@@ -138,7 +139,7 @@ async fn stream_live_operations(
         ).await?;
 
         // Send ping
-        if let Err(e) = sender.send(axum::extract::ws::Message::Ping(vec![])).await {
+        if let Err(e) = sender.send(Message::Ping(Bytes::new())).await {
             return Err(Box::new(std::io::Error::new(
                 std::io::ErrorKind::ConnectionAborted,
                 format!("WebSocket ping failed: {}", e),
@@ -183,7 +184,7 @@ async fn stream_bundle(
     // Send lines
     let mut streamed = 0;
     for line in lines.iter() {
-        if let Err(e) = sender.send(axum::extract::ws::Message::Text(line.clone())).await {
+        if let Err(e) = sender.send(Message::Text(line.clone().into())).await {
             return Err(Box::new(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
                 format!("WebSocket write error: {}", e),
@@ -193,7 +194,7 @@ async fn stream_bundle(
 
         // Send ping every 1000 operations
         if streamed % 1000 == 0 {
-            if sender.send(axum::extract::ws::Message::Ping(vec![])).await.is_err() {
+            if sender.send(Message::Ping(Bytes::new())).await.is_err() {
                 break;
             }
         }
@@ -234,7 +235,7 @@ async fn stream_mempool(
             Err(_) => continue, // Skip invalid operations
         };
 
-        if let Err(e) = sender.send(axum::extract::ws::Message::Text(json)).await {
+        if let Err(e) = sender.send(Message::Text(json.into())).await {
             return Err(Box::new(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
                 format!("WebSocket write error: {}", e),
