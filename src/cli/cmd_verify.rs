@@ -300,18 +300,30 @@ fn verify_chain(manager: &BundleManager, verbose: bool, full: bool, fast: bool, 
         }
         
         if !valid {
+            error_count += 1;
+            failed_bundles.push(bundle_num);
+
+            // Only print per-bundle errors in verbose mode
             if verbose {
-                eprintln!("  Bundle {:06}... ❌ INVALID", bundle_num);
+                eprintln!("\n❌ Bundle {:06} verification failed", bundle_num);
+                if let Some(ref e) = err {
+                    let err_msg = e.to_string();
+                    eprintln!("  ⚠️  Error: {}", err_msg);
+
+                    // Provide helpful hint for common issues
+                    if err_msg.contains("hash") && err_msg.contains("mismatch") {
+                        eprintln!("  💡 Hint: Bundle file may have been migrated but index wasn't updated.");
+                        eprintln!("          Run 'migrate --force' to recalculate all hashes.");
+                    }
+                }
             }
-            eprintln!("\n❌ Bundle {:06} hash verification failed", bundle_num);
-            if let Some(ref e) = err {
-                eprintln!("  ⚠️  Error: {}", e);
-                if first_error.is_none() {
+
+            // Store first error for summary
+            if first_error.is_none() {
+                if let Some(e) = err.as_ref() {
                     first_error = Some(anyhow::anyhow!("{}", e));
                 }
             }
-            error_count += 1;
-            failed_bundles.push(bundle_num);
         } else {
             verified_count += 1;
         }
@@ -420,8 +432,22 @@ fn verify_chain(manager: &BundleManager, verbose: bool, full: bool, fast: bool, 
         eprintln!("   Errors:   {}", error_count);
         if !failed_bundles.is_empty() && failed_bundles.len() <= 10 {
             eprintln!("   ⚠️  Failed bundles: {:?}", failed_bundles);
+        } else if !failed_bundles.is_empty() {
+            eprintln!("   ⚠️  Failed bundles: {} (too many to list)", failed_bundles.len());
         }
         eprintln!("   Time:     {:?}", elapsed);
+
+        // Show helpful hint if hash mismatch detected
+        if let Some(ref err) = first_error {
+            let err_msg = err.to_string();
+            if err_msg.contains("hash") && err_msg.contains("mismatch") {
+                eprintln!("\n💡 Hint: Bundle files may have been migrated but index wasn't updated.");
+                eprintln!("        Run 'migrate --force' to recalculate all hashes.");
+            }
+        }
+
+        eprintln!("\n   Use --verbose to see details of each failed bundle.");
+
         if let Some(err) = first_error {
             Err(err)
         } else {
