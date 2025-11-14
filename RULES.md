@@ -2,11 +2,29 @@
 
 > **READ THIS FIRST**: All code contributors and AI assistants must follow these rules.
 
-## 🚨 Critical Architecture Rule
+## 🚨 Critical Rules
 
-### NO DIRECT FILE ACCESS FROM CLI
+### 1. NO DIRECT FILE ACCESS FROM CLI
 
-**The #1 Rule: CLI commands NEVER open bundle files directly**
+**CLI commands NEVER open bundle files directly**
+
+### 2. FOLLOW THE SPECIFICATION
+
+**All bundle creation MUST comply with [`docs/specification.md`](docs/specification.md)**
+
+Critical requirements from spec:
+- **Preserve raw JSON**: Store exact byte strings from PLC directory, never re-serialize
+- **SHA-256 hashing**: Use SHA-256 (not Blake3) for all content/compressed/chain hashes
+- **Chain hash formula**: 
+  - Genesis: `SHA256("plcbundle:genesis:" + content_hash)`
+  - Subsequent: `SHA256(parent_chain_hash + ":" + content_hash)`
+- **Newline termination**: Every operation ends with `\n` including the last one
+
+**Before implementing bundle-related features, consult `docs/specification.md` first!**
+
+---
+
+### Rule 1 Details: NO DIRECT FILE ACCESS
 
 ```rust
 // ❌ WRONG - Direct file access
@@ -191,7 +209,8 @@ When adding/changing APIs:
 ---
 
 See also:
+- **`docs/specification.md`** - **Official PLC Bundle V1 specification (MUST READ)**
 - `docs/API.md` - Complete API reference
-- `docs/BUNDLE_FORMAT.md` - Bundle file format specification
+- `docs/BUNDLE_FORMAT.md` - Bundle file format details
 - `.cursorrules` - Cursor-specific rules
 

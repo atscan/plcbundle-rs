@@ -972,53 +972,101 @@ impl BundleManager {
         // Serialize to JSONL and compute content hash
         let mut uncompressed_data = Vec::new();
         for op in &operations {
-            let json = sonic_rs::to_string(op)?;
+            // Use raw JSON if available to preserve field order, otherwise serialize
+            let json = if let Some(raw) = &op.raw_json {
+                raw.clone()
+            } else {
+                sonic_rs::to_string(op)?
+            };
             uncompressed_data.extend_from_slice(json.as_bytes());
             uncompressed_data.push(b'\n');
         }
         let uncompressed_size = uncompressed_data.len() as u64;
 
-        // Calculate content hash (uncompressed)
+        // Calculate content hash (uncompressed) using SHA-256 per spec
         let content_hash = {
-            let mut hasher = blake3::Hasher::new();
+            use sha2::{Sha256, Digest};
+            let mut hasher = Sha256::new();
             hasher.update(&uncompressed_data);
-            hasher.finalize().to_hex().to_string()
+            format!("{:x}", hasher.finalize())
         };
 
         // Compress
         let compressed_data = zstd::encode_all(uncompressed_data.as_slice(), 3)?;
         let compressed_size = compressed_data.len() as u64;
 
-        // Calculate compressed hash
+        // Calculate compressed hash using SHA-256 per spec
         let compressed_hash = {
-            let mut hasher = blake3::Hasher::new();
+            use sha2::{Sha256, Digest};
+            let mut hasher = Sha256::new();
             hasher.update(&compressed_data);
-            hasher.finalize().to_hex().to_string()
+            format!("{:x}", hasher.finalize())
         };
 
-        // Get parent hash (previous bundle's compressed hash)
-        let parent = if bundle_num > 1 {
-            self.index
+        // Calculate chain hash per spec (Section 6.3)
+        // Genesis bundle: SHA256("plcbundle:genesis:" + content_hash)
+        // Subsequent: SHA256(parent_chain_hash + ":" + current_content_hash)
+        let (parent, chain_hash) = if bundle_num > 1 {
+            use sha2::{Sha256, Digest};
+            let parent_chain_hash = self.index
                 .read()
                 .unwrap()
                 .get_bundle(bundle_num - 1)
-                .map(|b| b.compressed_hash.clone())
-                .unwrap_or_default()
+                .map(|b| b.hash.clone())
+                .unwrap_or_default();
+            
+            let chain_input = format!("{}:{}", parent_chain_hash, content_hash);
+            let mut hasher = Sha256::new();
+            hasher.update(chain_input.as_bytes());
+            let hash = format!("{:x}", hasher.finalize());
+            
+            (parent_chain_hash, hash)
         } else {
-            String::new()
+            // Genesis bundle
+            use sha2::{Sha256, Digest};
+            let chain_input = format!("plcbundle:genesis:{}", content_hash);
+            let mut hasher = Sha256::new();
+            hasher.update(chain_input.as_bytes());
+            let hash = format!("{:x}", hasher.finalize());
+            
+            (String::new(), hash)
         };
 
         // Get cursor (last operation timestamp)
         let cursor = end_time.clone();
 
-            // Write to disk
-            let bundle_path = self.directory.join(format!("{:06}.jsonl.zst", bundle_num));
-            let mut file = File::create(&bundle_path)
-                .with_context(|| format!("Failed to create bundle file: {}", bundle_path.display()))?;
-            file.write_all(&compressed_data)
-                .with_context(|| format!("Failed to write bundle data to: {}", bundle_path.display()))?;
-            file.flush()
-                .with_context(|| format!("Failed to flush bundle file: {}", bundle_path.display()))?;
+        // Prepare bundle metadata for skippable frame
+        let bundle_metadata_frame = crate::bundle_format::BundleMetadata {
+            format: "plcbundle/1.0".to_string(),
+            bundle_number: bundle_num,
+            origin: self.index.read().unwrap().origin.clone(),
+            content_hash: content_hash.clone(),
+            parent_hash: if !parent.is_empty() { Some(parent.clone()) } else { None },
+            operation_count: operation_count as usize,
+            did_count: did_count as usize,
+            start_time: start_time.clone(),
+            end_time: end_time.clone(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            created_by: "plcbundle-rs/0.1.0".to_string(),
+            frame_count: 0,  // Will be updated if we implement multi-frame compression
+            frame_size: 0,
+            frame_offsets: vec![],
+        };
+
+        // Write to disk with metadata skippable frame
+        let bundle_path = self.directory.join(format!("{:06}.jsonl.zst", bundle_num));
+        let mut file = File::create(&bundle_path)
+            .with_context(|| format!("Failed to create bundle file: {}", bundle_path.display()))?;
+        
+        // Write metadata as skippable frame first
+        crate::bundle_format::write_metadata_frame(&mut file, &bundle_metadata_frame)
+            .with_context(|| format!("Failed to write metadata frame to: {}", bundle_path.display()))?;
+        
+        // Write compressed data
+        file.write_all(&compressed_data)
+            .with_context(|| format!("Failed to write bundle data to: {}", bundle_path.display()))?;
+        file.flush()
+            .with_context(|| format!("Failed to flush bundle file: {}", bundle_path.display()))?;
 
         if self.verbose {
             log::debug!(
@@ -1047,7 +1095,7 @@ impl BundleManager {
             end_time,
             operation_count,
             did_count,
-            hash: content_hash.clone(), // For compatibility
+            hash: chain_hash, // Chain hash per spec
             content_hash,
             parent,
             compressed_hash,

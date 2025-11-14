@@ -14,6 +14,8 @@ pub struct Operation {
     pub created_at: String,
     #[serde(flatten)]
     pub extra: serde_json::Value,
+    #[serde(skip)]
+    pub raw_json: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]

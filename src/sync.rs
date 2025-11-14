@@ -57,7 +57,11 @@ impl PLCClient {
                 continue;
             }
             match serde_json::from_str::<PLCOperation>(line) {
-                Ok(op) => operations.push(op),
+                Ok(mut op) => {
+                    // Store raw JSON to preserve field order
+                    op.raw_json = Some(line.to_string());
+                    operations.push(op);
+                },
                 Err(e) => eprintln!("Warning: failed to parse operation: {}", e),
             }
         }
@@ -103,6 +107,8 @@ pub struct PLCOperation {
     nullified: Option<serde_json::Value>,
     #[serde(rename = "createdAt")]
     created_at: String,
+    #[serde(skip)]
+    pub raw_json: Option<String>,
 }
 
 impl From<PLCOperation> for Operation {
@@ -118,6 +124,7 @@ impl From<PLCOperation> for Operation {
             nullified: is_nullified,
             created_at: plc.created_at,
             extra: serde_json::Value::Null,
+            raw_json: plc.raw_json,
         }
     }
 }
