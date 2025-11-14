@@ -742,7 +742,14 @@ impl BundleManager {
 
             fetch_num += 1;
             let needed = BUNDLE_SIZE - stats.count;
-            let request_count = needed.min(1000);
+            
+            // Smart batch sizing - request more than exact amount to account for duplicates
+            let request_count = match needed {
+                n if n <= 50 => 50,
+                n if n <= 100 => 100,
+                n if n <= 500 => 200,
+                _ => 1000,
+            };
 
             if self.verbose {
                 log::info!("  Fetch #{}: requesting {} (need {} more, have {}/{})",
@@ -837,23 +844,33 @@ impl BundleManager {
         let final_stats = self.get_mempool_stats()?;
         
         // Check if we have enough operations
-        if final_stats.count < BUNDLE_SIZE {
-            if caught_up {
-                anyhow::bail!(
-                    "Insufficient operations: have {}, need {} (caught up to latest PLC data)",
-                    final_stats.count,
-                    BUNDLE_SIZE
-                );
-            } else {
-                anyhow::bail!(
-                    "Insufficient operations: have {}, need {} (max attempts reached)",
-                    final_stats.count,
-                    BUNDLE_SIZE
-                );
-            }
-        }
+        let allow_partial = final_stats.count >= (BUNDLE_SIZE * 9 / 10); // At least 90%
         
-        if self.verbose {
+        if final_stats.count < BUNDLE_SIZE {
+            if !allow_partial {
+                if caught_up {
+                    anyhow::bail!(
+                        "Insufficient operations: have {}, need {} (caught up to latest PLC data)",
+                        final_stats.count,
+                        BUNDLE_SIZE
+                    );
+                } else {
+                    anyhow::bail!(
+                        "Insufficient operations: have {}, need {} (max attempts reached)",
+                        final_stats.count,
+                        BUNDLE_SIZE
+                    );
+                }
+            }
+            
+            // Log partial bundle warning
+            if self.verbose {
+                log::info!("  ✓ Collected {} unique ops from {} fetches ({:.1}% dedup)",
+                    final_stats.count, fetch_num, dedup_pct);
+                log::info!("  ⚠ Saving bundle with {} ops (couldn't reach {} after {} fetches)",
+                    final_stats.count, BUNDLE_SIZE, fetch_num);
+            }
+        } else if self.verbose {
             log::info!("  ✓ Collected {} unique ops from {} fetches ({:.1}% dedup)",
                 final_stats.count, fetch_num, dedup_pct);
         }
