@@ -273,18 +273,18 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
     let server = Server::new(Arc::clone(&manager), config);
     let app = server.router();
 
-    // Setup graceful shutdown
-    let shutdown_signal = async {
+    // Create shutdown notification channel for immediate cancellation
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+
+    // Setup immediate shutdown signal
+    let shutdown_tx_clone = shutdown_tx.clone();
+    let shutdown_signal = async move {
         signal::ctrl_c()
             .await
             .expect("Failed to install signal handler");
-        eprintln!("\n\n⚠️  Shutdown signal received...");
-        eprintln!("  Saving mempool...");
-        
-        // TODO: Save mempool
-        // manager.get_mempool().save()?;
-        
-        eprintln!("  ✓ Shutdown complete");
+        eprintln!("\n⚠️  Shutdown signal received...");
+        // Notify all tasks to stop immediately
+        let _ = shutdown_tx_clone.send(true);
     };
 
     // Start sync loop if enabled
@@ -294,9 +294,10 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
         let interval = cmd.interval;
         let max_bundles = cmd.max_bundles;
         let verbose = cmd.verbose;
+        let shutdown_rx_sync = shutdown_rx.clone();
 
         tokio::spawn(async move {
-            run_server_sync_loop(manager_clone, plc_url, interval, max_bundles, verbose).await;
+            run_server_sync_loop(manager_clone, plc_url, interval, max_bundles, verbose, shutdown_rx_sync).await;
         });
     }
 
@@ -304,22 +305,29 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
     if cmd.resolver {
         if let Some(resolver) = manager.get_handle_resolver() {
             let verbose = cmd.verbose;
+            let shutdown_rx_resolver = shutdown_rx.clone();
             tokio::spawn(async move {
-                run_resolver_ping_loop(resolver, verbose).await;
+                run_resolver_ping_loop(resolver, verbose, shutdown_rx_resolver).await;
             });
         }
     }
 
     eprintln!("\nPress Ctrl+C to stop\n");
 
-    // Run server
+    // Run server with immediate shutdown
     let listener = tokio::net::TcpListener::bind(socket_addr).await
         .context("Failed to bind to address")?;
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal)
-        .await
-        .context("Server error")?;
+    // Use select to make shutdown immediate - don't wait for graceful completion
+    tokio::select! {
+        result = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal) => {
+            result.context("Server error")?;
+        }
+        _ = shutdown_rx.changed() => {
+            // Shutdown requested, exit immediately
+            eprintln!("Shutting down...");
+        }
+    }
 
     Ok(())
 }
@@ -331,6 +339,7 @@ async fn run_server_sync_loop(
     interval: Duration,
     max_bundles: u32,
     verbose: bool,
+    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) {
     use plcbundle::sync::PLCClient;
     use tokio::time::sleep;
@@ -346,12 +355,6 @@ async fn run_server_sync_loop(
 
     let mut total_synced = 0u32;
     let mut is_initial_sync = true;
-    let mut initial_sync_start_bundle = 0u32;
-
-    // Get initial bundle count if needed
-    if is_initial_sync {
-        initial_sync_start_bundle = manager.get_last_bundle();
-    }
 
     eprintln!("[Sync] Starting initial sync...");
 
@@ -360,22 +363,37 @@ async fn run_server_sync_loop(
     }
 
     loop {
+        // Check for shutdown before starting sync
+        if *shutdown_rx.borrow() {
+            if verbose {
+                eprintln!("[Sync] Shutdown requested, stopping...");
+            }
+            break;
+        }
+
         // Use the shared manager directly - all mutations go through internal locks
         let sync_result = manager.sync_next_bundle(&client).await;
 
         match sync_result {
-            Ok(plcbundle::SyncResult::BundleCreated { bundle_num, mempool_count, duration_ms }) => {
+            Ok(plcbundle::SyncResult::BundleCreated { 
+                bundle_num, 
+                mempool_count: _, 
+                duration_ms,
+                fetch_duration_ms,
+                fetch_requests,
+                hash,
+                age,
+            }) => {
                 total_synced += 1;
 
-                // During initial sync, always show progress
-                if is_initial_sync {
-                    eprintln!("[Sync] ✓ Bundle {:06} synced ({} bundles) | mempool: {} | time: {}ms",
-                        bundle_num, total_synced, mempool_count, duration_ms);
-                } else {
-                    // Always show bundle creation in monitoring mode (not just verbose)
-                    eprintln!("[Sync] ✓ Bundle {:06} | mempool: {} | time: {}ms",
-                        bundle_num, mempool_count, duration_ms);
-                }
+                // Show single compact message with all timing info
+                // Format: [INFO] → Bundle 000011 | 25d7f96 | fetch: 3.836s (11 reqs) | total: 20.033s | 2.5 years ago
+                let fetch_secs = fetch_duration_ms as f64 / 1000.0;
+                let total_secs = duration_ms as f64 / 1000.0;
+                let save_secs = (duration_ms - fetch_duration_ms) as f64 / 1000.0;
+                
+                eprintln!("[INFO] → Bundle {:06} | {} | fetch: {:.3}s ({} reqs) | save: {:.1}s | total: {:.3}s | {}",
+                    bundle_num, hash, fetch_secs, fetch_requests, save_secs, total_secs, age);
 
                 // Check max bundles limit
                 if max_bundles > 0 && total_synced >= max_bundles {
@@ -385,15 +403,46 @@ async fn run_server_sync_loop(
                     break;
                 }
 
+                // Check for shutdown before sleeping
+                if *shutdown_rx.borrow() {
+                    if verbose {
+                        eprintln!("[Sync] Shutdown requested, stopping...");
+                    }
+                    break;
+                }
+
                 // During initial sync, sleep briefly (500ms) to avoid hammering the API
                 // After initial sync, use the full interval
+                // Use select to allow cancellation during sleep
                 if is_initial_sync {
-                    sleep(Duration::from_millis(500)).await;
+                    tokio::select! {
+                        _ = sleep(Duration::from_millis(500)) => {}
+                        _ = shutdown_rx.changed() => {
+                            if *shutdown_rx.borrow() {
+                                break;
+                            }
+                        }
+                    }
                 } else {
-                    sleep(interval).await;
+                    tokio::select! {
+                        _ = sleep(interval) => {}
+                        _ = shutdown_rx.changed() => {
+                            if *shutdown_rx.borrow() {
+                                break;
+                            }
+                        }
+                    }
                 }
             }
             Ok(plcbundle::SyncResult::CaughtUp { next_bundle, mempool_count, new_ops, fetch_duration_ms }) => {
+                // Check for shutdown
+                if *shutdown_rx.borrow() {
+                    if verbose {
+                        eprintln!("[Sync] Shutdown requested, stopping...");
+                    }
+                    break;
+                }
+
                 // Caught up - initial sync is complete
                 if is_initial_sync {
                     is_initial_sync = false;
@@ -415,12 +464,33 @@ async fn run_server_sync_loop(
                 }
 
                 // Always sleep for the full interval when caught up (monitoring mode)
-                sleep(interval).await;
+                // Use select to allow cancellation during sleep
+                tokio::select! {
+                    _ = sleep(interval) => {}
+                    _ = shutdown_rx.changed() => {
+                        if *shutdown_rx.borrow() {
+                            break;
+                        }
+                    }
+                }
             }
             Err(e) => {
                 eprintln!("[Sync] Error during sync: {}", e);
-                // On error, sleep briefly before retrying
-                sleep(Duration::from_secs(1)).await;
+                
+                // Check for shutdown before retrying
+                if *shutdown_rx.borrow() {
+                    break;
+                }
+                
+                // On error, sleep briefly before retrying (with cancellation support)
+                tokio::select! {
+                    _ = sleep(Duration::from_secs(1)) => {}
+                    _ = shutdown_rx.changed() => {
+                        if *shutdown_rx.borrow() {
+                            break;
+                        }
+                    }
+                }
             }
         }
     }
@@ -434,6 +504,7 @@ async fn run_server_sync_loop(
 async fn run_resolver_ping_loop(
     resolver: Arc<plcbundle::handle_resolver::HandleResolver>,
     verbose: bool,
+    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) {
     use tokio::time::{sleep, Duration, Instant};
 
@@ -456,6 +527,14 @@ async fn run_resolver_ping_loop(
     let mut failure_count = 0u64;
 
     loop {
+        // Check for shutdown
+        if *shutdown_rx.borrow() {
+            if verbose {
+                log::debug!("[Resolver] Shutdown requested, stopping ping loop");
+            }
+            break;
+        }
+
         ping_count += 1;
         let start = Instant::now();
 
@@ -499,7 +578,16 @@ async fn run_resolver_ping_loop(
         if verbose {
             log::debug!("[Resolver] Next ping in {:?}...", ping_interval);
         }
-        sleep(ping_interval).await;
+        
+        // Use select to allow cancellation during sleep
+        tokio::select! {
+            _ = sleep(ping_interval) => {}
+            _ = shutdown_rx.changed() => {
+                if *shutdown_rx.borrow() {
+                    break;
+                }
+            }
+        }
     }
 }
 

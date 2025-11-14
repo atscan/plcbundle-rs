@@ -20,6 +20,10 @@ pub enum SyncResult {
         bundle_num: u32,
         mempool_count: usize,
         duration_ms: u64,
+        fetch_duration_ms: u64,
+        fetch_requests: usize,
+        hash: String,
+        age: String,
     },
     /// Caught up to latest PLC data, mempool has partial operations
     CaughtUp {
@@ -1100,21 +1104,28 @@ impl BundleManager {
             (hash, age_str)
         };
 
-        log::info!("→ Bundle {:06} | {} | fetch: {:.3}s ({} reqs) | {}",
-            next_bundle_num, short_hash, fetch_total_duration.as_secs_f64(),
-            fetch_num, age_str);
-
-        log::debug!("Bundle done = {}, finish duration = {}ms",
-            next_bundle_num, save_duration.as_millis());
-
         // Get mempool count after clearing (should be 0, but check anyway)
         let mempool_count = self.get_mempool_stats().map(|s| s.count).unwrap_or(0);
         let total_duration_ms = (fetch_total_duration + save_duration).as_millis() as u64;
+        let fetch_duration_ms = fetch_total_duration.as_millis() as u64;
+
+        // Only log detailed info in verbose mode
+        if self.verbose {
+            log::info!("→ Bundle {:06} | {} | fetch: {:.3}s ({} reqs) | {}",
+                next_bundle_num, short_hash, fetch_total_duration.as_secs_f64(),
+                fetch_num, age_str);
+            log::debug!("Bundle done = {}, finish duration = {}ms",
+                next_bundle_num, save_duration.as_millis());
+        }
 
         Ok(SyncResult::BundleCreated {
             bundle_num: next_bundle_num,
             mempool_count,
             duration_ms: total_duration_ms,
+            fetch_duration_ms,
+            fetch_requests: fetch_num,
+            hash: short_hash,
+            age: age_str,
         })
     }
 
