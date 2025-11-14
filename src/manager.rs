@@ -844,8 +844,48 @@ impl BundleManager {
         Ok(())
     }
 
+    /// Batch update DID index for a range of bundles (for initial sync optimization)
+    pub fn batch_update_did_index(&self, start_bundle: u32, end_bundle: u32) -> Result<()> {
+        if start_bundle > end_bundle {
+            return Ok(());
+        }
+        
+        if self.verbose {
+            log::info!("Batch updating DID index for bundles {:06} to {:06}...", start_bundle, end_bundle);
+        }
+        
+        let mut bundles_data = Vec::new();
+        for bundle_num in start_bundle..=end_bundle {
+            if let Ok(result) = self.load_bundle(bundle_num, LoadOptions::default()) {
+                let operations: Vec<(String, bool)> = result.operations
+                    .iter()
+                    .map(|op| (op.did.clone(), op.nullified))
+                    .collect();
+                bundles_data.push((bundle_num, operations));
+            }
+        }
+        
+        if bundles_data.is_empty() {
+            return Ok(());
+        }
+        
+        // Update DID index for each bundle
+        for (bundle_num, operations) in bundles_data {
+            self.did_index.write().unwrap().update_for_bundle(bundle_num, operations)?;
+        }
+        
+        if self.verbose {
+            log::info!("✓ DID index updated for bundles {:06} to {:06}", start_bundle, end_bundle);
+        }
+        
+        Ok(())
+    }
+
     /// Fetch and save next bundle from PLC directory
-    pub async fn sync_next_bundle(&self, client: &crate::sync::PLCClient) -> Result<SyncResult> {
+    /// 
+    /// If `skip_did_index` is true, the DID index will not be updated for this bundle
+    /// (useful for batch updates during initial sync)
+    pub async fn sync_next_bundle(&self, client: &crate::sync::PLCClient, skip_did_index: bool) -> Result<SyncResult> {
         use crate::sync::{get_boundary_cids, strip_boundary_duplicates};
         use std::time::Instant;
 
@@ -1075,10 +1115,19 @@ impl BundleManager {
 
         log::debug!("SaveBundle SUCCESS, setting bundle fields");
 
-        // Save bundle to disk
+        // Save bundle to disk with timing breakdown
+        // During initial sync, skip DID index updates (will be done in batches every 100 bundles)
         let save_start = Instant::now();
-        self.save_bundle(next_bundle_num, operations)?;
+        let (serialize_time, compress_time, hash_time, did_index_time, index_write_time) = 
+            self.save_bundle_with_timing(next_bundle_num, operations, skip_did_index)?;
         let save_duration = save_start.elapsed();
+        
+        // Show timing breakdown in verbose mode only
+        if self.verbose {
+            log::debug!("  Save timing: serialize={:.1}ms, compress={:.1}ms, hash={:.1}ms, did_index={:.1}ms, index_write={:.1}ms, total={:.1}ms",
+                serialize_time.as_millis(), compress_time.as_millis(), hash_time.as_millis(),
+                did_index_time.as_millis(), index_write_time.as_millis(), save_duration.as_millis());
+        }
 
         // Clear mempool after successful bundle save
         self.clear_mempool()?;
@@ -1137,7 +1186,7 @@ impl BundleManager {
         let mut synced = 0;
 
         loop {
-            match self.sync_next_bundle(client).await {
+            match self.sync_next_bundle(client, false).await {
                 Ok(SyncResult::BundleCreated { .. }) => {
                     synced += 1;
 
@@ -1161,8 +1210,9 @@ impl BundleManager {
         Ok(synced)
     }
 
-    /// Save bundle to disk with compression and index updates
-    fn save_bundle(&self, bundle_num: u32, operations: Vec<Operation>) -> Result<()> {
+    /// Save bundle to disk with compression and index updates (with timing)
+    fn save_bundle_with_timing(&self, bundle_num: u32, operations: Vec<Operation>, skip_did_index: bool) -> Result<(std::time::Duration, std::time::Duration, std::time::Duration, std::time::Duration, std::time::Duration)> {
+        use std::time::{Instant, Duration};
         use anyhow::Context;
         use std::collections::HashSet;
         use std::fs::File;
@@ -1181,7 +1231,8 @@ impl BundleManager {
         let unique_dids: HashSet<String> = operations.iter().map(|op| op.did.clone()).collect();
         let did_count = unique_dids.len() as u32;
 
-        // Serialize to JSONL and compute content hash
+        // Serialize to JSONL
+        let serialize_start = Instant::now();
         let mut uncompressed_data = Vec::new();
         for op in &operations {
             // Use raw JSON if available to preserve field order, otherwise serialize
@@ -1194,7 +1245,10 @@ impl BundleManager {
             uncompressed_data.push(b'\n');
         }
         let uncompressed_size = uncompressed_data.len() as u64;
+        let serialize_time = serialize_start.elapsed();
 
+        // Hash and compress
+        let hash_start = Instant::now();
         // Calculate content hash (uncompressed) using SHA-256 per spec
         let content_hash = {
             use sha2::{Sha256, Digest};
@@ -1204,8 +1258,10 @@ impl BundleManager {
         };
 
         // Compress
-        let compressed_data = zstd::encode_all(uncompressed_data.as_slice(), 3)?;
+        let compress_start = Instant::now();
+        let compressed_data = zstd::encode_all(uncompressed_data.as_slice(), constants::ZSTD_COMPRESSION_LEVEL)?;
         let compressed_size = compressed_data.len() as u64;
+        let compress_time = compress_start.elapsed();
 
         // Calculate compressed hash using SHA-256 per spec
         let compressed_hash = {
@@ -1214,6 +1270,7 @@ impl BundleManager {
             hasher.update(&compressed_data);
             format!("{:x}", hasher.finalize())
         };
+        let hash_time = hash_start.elapsed();
 
         // Calculate chain hash per spec (Section 6.3)
         // Genesis bundle: SHA256("plcbundle:genesis:" + content_hash)
@@ -1292,15 +1349,23 @@ impl BundleManager {
             );
         }
 
-        // Update DID index
-        let did_ops: Vec<(String, bool)> = operations
-            .iter()
-            .map(|op| (op.did.clone(), op.nullified))
-            .collect();
-        
-        self.did_index.write().unwrap().update_for_bundle(bundle_num, did_ops)?;
+        // Update DID index (skip during initial sync, will be done in batches)
+        let did_index_start = Instant::now();
+        let did_index_time = if skip_did_index {
+            // Skip DID index update - will be done in batches
+            std::time::Duration::from_secs(0)
+        } else {
+            let did_ops: Vec<(String, bool)> = operations
+                .iter()
+                .map(|op| (op.did.clone(), op.nullified))
+                .collect();
+            
+            self.did_index.write().unwrap().update_for_bundle(bundle_num, did_ops)?;
+            did_index_start.elapsed()
+        };
 
         // Update main index
+        let index_write_start = Instant::now();
         let bundle_metadata = crate::index::BundleMetadata {
             bundle_number: bundle_num,
             start_time,
@@ -1332,7 +1397,14 @@ impl BundleManager {
                 std::fs::write(&index_path, index_json)
                     .with_context(|| format!("Failed to write index to: {}", index_path.display()))?;
         }
+        let index_write_time = index_write_start.elapsed();
 
+        Ok((serialize_time, compress_time, hash_time, did_index_time, index_write_time))
+    }
+    
+    /// Save bundle to disk with compression and index updates (backwards compatibility)
+    fn save_bundle(&self, bundle_num: u32, operations: Vec<Operation>) -> Result<()> {
+        self.save_bundle_with_timing(bundle_num, operations, false)?;
         Ok(())
     }
 

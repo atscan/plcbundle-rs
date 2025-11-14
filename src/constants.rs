@@ -91,3 +91,10 @@ pub const DEFAULT_HANDLE_RESOLVER_URL: &str = "https://quickdid.smokesignal.tool
 /// Default origin identifier for local repositories
 pub const DEFAULT_ORIGIN: &str = "local";
 
+// ============================================================================
+// Compression Constants
+// ============================================================================
+
+/// Zstd compression level (1 = fast, 3 = balanced, 19 = maximum)
+pub const ZSTD_COMPRESSION_LEVEL: i32 = 1;
+

@@ -170,6 +170,9 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
             .context("Repository not found. Use 'plcbundle init' first or run with --sync")?
     };
 
+    // Set verbose mode on manager
+    let manager = manager.with_verbose(cmd.verbose);
+
     // Log handle resolver configuration
     if cmd.verbose {
         if let Some(url) = manager.get_handle_resolver_base_url() {
@@ -355,6 +358,8 @@ async fn run_server_sync_loop(
 
     let mut total_synced = 0u32;
     let mut is_initial_sync = true;
+    let mut pending_did_index_start = 0u32; // First bundle that needs DID index update
+    let mut pending_did_index_count = 0u32; // Number of bundles pending DID index update
 
     eprintln!("[Sync] Starting initial sync...");
 
@@ -372,7 +377,9 @@ async fn run_server_sync_loop(
         }
 
         // Use the shared manager directly - all mutations go through internal locks
-        let sync_result = manager.sync_next_bundle(&client).await;
+        // Skip DID index updates during initial sync (will be done in batches)
+        let skip_did_index = is_initial_sync;
+        let sync_result = manager.sync_next_bundle(&client, skip_did_index).await;
 
         match sync_result {
             Ok(plcbundle::SyncResult::BundleCreated { 
@@ -385,6 +392,26 @@ async fn run_server_sync_loop(
                 age,
             }) => {
                 total_synced += 1;
+
+                // Track bundles pending DID index update during initial sync
+                if is_initial_sync {
+                    if pending_did_index_start == 0 {
+                        pending_did_index_start = bundle_num;
+                    }
+                    pending_did_index_count += 1;
+                    
+                    // Update DID index every 100 bundles during initial sync
+                    if pending_did_index_count >= 100 {
+                        let end_bundle = bundle_num;
+                        if let Err(e) = manager.batch_update_did_index(pending_did_index_start, end_bundle) {
+                            eprintln!("[Sync] Warning: Failed to batch update DID index: {}", e);
+                        } else if verbose {
+                            eprintln!("[Sync] ✓ DID index updated for bundles {:06} to {:06}", pending_did_index_start, end_bundle);
+                        }
+                        pending_did_index_start = 0;
+                        pending_did_index_count = 0;
+                    }
+                }
 
                 // Show single compact message with all timing info
                 // Format: [INFO] → Bundle 000011 | 25d7f96 | fetch: 3.836s (11 reqs) | total: 20.033s | 2.5 years ago
@@ -446,6 +473,21 @@ async fn run_server_sync_loop(
                 // Caught up - initial sync is complete
                 if is_initial_sync {
                     is_initial_sync = false;
+                    
+                    // Update any remaining pending DID index bundles
+                    if pending_did_index_count > 0 {
+                        let last_bundle = manager.get_last_bundle();
+                        if pending_did_index_start > 0 && last_bundle >= pending_did_index_start {
+                            if let Err(e) = manager.batch_update_did_index(pending_did_index_start, last_bundle) {
+                                eprintln!("[Sync] Warning: Failed to batch update DID index: {}", e);
+                            } else if verbose {
+                                eprintln!("[Sync] ✓ DID index updated for bundles {:06} to {:06}", pending_did_index_start, last_bundle);
+                            }
+                        }
+                        pending_did_index_start = 0;
+                        pending_did_index_count = 0;
+                    }
+                    
                     eprintln!("[Sync] ✓ Initial sync complete ({} bundles synced)", total_synced);
                     if mempool_count > 0 {
                         eprintln!("[Sync] ✓ Mempool: {} operations", mempool_count);
