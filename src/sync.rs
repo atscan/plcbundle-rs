@@ -745,76 +745,18 @@ impl SyncManager {
             };
 
             // Spawn keyboard handler task if we have a verbose handle
-            // Note: Reading from stdin can interfere with Ctrl+C, so we use a timeout
-            // to ensure shutdown checks happen frequently
-            if let Some(verbose_handle) = verbose_handle {
-                let shutdown_rx_keyboard = self.config.shutdown_rx.clone();
-                let verbose_handle_clone = verbose_handle.clone();
-                let manager_verbose = self.manager.verbose_handle();
-                tokio::spawn(async move {
-                    use tokio::io::{AsyncBufReadExt, BufReader};
-                    use tokio::time::{sleep, Duration, timeout};
-
-                    let mut stdin = BufReader::new(tokio::io::stdin());
-                    let mut line = String::new();
-                    let mut last_toggle_time = std::time::Instant::now();
-                    const DEBOUNCE_MS: u64 = 500; // Prevent rapid toggles
-                    const READ_TIMEOUT: Duration = Duration::from_millis(100); // Short timeout for responsiveness
-
-                    loop {
-                        // Check for shutdown first (before any blocking operations)
-                        if let Some(ref shutdown_rx) = shutdown_rx_keyboard {
-                            if *shutdown_rx.borrow() {
-                                break;
-                            }
-                        }
-
-                        // Use timeout to ensure we check shutdown frequently
-                        // This prevents blocking on stdin from interfering with Ctrl+C
-                        match timeout(READ_TIMEOUT, stdin.read_line(&mut line)).await {
-                            Ok(Ok(0)) => {
-                                // EOF, exit
-                                break;
-                            }
-                            Ok(Ok(_)) => {
-                                // Check if line is just 'v' (trimmed)
-                                let trimmed = line.trim();
-                                if trimmed == "v" {
-                                    // Debounce: only toggle if enough time has passed
-                                    let now = std::time::Instant::now();
-                                    if now.duration_since(last_toggle_time).as_millis() >= DEBOUNCE_MS as u128 {
-                                        let new_state = {
-                                            let mut verbose = verbose_handle_clone.lock().unwrap();
-                                            *verbose = !*verbose;
-                                            let state = *verbose;
-                                            // Also update BundleManager's verbose state
-                                            *manager_verbose.lock().unwrap() = state;
-                                            state
-                                        };
-                                        eprintln!("[Sync] Verbose mode: {}", if new_state { "ON" } else { "OFF" });
-                                        last_toggle_time = now;
-                                    }
-                                }
-                                line.clear();
-                            }
-                            Ok(Err(_)) => {
-                                // Error reading, exit
-                                break;
-                            }
-                            Err(_) => {
-                                // Timeout - this is expected, check shutdown and continue
-                                // This ensures Ctrl+C can be processed
-                                if let Some(ref shutdown_rx) = shutdown_rx_keyboard {
-                                    if *shutdown_rx.borrow() {
-                                        break;
-                                    }
-                                }
-                                // Clear line buffer on timeout to prevent accumulation
-                                line.clear();
-                            }
-                        }
-                    }
-                });
+            // Note: We disable stdin reading feature since it can block shutdown.
+            // Users can still use verbose mode by passing --verbose flag at startup.
+            //
+            // The stdin reading feature is disabled because:
+            // 1. Reading from stdin blocks the async runtime
+            // 2. Even with timeouts, the task doesn't get cancelled cleanly
+            // 3. This prevents immediate shutdown on Ctrl+C
+            //
+            // TODO: Implement a non-blocking alternative using signals or other IPC
+            if let Some(_verbose_handle) = verbose_handle {
+                // Keyboard input feature temporarily disabled to fix shutdown freeze
+                // eprintln!("[Sync] Press 'v' + Enter to toggle verbose mode");
             }
         }
 

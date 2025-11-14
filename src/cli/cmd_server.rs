@@ -350,17 +350,15 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(socket_addr).await
         .context("Failed to bind to address")?;
 
-    // Use select to make shutdown immediate - don't wait for graceful completion
-    tokio::select! {
-        result = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal) => {
-            result.context("Server error")?;
-        }
-        _ = shutdown_rx.changed() => {
-            // Shutdown requested, exit immediately
-            eprintln!("Shutting down...");
-        }
-    }
+    // Run the server - the shutdown_signal future will complete when Ctrl+C is pressed
+    // This triggers graceful shutdown, which stops accepting new connections
+    // and waits for existing connections to finish (or timeout after 10 seconds)
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal)
+        .await
+        .context("Server error")?;
 
+    eprintln!("Server stopped");
     Ok(())
 }
 
