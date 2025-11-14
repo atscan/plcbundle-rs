@@ -3,6 +3,7 @@ use clap::Args;
 use plcbundle::{BundleManager, sync::PLCClient};
 use std::path::PathBuf;
 use std::time::Duration;
+use super::utils;
 
 #[derive(Args)]
 pub struct SyncCommand {
@@ -48,7 +49,7 @@ fn parse_duration(s: &str) -> Result<Duration, String> {
 pub fn run(cmd: SyncCommand) -> Result<()> {
     tokio::runtime::Runtime::new()?.block_on(async {
         if !cmd.quiet {
-            println!("Syncing from: {}", cmd.dir.display());
+            println!("Syncing from: {}", utils::display_path(&cmd.dir).display());
             println!("PLC Directory: {}", cmd.plc);
             if cmd.continuous {
                 println!("Mode: continuous (interval: {:?})", cmd.interval);

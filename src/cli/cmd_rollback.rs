@@ -3,6 +3,7 @@ use clap::Args;
 use plcbundle::BundleManager;
 use std::path::PathBuf;
 use std::io::{self, Write};
+use super::utils;
 
 #[derive(Args)]
 pub struct RollbackCommand {
@@ -164,7 +165,7 @@ fn display_rollback_plan(dir: &PathBuf, plan: &RollbackPlan) -> Result<()> {
     println!("╚════════════════════════════════════════════════════════════════╝\n");
 
     println!("📁 Repository");
-    println!("   Directory:       {}", dir.display());
+    println!("   Directory:       {}", utils::display_path(dir).display());
     
     let current_bundles = plan.bundles_to_keep + plan.bundles_to_delete.len();
     if current_bundles > 0 {

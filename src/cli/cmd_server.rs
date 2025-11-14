@@ -3,6 +3,7 @@ use anyhow::{Result, Context};
 use clap::Args;
 use std::path::PathBuf;
 use tokio::time::Duration;
+use super::utils;
 
 #[cfg(feature = "server")]
 use plcbundle::BundleManager;
@@ -407,7 +408,7 @@ async fn run_server_sync_loop(
 #[cfg(feature = "server")]
 fn display_server_info(manager: &BundleManager, addr: &str, cmd: &ServerCommand) {
     eprintln!("Starting plcbundle HTTP server...");
-    eprintln!("  Directory: {}", manager.directory().display());
+    eprintln!("  Directory: {}", utils::display_path(manager.directory()).display());
     eprintln!("  Listening: http://{}", addr);
 
     if cmd.sync {

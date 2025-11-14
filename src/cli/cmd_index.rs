@@ -3,6 +3,7 @@ use anyhow::Result;
 use plcbundle::BundleManager;
 use std::path::PathBuf;
 use std::time::Instant;
+use super::utils;
 
 pub fn cmd_index_build(dir: PathBuf, force: bool) -> Result<()> {
     let manager = BundleManager::new(dir.clone())?;
@@ -37,10 +38,10 @@ pub fn cmd_index_build(dir: PathBuf, force: bool) -> Result<()> {
     
     let elapsed = start.elapsed();
     let stats = manager.get_did_index_stats();
-    
+
     log::info!("\n✓ DID index built in {:?}", elapsed);
     log::info!("  Total DIDs: {}", stats.total_dids);
-    log::info!("  Location: {}/.plcbundle/", dir.display());
+    log::info!("  Location: {}/.plcbundle/", utils::display_path(&dir).display());
     
     Ok(())
 }
@@ -124,7 +125,7 @@ pub fn cmd_index_stats(dir: PathBuf, json: bool) -> Result<()> {
     
     println!("\nDID Index Statistics");
     println!("════════════════════\n");
-    println!("  Location:      {}/.plcbundle/", dir.display());
+    println!("  Location:      {}/.plcbundle/", utils::display_path(&dir).display());
     println!("  Total DIDs:    {}", total_dids);
     println!("  Shard count:   {}", shard_count);
     println!("  Last bundle:   {:06}", last_bundle);

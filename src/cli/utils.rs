@@ -1,6 +1,7 @@
 // Shared utility functions for CLI commands
 
 use anyhow::Result;
+use std::path::{Path, PathBuf};
 
 /// Parse bundle specification string into a vector of bundle numbers
 pub fn parse_bundle_spec(spec: Option<String>, max_bundle: u32) -> Result<Vec<u32>> {
@@ -92,5 +93,11 @@ pub fn format_bytes(bytes: u64) -> String {
     } else {
         format!("{:.2} {}", size, UNITS[unit_idx])
     }
+}
+
+/// Display path resolving "." to absolute path
+/// Per RULES.md: NEVER display "." in user-facing output
+pub fn display_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 

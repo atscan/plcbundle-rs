@@ -4,6 +4,7 @@ use clap::{Args, Subcommand};
 use plcbundle::BundleManager;
 use std::path::PathBuf;
 use std::io::{self, Write};
+use super::utils;
 
 #[derive(Args)]
 pub struct MempoolCommand {
@@ -67,7 +68,7 @@ fn show_status(manager: &BundleManager, dir: &PathBuf, verbose: bool) -> Result<
 
     println!("Mempool Status");
     println!("══════════════\n");
-    println!("  Directory:      {}", dir.display());
+    println!("  Directory:      {}", utils::display_path(dir).display());
     println!("  Target bundle:  {:06}", stats.target_bundle);
     println!("  Operations:     {} / 10000", stats.count);
     println!(
@@ -143,7 +144,8 @@ fn show_status(manager: &BundleManager, dir: &PathBuf, verbose: bool) -> Result<
 
     // Show mempool file location
     let mempool_filename = format!("plc_mempool_{:06}.jsonl", stats.target_bundle);
-    println!("File: {}", dir.join(mempool_filename).display());
+    let mempool_path = utils::display_path(dir).join(mempool_filename);
+    println!("File: {}", mempool_path.display());
 
     Ok(())
 }
@@ -157,7 +159,7 @@ fn clear(manager: &BundleManager, dir: &PathBuf, force: bool) -> Result<()> {
         return Ok(());
     }
 
-    println!("Working in: {}\n", dir.display());
+    println!("Working in: {}\n", utils::display_path(dir).display());
 
     if !force {
         print!("⚠️  This will clear {} operations from the mempool.\nAre you sure? [y/N]: ", count);

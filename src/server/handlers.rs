@@ -291,23 +291,29 @@ async fn handle_bundle_data(
     State(state): State<ServerState>,
     Path(number): Path<u32>,
 ) -> impl IntoResponse {
-    let bundle_path = state.manager.directory().join(format!("{:06}.jsonl.zst", number));
-    
-    match File::open(&bundle_path).await {
-        Ok(file) => {
+    // Use BundleManager API to get bundle file stream
+    let file_result = tokio::task::spawn_blocking({
+        let manager = Arc::clone(&state.manager);
+        move || manager.stream_bundle_raw(number)
+    }).await;
+
+    match file_result {
+        Ok(Ok(std_file)) => {
+            // Convert std::fs::File to tokio::fs::File
+            let file = tokio::fs::File::from_std(std_file);
             let stream = ReaderStream::new(file);
             let body = Body::from_stream(stream);
-            
+
             let mut headers = HeaderMap::new();
             headers.insert("Content-Type", HeaderValue::from_static("application/zstd"));
-            headers.insert("Content-Disposition", 
+            headers.insert("Content-Disposition",
                 HeaderValue::from_str(&format!("attachment; filename={:06}.jsonl.zst", number)).unwrap());
-            
+
             (StatusCode::OK, headers, body).into_response()
         }
-        Err(_) => {
-            // Check if bundle exists in index
-            if state.manager.get_bundle_metadata(number).ok().flatten().is_none() {
+        Ok(Err(e)) => {
+            // Handle errors from BundleManager
+            if e.to_string().contains("not found") || e.to_string().contains("not in index") {
                 (
                     StatusCode::NOT_FOUND,
                     axum::Json(json!({"error": "Bundle not found"})),
@@ -316,10 +322,17 @@ async fn handle_bundle_data(
             } else {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    axum::Json(json!({"error": "Failed to read bundle"})),
+                    axum::Json(json!({"error": e.to_string()})),
                 )
                     .into_response()
             }
+        }
+        Err(e) => {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(json!({"error": format!("Task join error: {}", e)})),
+            )
+                .into_response()
         }
     }
 }

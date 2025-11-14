@@ -1350,9 +1350,14 @@ impl BundleManager {
     /// Stream bundle raw (compressed) data
     /// Returns a reader that can be used to stream the compressed bundle file
     pub fn stream_bundle_raw(&self, bundle_num: u32) -> Result<std::fs::File> {
+        // Validate bundle exists in index first
+        if self.get_bundle_metadata(bundle_num)?.is_none() {
+            anyhow::bail!("Bundle {} not found in index", bundle_num);
+        }
+
         let bundle_path = self.directory.join(format!("{:06}.jsonl.zst", bundle_num));
         if !bundle_path.exists() {
-            anyhow::bail!("Bundle {} not in index", bundle_num);
+            anyhow::bail!("Bundle {} file not found (exists in index but missing on disk)", bundle_num);
         }
         Ok(std::fs::File::open(bundle_path)?)
     }

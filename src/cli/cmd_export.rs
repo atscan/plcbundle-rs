@@ -1,7 +1,8 @@
 use anyhow::Result;
 use indicatif::HumanDuration;
+use plcbundle::BundleManager;
 use std::fs::File;
-use std::io::{self, BufRead, BufWriter, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -25,8 +26,9 @@ pub fn cmd_export(
     quiet: bool,
     verbose: bool,
 ) -> Result<()> {
-    // Load index to get max bundle and metadata
-    let index = plcbundle::Index::load(&dir)?;
+    // Create BundleManager (follows RULES.md - NO direct file access from CLI)
+    let manager = BundleManager::new(dir.clone())?;
+    let index = manager.get_index();
     let max_bundle = index.last_bundle;
 
     // Determine bundle numbers to process
@@ -110,7 +112,7 @@ pub fn cmd_export(
     let mut output_buffer = String::with_capacity(1024 * 1024); // 1MB buffer
     const BATCH_SIZE: usize = 10000;
 
-    // Process bundles directly from files
+    // Process bundles through BundleManager API (follows RULES.md)
     for bundle_num in bundle_numbers {
         // Check count limit
         if let Some(limit) = count {
@@ -119,15 +121,15 @@ pub fn cmd_export(
             }
         }
 
-        let bundle_path = dir.join(format!("{:06}.jsonl.zst", bundle_num));
-        if !bundle_path.exists() {
-            continue;
-        }
-
-        // Open and decode bundle file
-        let file = File::open(&bundle_path)?;
-        let decoder = zstd::Decoder::new(file)?;
-        let reader = std::io::BufReader::with_capacity(1024 * 1024, decoder);
+        // Use BundleManager API to get decompressed stream
+        let decoder = match manager.stream_bundle_decompressed(bundle_num) {
+            Ok(decoder) => decoder,
+            Err(_) => {
+                // Bundle not found, skip it
+                continue;
+            }
+        };
+        let reader = BufReader::with_capacity(1024 * 1024, decoder);
 
         // Fast path: no filters and Jsonl format - just pass through lines
         let needs_parsing = after.is_some() || did.is_some() || op_type.is_some() || 
