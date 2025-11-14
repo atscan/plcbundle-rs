@@ -405,6 +405,7 @@ pub extern "C" fn bundle_manager_verify_bundle(
         check_hash,
         check_content_hash: check_hash,
         check_operations: true,
+        fast: false,
     };
 
     match manager.manager.verify_bundle(bundle_num, spec) {

@@ -1490,6 +1490,7 @@ pub struct VerifySpec {
     pub check_hash: bool,
     pub check_content_hash: bool,
     pub check_operations: bool,
+    pub fast: bool,  // Fast mode: only check metadata frame, skip hash calculations
 }
 
 #[derive(Debug)]

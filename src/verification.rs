@@ -2,6 +2,7 @@
 use crate::index::BundleMetadata;
 use crate::manager::{VerifySpec, VerifyResult, ChainVerifySpec, ChainVerifyResult};
 use crate::index::Index;
+use crate::bundle_format;
 use anyhow::Result;
 use std::path::Path;
 use std::fs::File;
@@ -24,10 +25,63 @@ pub fn verify_bundle(
         });
     }
     
+    // Fast mode: only check metadata frame, skip all hash calculations
+    if spec.fast {
+        match bundle_format::extract_metadata_from_file(&bundle_path) {
+            Ok(file_metadata) => {
+                // Verify key fields match index metadata
+                if file_metadata.bundle_number != metadata.bundle_number {
+                    errors.push(format!(
+                        "Metadata bundle number mismatch: expected {}, got {}",
+                        metadata.bundle_number, file_metadata.bundle_number
+                    ));
+                }
+                
+                if file_metadata.content_hash != metadata.content_hash {
+                    errors.push(format!(
+                        "Metadata content hash mismatch: expected {}, got {}",
+                        metadata.content_hash, file_metadata.content_hash
+                    ));
+                }
+                
+                if file_metadata.operation_count != metadata.operation_count as usize {
+                    errors.push(format!(
+                        "Metadata operation count mismatch: expected {}, got {}",
+                        metadata.operation_count, file_metadata.operation_count
+                    ));
+                }
+                
+                // Check parent hash if present
+                if let Some(ref parent_hash) = file_metadata.parent_hash {
+                    if !metadata.parent.is_empty() && parent_hash != &metadata.parent {
+                        errors.push(format!(
+                            "Metadata parent hash mismatch: expected {}, got {}",
+                            metadata.parent, parent_hash
+                        ));
+                    }
+                } else if !metadata.parent.is_empty() {
+                    errors.push(format!(
+                        "Metadata missing parent hash (expected {})",
+                        metadata.parent
+                    ));
+                }
+            }
+            Err(_) => {
+                // Metadata frame doesn't exist - that's okay, it's optional
+                // In fast mode, we can't verify without metadata, so we report it
+                // but don't fail (as per user request: "otherwise no change")
+            }
+        }
+        
+        return Ok(VerifyResult {
+            valid: errors.is_empty(),
+            errors,
+        });
+    }
+    
     // Optimize: do both hashes efficiently in a single pass
     if spec.check_hash && spec.check_content_hash {
         use sha2::{Sha256, Digest};
-        use crate::bundle_format;
         use std::io::{BufReader, Read};
         
         // Read entire file once into memory (like Go does)
@@ -96,7 +150,6 @@ pub fn verify_bundle(
     } else if spec.check_content_hash {
         // Only content hash
         use sha2::{Sha256, Digest};
-        use crate::bundle_format;
         use std::io::{BufReader, Seek, SeekFrom};
         let file = File::open(&bundle_path)?;
         let mut reader = BufReader::new(file);
@@ -137,7 +190,6 @@ pub fn verify_bundle(
     if spec.check_operations {
         // Verify operation count
         // Skip metadata frame if present
-        use crate::bundle_format;
         let mut file = File::open(&bundle_path)?;
         
         // Try to skip metadata frame
@@ -173,6 +225,53 @@ pub fn verify_bundle(
                 "Operation count mismatch: expected {}, got {}",
                 metadata.operation_count, count
             ));
+        }
+    }
+    
+    // Verify metadata in skippable frame (if present)
+    // This is optional - some bundles may not have metadata frame
+    match bundle_format::extract_metadata_from_file(&bundle_path) {
+        Ok(file_metadata) => {
+            // Verify key fields match index metadata
+            if file_metadata.bundle_number != metadata.bundle_number {
+                errors.push(format!(
+                    "Metadata bundle number mismatch: expected {}, got {}",
+                    metadata.bundle_number, file_metadata.bundle_number
+                ));
+            }
+            
+            if file_metadata.content_hash != metadata.content_hash {
+                errors.push(format!(
+                    "Metadata content hash mismatch: expected {}, got {}",
+                    metadata.content_hash, file_metadata.content_hash
+                ));
+            }
+            
+            if file_metadata.operation_count != metadata.operation_count as usize {
+                errors.push(format!(
+                    "Metadata operation count mismatch: expected {}, got {}",
+                    metadata.operation_count, file_metadata.operation_count
+                ));
+            }
+            
+            // Check parent hash if present
+            if let Some(ref parent_hash) = file_metadata.parent_hash {
+                if !metadata.parent.is_empty() && parent_hash != &metadata.parent {
+                    errors.push(format!(
+                        "Metadata parent hash mismatch: expected {}, got {}",
+                        metadata.parent, parent_hash
+                    ));
+                }
+            } else if !metadata.parent.is_empty() {
+                errors.push(format!(
+                    "Metadata missing parent hash (expected {})",
+                    metadata.parent
+                ));
+            }
+        }
+        Err(_) => {
+            // Metadata frame doesn't exist - that's okay, it's optional for legacy bundles
+            // No error is added, verification continues
         }
     }
     

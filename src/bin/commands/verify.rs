@@ -24,8 +24,8 @@ pub struct VerifyCommand {
     #[arg(long)]
     pub parallel: bool,
 
-    /// Number of parallel workers
-    #[arg(long, default_value = "4")]
+    /// Number of parallel workers (0 = auto-detect)
+    #[arg(long, default_value = "0")]
     pub workers: usize,
 
     /// Verbose output
@@ -35,6 +35,10 @@ pub struct VerifyCommand {
     /// Full verification (includes content hash check)
     #[arg(long)]
     pub full: bool,
+
+    /// Fast verification (only check metadata frame, skip hash calculations)
+    #[arg(long)]
+    pub fast: bool,
 
     /// Number of threads to use (0 = auto-detect)
     #[arg(short = 'j', long, default_value = "0")]
@@ -66,26 +70,27 @@ pub fn run(cmd: VerifyCommand, dir: PathBuf) -> Result<()> {
 
     // Determine what to verify
     if let Some(range_str) = cmd.range {
-        verify_range(&manager, &range_str, cmd.verbose, cmd.parallel, cmd.workers, cmd.full, num_threads)?;
+        verify_range(&manager, &range_str, cmd.verbose, cmd.parallel, cmd.workers, cmd.full, cmd.fast, num_threads)?;
     } else if let Some(bundle_num) = cmd.bundle {
-        verify_single_bundle(&manager, bundle_num, cmd.verbose, cmd.full)?;
+        verify_single_bundle(&manager, bundle_num, cmd.verbose, cmd.full, cmd.fast)?;
     } else {
         // Default: verify entire chain
-        verify_chain(&manager, cmd.verbose, cmd.full, num_threads)?;
+        verify_chain(&manager, cmd.verbose, cmd.full, cmd.fast, num_threads)?;
     }
 
     Ok(())
 }
 
-fn verify_single_bundle(manager: &BundleManager, bundle_num: u32, verbose: bool, full: bool) -> Result<()> {
+fn verify_single_bundle(manager: &BundleManager, bundle_num: u32, verbose: bool, full: bool, fast: bool) -> Result<()> {
     eprintln!("Verifying bundle {:06}...", bundle_num);
 
     let start = Instant::now();
     // For single bundle, check content hash if --full flag is set
     let spec = VerifySpec {
-        check_hash: true,
-        check_content_hash: full,
-        check_operations: full,
+        check_hash: !fast,  // Skip hash check in fast mode
+        check_content_hash: full && !fast,  // Skip content hash in fast mode
+        check_operations: full && !fast,  // Skip operation count in fast mode
+        fast,
     };
     let result = manager.verify_bundle(bundle_num, spec)?;
     let elapsed = start.elapsed();
@@ -114,7 +119,7 @@ fn verify_single_bundle(manager: &BundleManager, bundle_num: u32, verbose: bool,
     }
 }
 
-fn verify_chain(manager: &BundleManager, verbose: bool, full: bool, num_threads: usize) -> Result<()> {
+fn verify_chain(manager: &BundleManager, verbose: bool, full: bool, fast: bool, num_threads: usize) -> Result<()> {
     let last_bundle = manager.get_last_bundle();
     
     if last_bundle == 0 {
@@ -150,9 +155,10 @@ fn verify_chain(manager: &BundleManager, verbose: bool, full: bool, num_threads:
     // Pass 2: Verify chain links sequentially (needs previous results)
     
     let spec = VerifySpec {
-        check_hash: true,
-        check_content_hash: full,  // Only if --full flag
+        check_hash: !fast,  // Skip hash check in fast mode
+        check_content_hash: full && !fast,  // Skip content hash in fast mode
         check_operations: false,
+        fast,
     };
 
     // Calculate total uncompressed size for progress tracking
@@ -352,13 +358,21 @@ fn verify_range(
     parallel: bool,
     workers: usize,
     full: bool,
+    fast: bool,
     num_threads: usize,
 ) -> Result<()> {
     let (start, end) = parse_bundle_range_simple(range_str)?;
 
+    // Auto-detect workers if 0
+    let actual_workers = if workers == 0 {
+        num_threads
+    } else {
+        workers
+    };
+
     eprint!("Verifying bundles {:06} - {:06}", start, end);
     if parallel {
-        eprint!(" (parallel, {} workers)", workers);
+        eprint!(" (parallel, {} workers)", actual_workers);
     }
     eprintln!();
 
@@ -366,9 +380,9 @@ fn verify_range(
     let overall_start = Instant::now();
 
     let verify_err = if parallel {
-        verify_range_parallel(manager, start, end, num_threads.min(workers), verbose, full)
+        verify_range_parallel(manager, start, end, num_threads.min(actual_workers), verbose, full, fast)
     } else {
-        verify_range_sequential(manager, start, end, total as usize, verbose, full)
+        verify_range_sequential(manager, start, end, total as usize, verbose, full, fast)
     };
 
     let elapsed = overall_start.elapsed();
@@ -394,6 +408,7 @@ fn verify_range_sequential(
     total: usize,
     verbose: bool,
     full: bool,
+    fast: bool,
 ) -> Result<()> {
     let progress = if !verbose {
         Some(ProgressBar::new(total))
@@ -407,9 +422,10 @@ fn verify_range_sequential(
 
     // Verify compressed hash, content hash only if --full
     let spec = VerifySpec {
-        check_hash: true,
-        check_content_hash: full,
+        check_hash: !fast,  // Skip hash check in fast mode
+        check_content_hash: full && !fast,  // Skip content hash in fast mode
         check_operations: false,
+        fast,
     };
 
     for bundle_num in start..=end {
@@ -491,6 +507,7 @@ fn verify_range_parallel(
     workers: usize,
     verbose: bool,
     full: bool,
+    fast: bool,
 ) -> Result<()> {
     // Note: Parallel verification requires Arc<BundleManager> which needs to be implemented
     // For now, fall back to sequential with progress
@@ -499,5 +516,5 @@ fn verify_range_parallel(
         eprintln!("[DEBUG] Using {} worker thread(s) for parallel verification", workers);
     }
     eprintln!("Note: Parallel verification not yet fully implemented, using sequential");
-    verify_range_sequential(manager, start, end, total, verbose, full)
+    verify_range_sequential(manager, start, end, total, verbose, full, fast)
 }
