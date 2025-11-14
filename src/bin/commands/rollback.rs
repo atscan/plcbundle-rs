@@ -91,16 +91,19 @@ fn calculate_rollback_plan(manager: &BundleManager, cmd: &RollbackCommand) -> Re
         if last >= last_bundle {
             bail!("cannot rollback {} bundles, only {} exist", last, last_bundle);
         }
-        last_bundle - last
+        let calculated = last_bundle - last;
+        
+        // Prevent accidental deletion of all bundles via --last
+        if calculated == 0 {
+            bail!("invalid rollback: would delete all bundles (use --to 0 explicitly if intended)");
+        }
+        
+        calculated
     } else {
         unreachable!()
     };
 
     // Validate target
-    if target_bundle == 0 && last_bundle > 0 {
-        bail!("invalid rollback: would delete all bundles (use --to 0 explicitly if intended)");
-    }
-
     if target_bundle >= last_bundle {
         bail!("already at bundle {} (nothing to rollback)", last_bundle);
     }
