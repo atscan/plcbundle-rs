@@ -712,52 +712,15 @@ impl SyncManager {
             logger.on_sync_start(self.config.interval);
         }
 
-        // Start keyboard handler for verbose toggle if in interactive terminal
+        // Keyboard handler for verbose toggle - DISABLED
+        // This feature is disabled because reading from stdin blocks shutdown.
+        // Users can still use verbose mode by passing --verbose flag at startup.
+        //
+        // TODO: Implement a non-blocking alternative using signals or other IPC
         #[cfg(feature = "crossterm")]
         {
-            let verbose_handle = if std::io::stdin().is_terminal() {
-                // Try to get verbose handle from ServerLogger and sync with BundleManager
-                if let Some(logger) = &self.logger {
-                    // Use Any to downcast to ServerLogger
-                    let logger_any = logger.as_any();
-                    if let Some(server_logger) = logger_any.downcast_ref::<ServerLogger>() {
-                        // Print initial help message
-                        eprintln!("[Sync] Press 'v' + Enter to toggle verbose mode");
-                        let verbose_handle = server_logger.verbose_handle();
-                        
-                        // Sync BundleManager's verbose state with the logger's handle
-                        // This ensures both are updated when toggling
-                        let manager_verbose = self.manager.verbose_handle();
-                        {
-                            let logger_verbose = verbose_handle.lock().unwrap();
-                            *manager_verbose.lock().unwrap() = *logger_verbose;
-                        }
-                        
-                        Some(verbose_handle)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            // Spawn keyboard handler task if we have a verbose handle
-            // Note: We disable stdin reading feature since it can block shutdown.
-            // Users can still use verbose mode by passing --verbose flag at startup.
-            //
-            // The stdin reading feature is disabled because:
-            // 1. Reading from stdin blocks the async runtime
-            // 2. Even with timeouts, the task doesn't get cancelled cleanly
-            // 3. This prevents immediate shutdown on Ctrl+C
-            //
-            // TODO: Implement a non-blocking alternative using signals or other IPC
-            if let Some(_verbose_handle) = verbose_handle {
-                // Keyboard input feature temporarily disabled to fix shutdown freeze
-                // eprintln!("[Sync] Press 'v' + Enter to toggle verbose mode");
-            }
+            // Keyboard input feature temporarily disabled to fix shutdown freeze
+            // The stdin reading was causing the server to hang on Ctrl+C
         }
 
         loop {

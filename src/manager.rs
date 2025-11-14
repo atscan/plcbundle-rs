@@ -105,7 +105,7 @@ impl BundleManager {
         })
     }
 
-    pub fn with_verbose(mut self, verbose: bool) -> Self {
+    pub fn with_verbose(self, verbose: bool) -> Self {
         *self.verbose.lock().unwrap() = verbose;
         self
     }
@@ -1433,10 +1433,10 @@ impl BundleManager {
 
         // Load bundle operations
         let load_result = self.load_bundle(bundle_num, LoadOptions {
-            verify_hash: false,
             decompress: true,
             cache: false,
-            parse_operations: true,
+            filter: None,
+            limit: None,
         })?;
 
         let operations = load_result.operations;

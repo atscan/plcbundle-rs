@@ -194,10 +194,8 @@ pub struct FrameCompressionResult {
 /// Each frame contains FRAME_SIZE operations (except possibly the last frame).
 /// Returns the compressed frames and their relative offsets.
 pub fn compress_operations_to_frames(operations: &[crate::operations::Operation]) -> anyhow::Result<FrameCompressionResult> {
-    use crate::operations::Operation;
-    
     let mut frame_offsets = Vec::new();
-    let mut compressed_frames = Vec::new();
+    let mut compressed_frames: Vec<Vec<u8>> = Vec::new();
     let mut total_uncompressed = 0u64;
 
     // Process operations in frames of FRAME_SIZE
@@ -254,8 +252,6 @@ pub fn compress_operations_to_frames(operations: &[crate::operations::Operation]
 
 /// Serialize operations to JSONL (uncompressed)
 pub fn serialize_operations_to_jsonl(operations: &[crate::operations::Operation]) -> anyhow::Result<Vec<u8>> {
-    use crate::operations::Operation;
-    
     let mut data = Vec::new();
     for op in operations {
         let json = if let Some(raw) = &op.raw_json {

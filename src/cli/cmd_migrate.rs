@@ -183,17 +183,22 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
                 if cmd.verbose {
                     let old_ratio = info.uncompressed_size as f64 / info.old_size as f64;
                     let new_ratio = new_uncompressed_size as f64 / new_size as f64;
+                    let size_change = if size_diff >= 0 {
+                        format!("+{}", format_bytes(size_diff as u64))
+                    } else {
+                        format!("-{}", format_bytes((-size_diff) as u64))
+                    };
                     eprintln!("✓ {:06}: {:.3}x→{:.3}x {}",
-                        info.bundle_number, old_ratio, new_ratio, format_bytes(size_diff));
+                        info.bundle_number, old_ratio, new_ratio, size_change);
                 }
             }
             Err(e) => {
                 failed += 1;
-                if first_error.is_none() {
-                    first_error = Some(e);
-                }
                 if cmd.verbose {
                     eprintln!("✗ Bundle {:06} failed: {}", info.bundle_number, e);
+                }
+                if first_error.is_none() {
+                    first_error = Some(e);
                 }
             }
         }
@@ -234,19 +239,30 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
 
             eprintln!("                Old           New           Change");
             eprintln!("              ────────      ────────      ─────────");
+            let size_change = if size_diff >= 0 {
+                format!("+{}", format_bytes(size_diff as u64))
+            } else {
+                format!("-{}", format_bytes((-size_diff) as u64))
+            };
             eprintln!("Size          {:<13} {:<13} {} ({:.1}%)",
                 format_bytes(total_old_size),
                 format_bytes(total_new_size),
-                format_bytes(size_diff),
+                size_change,
                 size_diff as f64 / total_old_size as f64 * 100.0);
             eprintln!("Ratio         {:<13} {:<13} {}",
                 format!("{:.3}x", old_ratio),
                 format!("{:.3}x", new_ratio),
                 format!("{:+.3}x", ratio_diff));
+            let avg_change = size_diff / success as i64;
+            let avg_change_str = if avg_change >= 0 {
+                format!("+{}", format_bytes(avg_change as u64))
+            } else {
+                format!("-{}", format_bytes((-avg_change) as u64))
+            };
             eprintln!("Avg/bundle    {:<13} {:<13} {}\n",
                 format_bytes(total_old_size / success as u64),
                 format_bytes(total_new_size / success as u64),
-                format_bytes(size_diff / success as i64));
+                avg_change_str);
 
             if total_actual_metadata > 0 {
                 let compression_efficiency = size_diff - total_actual_metadata as i64;
@@ -261,11 +277,11 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
                     if compression_efficiency > 0 {
                         let pct_worse = compression_efficiency as f64 / total_old_size as f64 * 100.0;
                         eprintln!("  Compression:  {} ({:.2}% worse)",
-                            format_bytes(compression_efficiency), pct_worse);
+                            format_bytes(compression_efficiency as u64), pct_worse);
                     } else {
                         let pct_better = (-compression_efficiency) as f64 / total_old_size as f64 * 100.0;
                         eprintln!("  Compression:  {} ({:.2}% better)",
-                            format_bytes(compression_efficiency), pct_better);
+                            format_bytes((-compression_efficiency) as u64), pct_better);
                     }
                 } else {
                     eprintln!("  Compression:  unchanged");
