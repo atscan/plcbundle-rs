@@ -1,9 +1,7 @@
 use anyhow::Result;
-use plcbundle::{BundleManager, LoadOptions};
+use plcbundle::{BundleManager, LoadOptions, constants};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-
-const BUNDLE_SIZE: u32 = 10000;
 
 /// Parse operation position - supports both global position and bundle + position
 /// Mimics Go version: small numbers (< 10000) are treated as bundle 1, position N
@@ -12,7 +10,7 @@ pub fn parse_op_position(bundle: u32, position: Option<usize>) -> (u32, usize) {
         Some(pos) => (bundle, pos),
         None => {
             // Single argument: interpret as global or shorthand
-            if bundle < BUNDLE_SIZE {
+            if bundle < constants::BUNDLE_SIZE as u32 {
                 // Small numbers: shorthand for "bundle 1, position N"
                 // op get 1 → bundle 1, position 1
                 // op get 100 → bundle 1, position 100
@@ -22,8 +20,8 @@ pub fn parse_op_position(bundle: u32, position: Option<usize>) -> (u32, usize) {
                 // op get 10000 → bundle 2, position 0
                 // op get 88410345 → bundle 8842, position 345
                 let global_pos = bundle as u64;
-                let bundle_num = 1 + (global_pos / BUNDLE_SIZE as u64) as u32;
-                let op_pos = (global_pos % BUNDLE_SIZE as u64) as usize;
+                let bundle_num = 1 + (global_pos / constants::BUNDLE_SIZE as u64) as u32;
+                let op_pos = (global_pos % constants::BUNDLE_SIZE as u64) as usize;
                 (bundle_num, op_pos)
             }
         }
@@ -74,7 +72,7 @@ pub fn cmd_op_get(
     } else {
         // Output with stats
         let result = manager.get_operation_with_stats(bundle_num, op_index)?;
-        let global_pos = ((bundle_num - 1) as u64 * BUNDLE_SIZE as u64) + op_index as u64;
+        let global_pos = ((bundle_num - 1) as u64 * constants::BUNDLE_SIZE as u64) + op_index as u64;
         
         log::info!("[Load] Bundle {:06}:{:04} (pos={}) in {:?} | {} bytes",
             bundle_num, op_index, global_pos, result.load_duration, result.size_bytes);
@@ -104,7 +102,7 @@ pub fn cmd_op_show(
     // Operation is already parsed by get_operation
     let parse_duration = parse_start.elapsed();
     
-    let global_pos = ((bundle_num - 1) as u64 * BUNDLE_SIZE as u64) + op_index as u64;
+    let global_pos = ((bundle_num - 1) as u64 * constants::BUNDLE_SIZE as u64) + op_index as u64;
     
     // Extract operation details
     let op_type = op.operation.get("type")
@@ -234,7 +232,7 @@ pub fn cmd_op_find(
             let cid_matches = op.cid.as_ref().map_or(false, |c| c == &cid);
             
             if cid_matches {
-                let global_pos = ((bundle_num - 1) as u64 * BUNDLE_SIZE as u64) + i as u64;
+                let global_pos = ((bundle_num - 1) as u64 * constants::BUNDLE_SIZE as u64) + i as u64;
                 
                 println!("Found: bundle {:06}, position {}", bundle_num, i);
                 println!("Global position: {}\n", global_pos);

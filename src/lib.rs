@@ -1,4 +1,5 @@
 // src/lib.rs
+pub mod constants;
 pub mod options;
 pub mod processor;
 pub mod query;
@@ -34,6 +35,7 @@ pub use did_index::DIDLookupStats;
 pub use operations::{Operation, OperationFilter, OperationRequest};
 pub use iterators::{QueryIterator, ExportIterator, RangeIterator};
 pub use resolver::{DIDDocument, DIDState, resolve_did_document, build_did_state, validate_did_format};
-pub use handle_resolver::{HandleResolver, DEFAULT_HANDLE_RESOLVER_URL, validate_handle_format, is_handle, normalize_handle};
+pub use handle_resolver::{HandleResolver, validate_handle_format, is_handle, normalize_handle};
 pub use mempool::{Mempool, MempoolStats};
 pub use remote::{fetch_index, fetch_bundle_operations, fetch_operation};
+pub use constants::{BINARY_NAME, VERSION, user_agent, created_by, BUNDLE_SIZE, FRAME_SIZE, DEFAULT_RATE_LIMIT, MEMPOOL_FILE_PREFIX, DID_INDEX_DIR, DID_INDEX_SHARDS, DID_INDEX_CONFIG, DEFAULT_PLC_DIRECTORY_URL, DEFAULT_HANDLE_RESOLVER_URL, DEFAULT_ORIGIN};

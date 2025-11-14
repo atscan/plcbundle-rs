@@ -1,6 +1,6 @@
 // DID Index CLI commands
 use anyhow::Result;
-use plcbundle::BundleManager;
+use plcbundle::{BundleManager, constants};
 use std::path::PathBuf;
 use std::time::Instant;
 use super::utils;
@@ -41,7 +41,7 @@ pub fn cmd_index_build(dir: PathBuf, force: bool) -> Result<()> {
 
     log::info!("\n✓ DID index built in {:?}", elapsed);
     log::info!("  Total DIDs: {}", stats.total_dids);
-    log::info!("  Location: {}/.plcbundle/", utils::display_path(&dir).display());
+    log::info!("  Location: {}/{}/", utils::display_path(&dir).display(), constants::DID_INDEX_DIR);
     
     Ok(())
 }
@@ -125,7 +125,7 @@ pub fn cmd_index_stats(dir: PathBuf, json: bool) -> Result<()> {
     
     println!("\nDID Index Statistics");
     println!("════════════════════\n");
-    println!("  Location:      {}/.plcbundle/", utils::display_path(&dir).display());
+    println!("  Location:      {}/{}/", utils::display_path(&dir).display(), constants::DID_INDEX_DIR);
     println!("  Total DIDs:    {}", total_dids);
     println!("  Shard count:   {}", shard_count);
     println!("  Last bundle:   {:06}", last_bundle);

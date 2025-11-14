@@ -1,4 +1,5 @@
 // Simplified DID Index implementation matching Go version
+use crate::constants;
 use anyhow::Result;
 use memmap2::{Mmap, MmapOptions};
 use std::collections::HashMap;
@@ -9,11 +10,6 @@ use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
-
-// Constants matching Go implementation
-const DID_INDEX_DIR: &str = ".plcbundle";
-const DID_INDEX_SHARDS: &str = "shards";
-const DID_INDEX_CONFIG: &str = "config.json";
 const DID_SHARD_COUNT: usize = 256;
 const DID_PREFIX: &str = "did:plc:";
 const DID_IDENTIFIER_LEN: usize = 24;
@@ -30,7 +26,7 @@ pub struct OpLocation(u32);
 
 impl OpLocation {
     pub fn new(bundle: u16, position: u16, nullified: bool) -> Self {
-        let global_pos = (bundle as u32) * 10000 + (position as u32);
+        let global_pos = (bundle as u32) * constants::BUNDLE_SIZE as u32 + (position as u32);
         let mut loc = global_pos << 1;
         if nullified {
             loc |= 1;
@@ -43,11 +39,11 @@ impl OpLocation {
     }
 
     pub fn bundle(&self) -> u16 {
-        (self.global_position() / 10000) as u16
+        (self.global_position() / constants::BUNDLE_SIZE as u32) as u16
     }
 
     pub fn position(&self) -> u16 {
-        (self.global_position() % 10000) as u16
+        (self.global_position() % constants::BUNDLE_SIZE as u32) as u16
     }
 
     pub fn nullified(&self) -> bool {
@@ -199,9 +195,9 @@ pub struct Manager {
 
 impl Manager {
     pub fn new(base_dir: PathBuf) -> Result<Self> {
-        let index_dir = base_dir.join(DID_INDEX_DIR);
-        let shard_dir = index_dir.join(DID_INDEX_SHARDS);
-        let config_path = index_dir.join(DID_INDEX_CONFIG);
+        let index_dir = base_dir.join(constants::DID_INDEX_DIR);
+        let shard_dir = index_dir.join(constants::DID_INDEX_SHARDS);
+        let config_path = index_dir.join(constants::DID_INDEX_CONFIG);
 
         let config = if config_path.exists() {
             let data = fs::read_to_string(&config_path)?;

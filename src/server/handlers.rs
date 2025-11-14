@@ -1,5 +1,6 @@
 // HTTP handlers for the server
 
+use crate::constants;
 use crate::manager::BundleManager;
 use crate::resolver::build_did_state;
 use crate::server::config::ServerConfig;
@@ -131,14 +132,14 @@ async fn handle_root(
             response.push_str("\nMempool\n");
             response.push_str("━━━━━━━\n");
             response.push_str(&format!("  Target bundle:     {}\n", mempool_stats.target_bundle));
-            response.push_str(&format!("  Operations:        {} / 10000\n", mempool_stats.count));
+            response.push_str(&format!("  Operations:        {} / {}\n", mempool_stats.count, constants::BUNDLE_SIZE));
 
             if mempool_stats.count > 0 {
-                let progress = (mempool_stats.count as f64 / 10000.0) * 100.0;
+                let progress = (mempool_stats.count as f64 / constants::BUNDLE_SIZE as f64) * 100.0;
                 response.push_str(&format!("  Progress:          {:.1}%\n", progress));
 
                 let bar_width = 50;
-                let filled = ((bar_width as f64) * (mempool_stats.count as f64 / 10000.0)) as usize;
+                let filled = ((bar_width as f64) * (mempool_stats.count as f64 / constants::BUNDLE_SIZE as f64)) as usize;
                 let bar = "█".repeat(filled.min(bar_width)) + &"░".repeat(bar_width.saturating_sub(filled));
                 response.push_str(&format!("  [{}]\n", bar));
 
@@ -400,7 +401,7 @@ async fn handle_operation(
         }
     };
 
-    if position >= 10000 {
+    if position >= constants::BUNDLE_SIZE {
         return (
             StatusCode::BAD_REQUEST,
             axum::Json(json!({"error": format!("Position must be 0-9999")})),
@@ -416,7 +417,7 @@ async fn handle_operation(
             let load_duration = load_start.elapsed();
             let total_duration = total_start.elapsed();
 
-            let global_pos = (bundle_num as u64 * 10000) + position as u64;
+            let global_pos = (bundle_num as u64 * constants::BUNDLE_SIZE as u64) + position as u64;
 
             let mut headers = HeaderMap::new();
             headers.insert("X-Bundle-Number", HeaderValue::from(bundle_num));
@@ -496,7 +497,7 @@ async fn handle_status(
             response["bundles"]["end_time"] = json!(meta.end_time);
         }
 
-        let total_ops = index.bundles.len() * 10000;
+        let total_ops = index.bundles.len() * constants::BUNDLE_SIZE;
         response["bundles"]["total_operations"] = json!(total_ops);
     }
 
@@ -505,10 +506,10 @@ async fn handle_status(
             response["mempool"] = json!({
                 "count": mempool_stats.count,
                 "target_bundle": mempool_stats.target_bundle,
-                "can_create_bundle": mempool_stats.count >= 10000,
-                "progress_percent": (mempool_stats.count as f64 / 10000.0) * 100.0,
-                "bundle_size": 10000,
-                "operations_needed": 10000 - mempool_stats.count,
+                "can_create_bundle": mempool_stats.count >= constants::BUNDLE_SIZE,
+                "progress_percent": (mempool_stats.count as f64 / constants::BUNDLE_SIZE as f64) * 100.0,
+                "bundle_size": constants::BUNDLE_SIZE,
+                "operations_needed": constants::BUNDLE_SIZE - mempool_stats.count,
             });
         }
     }
@@ -928,14 +929,14 @@ fn parse_operation_pointer(pointer: &str) -> Result<(u32, usize)> {
     let global_pos: u64 = pointer.parse()
         .map_err(|_| anyhow::anyhow!("Invalid position: must be number or 'bundle:position' format"))?;
 
-    if global_pos < 10000 {
+    if global_pos < constants::BUNDLE_SIZE as u64 {
         // Small numbers are shorthand for bundle 1
         return Ok((1, global_pos as usize));
     }
 
     // Convert global position to bundle + position
-    let bundle_num = (global_pos / 10000) as u32;
-    let position = (global_pos % 10000) as usize;
+    let bundle_num = (global_pos / constants::BUNDLE_SIZE as u64) as u32;
+    let position = (global_pos % constants::BUNDLE_SIZE as u64) as usize;
 
     Ok((bundle_num.max(1), position))
 }

@@ -1,12 +1,10 @@
 // Handle resolver - resolves AT Protocol handles to DIDs via XRPC
 
+use crate::constants;
 use anyhow::Result;
 use regex::Regex;
 use serde::Deserialize;
 use std::time::Duration;
-
-/// Default handle resolver URL
-pub const DEFAULT_HANDLE_RESOLVER_URL: &str = "https://quickdid.smokesignal.tools";
 
 /// Client for resolving AT Protocol handles to DIDs via XRPC
 pub struct HandleResolver {
@@ -49,7 +47,7 @@ impl HandleResolver {
         let response = self
             .client
             .get(url)
-            .header("User-Agent", "plcbundle-rs/0.1.0")
+            .header("User-Agent", constants::user_agent())
             .send()
             .await?;
 
@@ -97,7 +95,7 @@ impl HandleResolver {
         let response = self
             .client
             .get(url)
-            .header("User-Agent", "plcbundle-rs/0.1.0")
+            .header("User-Agent", constants::user_agent())
             .timeout(Duration::from_secs(5))
             .send()
             .await

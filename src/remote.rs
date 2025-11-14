@@ -1,4 +1,5 @@
 // Remote access module for fetching data from remote PLC instances
+use crate::constants;
 use crate::index::Index;
 use crate::operations::Operation;
 use crate::sync::PLCOperation;
@@ -43,7 +44,7 @@ async fn fetch_index_from_url(url: &str) -> Result<Index> {
     
     let response = client
         .get(&url)
-        .header("User-Agent", "plcbundle-rs/0.1.0")
+        .header("User-Agent", constants::user_agent())
         .send()
         .await
         .context("Failed to fetch index")?;
@@ -77,7 +78,7 @@ pub async fn fetch_bundle_operations(base_url: &str, bundle_num: u32) -> Result<
     
     let response = client
         .get(&bundle_url)
-        .header("User-Agent", "plcbundle-rs/0.1.0")
+        .header("User-Agent", constants::user_agent())
         .send()
         .await
         .context(format!("Failed to fetch bundle {} from {}", bundle_num, bundle_url))?;

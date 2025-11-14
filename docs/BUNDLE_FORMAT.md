@@ -50,7 +50,7 @@ Zstd supports "skippable frames" (magic range `0x184D2A50` - `0x184D2A5F`) that 
   "start_time": "2024-01-01T00:00:00Z",
   "end_time": "2024-01-01T23:59:59Z",
   "created_at": "2024-01-02T00:00:00Z",
-  "created_by": "plcbundle-rs/0.1.0",
+  "created_by": "plcbundle-rs/0.9.0",
   "frame_count": 100,
   "frame_size": 100,
   "frame_offsets": [0, 12450, 24800, ...]

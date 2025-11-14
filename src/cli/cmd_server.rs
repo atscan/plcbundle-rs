@@ -48,7 +48,7 @@ pub struct ServerCommand {
     pub sync: bool,
 
     /// PLC directory URL (for sync mode)
-    #[arg(long, default_value = "https://plc.directory")]
+    #[arg(long, default_value = plcbundle::constants::DEFAULT_PLC_DIRECTORY_URL)]
     pub plc: String,
 
     /// Sync interval (how often to check for new bundles)
@@ -126,13 +126,13 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
 
     // Initialize manager with handle resolver if configured
     // If --resolver is enabled but --handle-resolver is not provided, use default
-    use plcbundle::DEFAULT_HANDLE_RESOLVER_URL;
+    use plcbundle::constants;
     
     let handle_resolver_url = if cmd.resolver && cmd.handle_resolver.is_none() {
         if cmd.verbose {
-            log::debug!("[Resolver] Using default handle resolver: {}", DEFAULT_HANDLE_RESOLVER_URL);
+            log::debug!("[Resolver] Using default handle resolver: {}", constants::DEFAULT_HANDLE_RESOLVER_URL);
         }
-        Some(DEFAULT_HANDLE_RESOLVER_URL.to_string())
+        Some(constants::DEFAULT_HANDLE_RESOLVER_URL.to_string())
     } else {
         if cmd.verbose && cmd.handle_resolver.is_some() {
             log::debug!("[Resolver] Using custom handle resolver: {}", cmd.handle_resolver.as_ref().unwrap());
@@ -146,7 +146,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
                 // Try to initialize if it doesn't exist (similar to init command)
                 let index_path = dir.join("plc_bundles.json");
                 if !index_path.exists() {
-                    let plcbundle_dir = dir.join(".plcbundle");
+                    let plcbundle_dir = dir.join(plcbundle::constants::DID_INDEX_DIR);
                     if !plcbundle_dir.exists() {
                         std::fs::create_dir_all(&plcbundle_dir)?;
                     }

@@ -1,4 +1,5 @@
 // src/manager.rs
+use crate::constants;
 use crate::index::{Index, BundleMetadata};
 use crate::operations::{Operation, OperationFilter, OperationRequest};
 use crate::iterators::{QueryIterator, ExportIterator, RangeIterator};
@@ -651,7 +652,7 @@ impl BundleManager {
         if let Ok(entries) = std::fs::read_dir(&self.directory) {
             for entry in entries.flatten() {
                 if let Some(name) = entry.file_name().to_str() {
-                    if name.starts_with("plc_mempool_") && name.ends_with(".jsonl") {
+                    if name.starts_with(constants::MEMPOOL_FILE_PREFIX) && name.ends_with(".jsonl") {
                         let _ = std::fs::remove_file(entry.path());
                     }
                 }
@@ -710,9 +711,9 @@ impl BundleManager {
         if let Ok(entries) = std::fs::read_dir(&self.directory) {
             for entry in entries.flatten() {
                 if let Some(name) = entry.file_name().to_str() {
-                    if name.starts_with("plc_mempool_") && name.ends_with(".jsonl") {
+                    if name.starts_with(constants::MEMPOOL_FILE_PREFIX) && name.ends_with(".jsonl") {
                         // Extract bundle number from filename: plc_mempool_NNNNNN.jsonl
-                        if let Some(num_str) = name.strip_prefix("plc_mempool_").and_then(|s| s.strip_suffix(".jsonl")) {
+                        if let Some(num_str) = name.strip_prefix(constants::MEMPOOL_FILE_PREFIX).and_then(|s| s.strip_suffix(".jsonl")) {
                             if let Ok(bundle_num) = num_str.parse::<u32>() {
                                 // Delete mempool files for completed bundles or way future bundles
                                 if bundle_num <= last_bundle || bundle_num > next_bundle_num {
@@ -776,9 +777,9 @@ impl BundleManager {
                 // BUT: Only clear if the mempool file is old (modified > 1 hour ago)
                 // If it's recent, it might be a legitimate resume of a slow sync
                 let time_diff = first_mempool_time.signed_duration_since(last_time);
-                if time_diff < chrono::Duration::seconds(60) && mempool_stats.count < crate::sync::BUNDLE_SIZE {
+                if time_diff < chrono::Duration::seconds(constants::MIN_BUNDLE_CREATION_INTERVAL_SECS) && mempool_stats.count < constants::BUNDLE_SIZE {
                     // Check mempool file modification time
-                    let mempool_filename = format!("plc_mempool_{:06}.jsonl", next_bundle_num);
+                    let mempool_filename = format!("{}{:06}.jsonl", constants::MEMPOOL_FILE_PREFIX, next_bundle_num);
                     let mempool_path = self.directory.join(mempool_filename);
 
                     let is_stale = if let Ok(metadata) = std::fs::metadata(&mempool_path) {
@@ -797,7 +798,7 @@ impl BundleManager {
                     if is_stale {
                         log::warn!("Detected potentially stale mempool data (too close to last bundle timestamp)");
                         log::warn!("Time difference: {}s, Operations: {}/{}",
-                            time_diff.num_seconds(), mempool_stats.count, crate::sync::BUNDLE_SIZE);
+                            time_diff.num_seconds(), mempool_stats.count, constants::BUNDLE_SIZE);
                         log::warn!("This likely indicates a previous failed sync attempt. Clearing mempool...");
                         self.clear_mempool()?;
                     } else {
@@ -811,9 +812,9 @@ impl BundleManager {
         }
         
         // Check if mempool has way too many operations (likely from failed previous attempt)
-        if mempool_stats.count > crate::sync::BUNDLE_SIZE {
+        if mempool_stats.count > constants::BUNDLE_SIZE {
             log::warn!("Mempool has {} operations (expected max {})", 
-                mempool_stats.count, crate::sync::BUNDLE_SIZE);
+                mempool_stats.count, constants::BUNDLE_SIZE);
             log::warn!("This indicates a previous sync attempt failed. Clearing mempool...");
             self.clear_mempool()?;
             return Ok(());
@@ -824,7 +825,7 @@ impl BundleManager {
 
     /// Fetch and save next bundle from PLC directory
     pub async fn sync_next_bundle(&mut self, client: &crate::sync::PLCClient) -> Result<SyncResult> {
-        use crate::sync::{get_boundary_cids, strip_boundary_duplicates, BUNDLE_SIZE};
+        use crate::sync::{get_boundary_cids, strip_boundary_duplicates};
         use std::time::Instant;
 
         // Validate repository state before starting
@@ -895,12 +896,12 @@ impl BundleManager {
         while fetch_num < MAX_ATTEMPTS {
             let stats = self.get_mempool_stats()?;
 
-            if stats.count >= BUNDLE_SIZE {
+            if stats.count >= constants::BUNDLE_SIZE {
                 break;
             }
 
             fetch_num += 1;
-            let needed = BUNDLE_SIZE - stats.count;
+            let needed = constants::BUNDLE_SIZE - stats.count;
             
             // Smart batch sizing - request more than exact amount to account for duplicates
             let request_count = match needed {
@@ -912,7 +913,7 @@ impl BundleManager {
 
             if self.verbose {
                 log::info!("  Fetch #{}: requesting {} (need {} more, have {}/{})",
-                    fetch_num, request_count, needed, stats.count, BUNDLE_SIZE);
+                    fetch_num, request_count, needed, stats.count, constants::BUNDLE_SIZE);
             }
 
             let fetch_op_start = Instant::now();
@@ -971,10 +972,10 @@ impl BundleManager {
                 if boundary_removed > 0 || dupes_in_fetch > 0 {
                     log::info!("  → +{} unique ({} dupes, {} boundary) in {:.9}s • Running: {}/{} ({:.0} ops/sec)",
                         added, dupes_in_fetch, boundary_removed, fetch_duration.as_secs_f64(),
-                        new_stats.count, BUNDLE_SIZE, ops_per_sec);
+                        new_stats.count, constants::BUNDLE_SIZE, ops_per_sec);
                 } else {
                     log::info!("  → +{} unique in {:.9}s • Running: {}/{} ({:.0} ops/sec)",
-                        added, fetch_duration.as_secs_f64(), new_stats.count, BUNDLE_SIZE, ops_per_sec);
+                        added, fetch_duration.as_secs_f64(), new_stats.count, constants::BUNDLE_SIZE, ops_per_sec);
                 }
             }
 
@@ -1002,37 +1003,27 @@ impl BundleManager {
 
         let final_stats = self.get_mempool_stats()?;
         
-        // Check if we have enough operations
-        let allow_partial = final_stats.count >= (BUNDLE_SIZE * 9 / 10); // At least 90%
-
-        if final_stats.count < BUNDLE_SIZE {
-            if !allow_partial {
-                if caught_up {
-                    // Caught up to latest PLC data without enough ops for a full bundle
-                    // Return CaughtUp result instead of error
-                    return Ok(SyncResult::CaughtUp {
-                        next_bundle: next_bundle_num,
-                        mempool_count: final_stats.count,
-                        new_ops: total_fetched - total_dupes - total_boundary_dupes,
-                        fetch_duration_ms: fetch_total_duration.as_millis() as u64,
-                    });
-                } else {
-                    anyhow::bail!(
-                        "Insufficient operations: have {}, need {} (max attempts reached)",
-                        final_stats.count,
-                        BUNDLE_SIZE
-                    );
-                }
+        // Bundles must contain exactly BUNDLE_SIZE operations (no partial bundles allowed)
+        if final_stats.count < constants::BUNDLE_SIZE {
+            if caught_up {
+                // Caught up to latest PLC data without enough ops for a full bundle
+                // Return CaughtUp result instead of error
+                return Ok(SyncResult::CaughtUp {
+                    next_bundle: next_bundle_num,
+                    mempool_count: final_stats.count,
+                    new_ops: total_fetched - total_dupes - total_boundary_dupes,
+                    fetch_duration_ms: fetch_total_duration.as_millis() as u64,
+                });
+            } else {
+                anyhow::bail!(
+                    "Insufficient operations: have {}, need exactly {} (max attempts reached)",
+                    final_stats.count,
+                    constants::BUNDLE_SIZE
+                );
             }
+        }
 
-            // Log partial bundle warning
-            if self.verbose {
-                log::info!("  ✓ Collected {} unique ops from {} fetches ({:.1}% dedup)",
-                    final_stats.count, fetch_num, dedup_pct);
-                log::info!("  ⚠ Saving bundle with {} ops (couldn't reach {} after {} fetches)",
-                    final_stats.count, BUNDLE_SIZE, fetch_num);
-            }
-        } else if self.verbose {
+        if self.verbose {
             log::info!("  ✓ Collected {} unique ops from {} fetches ({:.1}% dedup)",
                 final_stats.count, fetch_num, dedup_pct);
         }
@@ -1044,7 +1035,7 @@ impl BundleManager {
             let mut mempool = self.mempool.write().unwrap();
             let mem = mempool.as_mut().ok_or_else(|| anyhow::anyhow!("Mempool not initialized"))?;
             // Take up to BUNDLE_SIZE operations (or all if less)
-            let count = mem.count().min(BUNDLE_SIZE);
+            let count = mem.count().min(constants::BUNDLE_SIZE);
             mem.take(count)?
         };
 
@@ -1052,8 +1043,13 @@ impl BundleManager {
             anyhow::bail!("No operations to create bundle");
         }
         
-        if operations.len() < BUNDLE_SIZE && self.verbose {
-            log::debug!("Creating partial bundle with {} operations", operations.len());
+        // Bundles must contain exactly BUNDLE_SIZE operations
+        if operations.len() != constants::BUNDLE_SIZE {
+            anyhow::bail!(
+                "Invalid operation count: expected exactly {}, got {}",
+                constants::BUNDLE_SIZE,
+                operations.len()
+            );
         }
 
         log::debug!("SaveBundle SUCCESS, setting bundle fields");
@@ -1227,7 +1223,7 @@ impl BundleManager {
             start_time: start_time.clone(),
             end_time: end_time.clone(),
             created_at: chrono::Utc::now().to_rfc3339(),
-            created_by: "plcbundle-rs/0.1.0".to_string(),
+            created_by: constants::created_by(),
             frame_count: 0,  // Will be updated if we implement multi-frame compression
             frame_size: 0,
             frame_offsets: vec![],
@@ -1430,10 +1426,10 @@ impl BundleManager {
     }
     
     /// Get current cursor (global position of last operation)
-    /// Cursor = (last_bundle * 10000) + mempool_ops_count
+    /// Cursor = (last_bundle * BUNDLE_SIZE) + mempool_ops_count
     pub fn get_current_cursor(&self) -> u64 {
         let index = self.index.read().unwrap();
-        let bundled_ops = index.last_bundle as u64 * 10000;
+        let bundled_ops = index.last_bundle as u64 * constants::BUNDLE_SIZE as u64;
         
         // Add mempool operations if available
         let mempool_guard = self.mempool.read().unwrap();
@@ -1481,7 +1477,7 @@ impl BundleManager {
                     Configure resolver with:\n\
                       plcbundle --handle-resolver {} did resolve {}\n\n\
                     Or set default in config",
-                    normalized, crate::handle_resolver::DEFAULT_HANDLE_RESOLVER_URL, normalized
+                    normalized, constants::DEFAULT_HANDLE_RESOLVER_URL, normalized
                 );
             }
         };
@@ -1530,7 +1526,7 @@ impl BundleManager {
                     Configure resolver with:\n\
                       plcbundle --handle-resolver {} did resolve {}\n\n\
                     Or set default in config",
-                    normalized, crate::handle_resolver::DEFAULT_HANDLE_RESOLVER_URL, normalized
+                    normalized, constants::DEFAULT_HANDLE_RESOLVER_URL, normalized
                 );
             }
         };

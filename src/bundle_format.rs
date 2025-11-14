@@ -6,15 +6,13 @@
 //! - Multiple zstd frames (100 operations each)
 //! - Frame offsets in metadata allow efficient random access
 
+use crate::constants;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write, Seek, SeekFrom};
 
 /// Skippable frame magic number for metadata
 pub const SKIPPABLE_MAGIC_METADATA: u32 = 0x184D2A50;
-
-/// Operations per frame
-pub const FRAME_SIZE: usize = 100;
 
 /// Bundle metadata stored in skippable frame
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,7 +48,7 @@ pub struct BundleMetadata {
     /// Creation timestamp
     pub created_at: String,
     
-    /// Creator version (e.g., "plcbundle-rs/0.1.0")
+    /// Creator version (e.g., "plcbundle-rs/0.9.0")
     pub created_by: String,
     
     /// Number of frames
@@ -136,8 +134,8 @@ pub fn load_operation_at_position<R: Read + Seek>(
     frame_offsets: &[i64],
     metadata_frame_size: i64,
 ) -> Result<String> {
-    let frame_index = position / FRAME_SIZE;
-    let line_in_frame = position % FRAME_SIZE;
+    let frame_index = position / constants::FRAME_SIZE;
+    let line_in_frame = position % constants::FRAME_SIZE;
     
     if frame_index >= frame_offsets.len() - 1 {
         anyhow::bail!("Position {} out of bounds (frame {}, total frames {})",
@@ -201,7 +199,7 @@ mod tests {
         let metadata = BundleMetadata {
             format: "plcbundle-v1".to_string(),
             bundle_number: 42,
-            origin: "https://plc.directory".to_string(),
+            origin: constants::DEFAULT_PLC_DIRECTORY_URL.to_string(),
             content_hash: "abc123".to_string(),
             parent_hash: None,
             operation_count: 10000,
@@ -209,7 +207,7 @@ mod tests {
             start_time: "2024-01-01T00:00:00Z".to_string(),
             end_time: "2024-01-01T23:59:59Z".to_string(),
             created_at: "2024-01-02T00:00:00Z".to_string(),
-            created_by: "plcbundle-rs/0.1.0".to_string(),
+            created_by: crate::constants::created_by(),
             frame_count: 100,
             frame_size: 100,
             frame_offsets: vec![0, 1000, 2000],

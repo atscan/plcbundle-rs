@@ -1,7 +1,7 @@
 // src/bin/commands/mempool.rs
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use plcbundle::BundleManager;
+use plcbundle::{BundleManager, constants};
 use std::path::PathBuf;
 use std::io::{self, Write};
 use super::utils;
@@ -70,7 +70,7 @@ fn show_status(manager: &BundleManager, dir: &PathBuf, verbose: bool) -> Result<
     println!("══════════════\n");
     println!("  Directory:      {}", utils::display_path(dir).display());
     println!("  Target bundle:  {:06}", stats.target_bundle);
-    println!("  Operations:     {} / 10000", stats.count);
+    println!("  Operations:     {} / {}", stats.count, constants::BUNDLE_SIZE);
     println!(
         "  Min timestamp:  {}\n",
         stats.min_timestamp.format("%Y-%m-%d %H:%M:%S")
@@ -97,11 +97,11 @@ fn show_status(manager: &BundleManager, dir: &PathBuf, verbose: bool) -> Result<
         println!();
 
         // Progress bar
-        let progress = (stats.count as f64 / 10000.0) * 100.0;
-        println!("  Progress:       {:.1}% ({}/10000)", progress, stats.count);
+        let progress = (stats.count as f64 / constants::BUNDLE_SIZE as f64) * 100.0;
+        println!("  Progress:       {:.1}% ({}/{})", progress, stats.count, constants::BUNDLE_SIZE);
 
         let bar_width = 40;
-        let filled = ((bar_width as f64) * (stats.count as f64) / 10000.0) as usize;
+        let filled = ((bar_width as f64) * (stats.count as f64) / constants::BUNDLE_SIZE as f64) as usize;
         let filled = filled.min(bar_width);
         let bar = "█".repeat(filled) + &"░".repeat(bar_width - filled);
         println!("  [{}]\n", bar);
@@ -110,7 +110,7 @@ fn show_status(manager: &BundleManager, dir: &PathBuf, verbose: bool) -> Result<
         if stats.can_create_bundle {
             println!("  ✓ Ready to create bundle");
         } else {
-            let remaining = 10000 - stats.count;
+            let remaining = constants::BUNDLE_SIZE - stats.count;
             println!("  Need {} more operations", format_number(remaining));
         }
     } else {
@@ -143,7 +143,7 @@ fn show_status(manager: &BundleManager, dir: &PathBuf, verbose: bool) -> Result<
     }
 
     // Show mempool file location
-    let mempool_filename = format!("plc_mempool_{:06}.jsonl", stats.target_bundle);
+    let mempool_filename = format!("{}{:06}.jsonl", constants::MEMPOOL_FILE_PREFIX, stats.target_bundle);
     let mempool_path = utils::display_path(dir).join(mempool_filename);
     println!("File: {}", mempool_path.display());
 

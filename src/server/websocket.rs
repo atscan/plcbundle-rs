@@ -1,5 +1,6 @@
 // WebSocket handler for streaming operations
 
+use crate::constants;
 use crate::server::handlers::ServerState;
 use axum::{
     body::Bytes,
@@ -11,8 +12,6 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
-
-const BUNDLE_SIZE: u32 = 10000;
 
 #[derive(Deserialize)]
 pub struct CursorQuery {
@@ -78,8 +77,8 @@ async fn stream_live_operations(
 
     // Stream existing bundles
     if !bundles.is_empty() {
-        let start_bundle_idx = (start_cursor / BUNDLE_SIZE as u64) as usize;
-        let start_position = (start_cursor % BUNDLE_SIZE as u64) as usize;
+        let start_bundle_idx = (start_cursor / constants::BUNDLE_SIZE as u64) as usize;
+        let start_position = (start_cursor % constants::BUNDLE_SIZE as u64) as usize;
 
         if start_bundle_idx < bundles.len() {
             for i in start_bundle_idx..bundles.len() {
@@ -98,7 +97,7 @@ async fn stream_live_operations(
     }
 
     // Stream mempool operations
-    let bundle_record_base = (bundles.len() as u64) * BUNDLE_SIZE as u64;
+    let bundle_record_base = (bundles.len() as u64) * constants::BUNDLE_SIZE as u64;
     let mut last_seen_mempool_count = 0;
 
     stream_mempool(
@@ -123,7 +122,7 @@ async fn stream_live_operations(
 
         if bundles.len() > last_bundle_count {
             let new_bundle_count = bundles.len() - last_bundle_count;
-            current_record += (new_bundle_count as u64) * BUNDLE_SIZE as u64;
+            current_record += (new_bundle_count as u64) * constants::BUNDLE_SIZE as u64;
             last_bundle_count = bundles.len();
             last_seen_mempool_count = 0;
         }

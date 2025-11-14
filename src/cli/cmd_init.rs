@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::Args;
+use plcbundle::constants;
 use std::path::PathBuf;
 
 #[derive(Args)]
@@ -9,7 +10,7 @@ pub struct InitCommand {
     pub dir: PathBuf,
 
     /// Origin identifier for this repository
-    #[arg(long, default_value = "local")]
+    #[arg(long, default_value = constants::DEFAULT_ORIGIN)]
     pub origin: String,
 
     /// Force initialization even if directory already exists
@@ -35,7 +36,7 @@ pub fn run(cmd: InitCommand) -> Result<()> {
     }
 
     // Create .plcbundle directory for DID index
-    let plcbundle_dir = dir.join(".plcbundle");
+    let plcbundle_dir = dir.join(constants::DID_INDEX_DIR);
     if !plcbundle_dir.exists() {
         std::fs::create_dir_all(&plcbundle_dir)?;
     }

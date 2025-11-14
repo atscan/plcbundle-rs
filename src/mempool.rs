@@ -1,4 +1,5 @@
 // src/mempool.rs
+use crate::constants;
 use crate::operations::Operation;
 use anyhow::{Result, bail};
 use std::collections::{HashMap, HashSet};
@@ -6,9 +7,6 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
-
-const MEMPOOL_FILE_PREFIX: &str = "plc_mempool_";
-const BUNDLE_SIZE: usize = 10000;
 
 /// Mempool stores operations waiting to be bundled
 /// Operations must be strictly chronological
@@ -36,7 +34,7 @@ impl Mempool {
         min_timestamp: DateTime<Utc>,
         verbose: bool,
     ) -> Result<Self> {
-        let filename = format!("{}{:06}.jsonl", MEMPOOL_FILE_PREFIX, target_bundle);
+        let filename = format!("{}{:06}.jsonl", constants::MEMPOOL_FILE_PREFIX, target_bundle);
         let file = bundle_dir.join(filename);
 
         let mut mempool = Self {
@@ -404,7 +402,7 @@ impl Mempool {
 
         let mut stats = MempoolStats {
             count,
-            can_create_bundle: count >= BUNDLE_SIZE,
+            can_create_bundle: count >= constants::BUNDLE_SIZE,
             target_bundle: self.target_bundle,
             min_timestamp: self.min_timestamp,
             validated: self.validated,

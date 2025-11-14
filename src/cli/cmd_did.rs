@@ -8,11 +8,11 @@ use std::path::PathBuf;
 // ============================================================================
 
 pub fn cmd_did_resolve(dir: PathBuf, input: String, handle_resolver_url: Option<String>, verbose: bool) -> Result<()> {
-    use plcbundle::DEFAULT_HANDLE_RESOLVER_URL;
+    use plcbundle::constants;
     
     // Use default resolver if none provided
     let resolver_url = handle_resolver_url.or_else(|| {
-        Some(DEFAULT_HANDLE_RESOLVER_URL.to_string())
+        Some(constants::DEFAULT_HANDLE_RESOLVER_URL.to_string())
     });
     
     // Initialize manager with handle resolver (default or provided)

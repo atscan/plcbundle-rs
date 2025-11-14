@@ -1,12 +1,10 @@
 // Sync module - PLC directory synchronization
+use crate::constants;
 use crate::operations::Operation;
 use anyhow::Result;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::time::Duration;
-
-pub const BUNDLE_SIZE: usize = 10_000;
-const DEFAULT_RATE_LIMIT: usize = 90; // requests per minute
 
 // ============================================================================
 // PLC Client
@@ -22,10 +20,10 @@ impl PLCClient {
     pub fn new(base_url: impl Into<String>) -> Result<Self> {
         Ok(Self {
             client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(60))
+                .timeout(Duration::from_secs(constants::HTTP_TIMEOUT_SECS))
                 .build()?,
             base_url: base_url.into(),
-            rate_limiter: RateLimiter::new(DEFAULT_RATE_LIMIT, Duration::from_secs(60)),
+            rate_limiter: RateLimiter::new(constants::DEFAULT_RATE_LIMIT, Duration::from_secs(constants::HTTP_TIMEOUT_SECS)),
         })
     }
 
@@ -41,7 +39,7 @@ impl PLCClient {
             .client
             .get(&url)
             .query(&[("after", after), ("count", &count.to_string())])
-            .header("User-Agent", "plcbundle-rs/0.1.0")
+            .header("User-Agent", constants::user_agent())
             .send()
             .await?;
 
@@ -182,7 +180,7 @@ pub struct SyncConfig {
 impl Default for SyncConfig {
     fn default() -> Self {
         Self {
-            plc_url: "https://plc.directory".to_string(),
+            plc_url: constants::DEFAULT_PLC_DIRECTORY_URL.to_string(),
             continuous: false,
             interval: Duration::from_secs(60),
             max_bundles: 0,

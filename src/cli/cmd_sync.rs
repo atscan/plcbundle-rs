@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Args;
-use plcbundle::{BundleManager, sync::PLCClient};
+use plcbundle::{BundleManager, sync::PLCClient, constants};
 use std::path::PathBuf;
 use std::time::Duration;
 use super::utils;
@@ -8,7 +8,7 @@ use super::utils;
 #[derive(Args)]
 pub struct SyncCommand {
     /// PLC directory URL
-    #[arg(long, default_value = "https://plc.directory")]
+    #[arg(long, default_value = constants::DEFAULT_PLC_DIRECTORY_URL)]
     pub plc: String,
 
     /// Keep syncing (run as daemon)
