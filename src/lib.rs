@@ -10,13 +10,14 @@ pub mod did_index;
 pub mod cache;
 pub mod verification;
 pub mod iterators;
+pub mod bundle_format;
 
 // Re-export main types
 pub use options::{Options, OptionsBuilder, QueryMode};
 pub use processor::{Processor, Stats, OutputHandler, parse_bundle_range};
 pub use query::QueryEngine;
 pub use index::{Index, BundleMetadata};
-pub use manager::{BundleManager, LoadOptions, LoadResult, QuerySpec, ExportSpec, 
+pub use manager::{BundleManager, LoadOptions, LoadResult, OperationResult, QuerySpec, ExportSpec,
                   BundleRange, ExportFormat, CompressionType,
                   VerifySpec, VerifyResult, ChainVerifySpec, ChainVerifyResult,
                   BundleInfo, InfoFlags, RollbackSpec, RollbackPlan, RollbackResult,

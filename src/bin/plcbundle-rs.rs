@@ -7,13 +7,16 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+mod commands;
+
 #[derive(Parser)]
 #[command(name = "plcbundle")]
 #[command(version, about = "High-performance PLC bundle query tool", long_about = None)]
 #[command(author = "Your Name <you@example.com>")]
 struct Cli {
-    #[command(subcommand)]
-    command: Commands,
+    /// Repository directory
+    #[arg(short = 'C', long = "dir", global = true, default_value = ".")]
+    dir: PathBuf,
 
     /// Suppress progress output
     #[arg(short, long, global = true)]
@@ -22,6 +25,9 @@ struct Cli {
     /// Enable verbose output
     #[arg(short, long, global = true)]
     verbose: bool,
+
+    #[command(subcommand)]
+    command: Commands,
 }
 
 #[derive(Subcommand)]
@@ -30,10 +36,6 @@ enum Commands {
     Query {
         /// Query expression (e.g., "did", "operation.type", etc.)
         expression: String,
-
-        /// Bundle directory
-        #[arg(short = 'd', long, default_value = ".")]
-        dir: PathBuf,
 
         /// Bundle range (e.g., "1-10,15,20-25" or "latest:10" for last 10)
         #[arg(short, long)]
@@ -66,10 +68,6 @@ enum Commands {
 
     /// Show index and bundle information
     Info {
-        /// Bundle directory
-        #[arg(short = 'd', long, default_value = ".")]
-        dir: PathBuf,
-
         /// Show detailed bundle information
         #[arg(short, long)]
         detailed: bool,
@@ -85,10 +83,6 @@ enum Commands {
 
     /// Verify bundle integrity
     Verify {
-        /// Bundle directory
-        #[arg(short = 'd', long, default_value = ".")]
-        dir: PathBuf,
-
         /// Bundle range to verify
         #[arg(short, long)]
         bundles: Option<String>,
@@ -108,10 +102,6 @@ enum Commands {
 
     /// Export operations to different formats
     Export {
-        /// Bundle directory
-        #[arg(short = 'd', long, default_value = ".")]
-        dir: PathBuf,
-
         /// Bundle range (e.g., "1-100")
         #[arg(short, long)]
         range: Option<String>,
@@ -153,12 +143,33 @@ enum Commands {
         compress: bool,
     },
 
+    /// Operation queries and inspection
+    ///
+    /// Direct access to individual operations within bundles using either:
+    ///   • Bundle number + position (e.g., 42 1337)
+    ///   • Global position (e.g., 420000)
+    ///
+    /// Global position format: (bundleNumber × 10,000) + position
+    /// Example: 88410345 = bundle 8841, position 345
+    #[command(alias = "operation", alias = "record")]
+    #[command(
+        after_help = "Examples:\n  \
+            # Get operation as JSON\n  \
+            plcbundle op get 42 1337\n  \
+            plcbundle op get 420000\n\n  \
+            # Show operation (formatted)\n  \
+            plcbundle op show 42 1337\n  \
+            plcbundle op show 88410345\n\n  \
+            # Find by CID\n  \
+            plcbundle op find bafyreig3..."
+    )]
+    Op {
+        #[command(subcommand)]
+        command: OpCommands,
+    },
+
     /// Display statistics about bundles
     Stats {
-        /// Bundle directory
-        #[arg(short = 'd', long, default_value = ".")]
-        dir: PathBuf,
-
         /// Bundle range
         #[arg(short, long)]
         bundles: Option<String>,
@@ -181,8 +192,79 @@ enum Commands {
     },
 }
 
+#[derive(Subcommand)]
+enum OpCommands {
+    /// Get operation as JSON (machine-readable)
+    ///
+    /// Supports two input formats:
+    ///   1. Bundle number + position: get 42 1337
+    ///   2. Global position: get 420000
+    ///
+    /// Global position = (bundleNumber × 10,000) + position
+    #[command(
+        after_help = "Examples:\n  \
+            # By bundle + position\n  \
+            plcbundle op get 42 1337\n\n  \
+            # By global position\n  \
+            plcbundle op get 88410345\n\n  \
+            # Pipe to jq\n  \
+            plcbundle op get 42 1337 | jq .did"
+    )]
+    Get {
+        /// Bundle number (or global position if only one arg)
+        bundle: u32,
+
+        /// Operation position within bundle (optional if using global position)
+        position: Option<usize>,
+    },
+
+    /// Show operation with formatted output
+    ///
+    /// Displays operation in human-readable format with:
+    ///   • Bundle location and global position
+    ///   • DID and CID
+    ///   • Timestamp
+    ///   • Nullification status
+    ///   • Parsed operation details
+    ///   • Performance metrics (when not quiet)
+    #[command(
+        after_help = "Examples:\n  \
+            # By bundle + position\n  \
+            plcbundle op show 42 1337\n\n  \
+            # By global position\n  \
+            plcbundle op show 88410345\n\n  \
+            # Quiet mode (minimal output)\n  \
+            plcbundle op show 42 1337 -q"
+    )]
+    Show {
+        /// Bundle number (or global position if only one arg)
+        bundle: u32,
+
+        /// Operation position within bundle (optional if using global position)
+        position: Option<usize>,
+    },
+
+    /// Find operation by CID across all bundles
+    ///
+    /// Searches the entire repository for an operation with the given CID
+    /// and returns its location (bundle + position).
+    ///
+    /// Note: This performs a full scan and can be slow on large repositories.
+    #[command(
+        after_help = "Examples:\n  \
+            # Find by CID\n  \
+            plcbundle op find bafyreig3tg4k...\n\n  \
+            # Use with op get\n  \
+            plcbundle op find bafyreig3... | awk '{print $3, $5}' | xargs plcbundle op get"
+    )]
+    Find {
+        /// CID to search for
+        cid: String,
+    },
+}
+
 #[derive(Debug, Clone, ValueEnum)]
-enum QueryModeArg {
+pub enum QueryModeArg {
     /// Auto-detect based on query
     Auto,
     /// Simple path mode (faster)
@@ -192,7 +274,7 @@ enum QueryModeArg {
 }
 
 #[derive(Debug, Clone, ValueEnum)]
-enum OutputFormat {
+pub enum OutputFormat {
     /// JSON Lines (one per line)
     Jsonl,
     /// Pretty JSON
@@ -204,7 +286,7 @@ enum OutputFormat {
 }
 
 #[derive(Debug, Clone, ValueEnum)]
-enum InfoFormat {
+pub enum InfoFormat {
     /// Human-readable output
     Human,
     /// JSON output
@@ -216,7 +298,7 @@ enum InfoFormat {
 }
 
 #[derive(Debug, Clone, ValueEnum)]
-enum ExportFormat {
+pub enum ExportFormat {
     Jsonl,
     Json,
     Csv,
@@ -224,7 +306,7 @@ enum ExportFormat {
 }
 
 #[derive(Debug, Clone, ValueEnum)]
-enum StatType {
+pub enum StatType {
     /// Summary statistics
     Summary,
     /// Operation type distribution
@@ -235,30 +317,7 @@ enum StatType {
     Timeline,
 }
 
-struct StdoutHandler {
-    lock: Mutex<()>,
-    stats_only: bool,
-}
-
-impl StdoutHandler {
-    fn new(stats_only: bool) -> Self {
-        Self {
-            lock: Mutex::new(()),
-            stats_only,
-        }
-    }
-}
-
-impl OutputHandler for StdoutHandler {
-    fn write_batch(&self, batch: &str) -> Result<()> {
-        if self.stats_only {
-            return Ok(());
-        }
-        let _lock = self.lock.lock().unwrap();
-        io::stdout().write_all(batch.as_bytes())?;
-        Ok(())
-    }
-}
+// StdoutHandler moved to commands::query module
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -266,7 +325,6 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Query {
             expression,
-            dir,
             bundles,
             threads,
             mode,
@@ -275,9 +333,9 @@ fn main() -> Result<()> {
             output,
             stats_only,
         } => {
-            cmd_query(
+            commands::query::cmd_query(
                 expression,
-                dir,
+                cli.dir,
                 bundles,
                 threads,
                 mode,
@@ -290,24 +348,21 @@ fn main() -> Result<()> {
             )?;
         }
         Commands::Info {
-            dir,
             detailed,
             bundle,
             format,
         } => {
-            cmd_info(dir, detailed, bundle, format, cli.verbose)?;
+            cmd_info(cli.dir, detailed, bundle, format, cli.verbose)?;
         }
         Commands::Verify {
-            dir,
             bundles,
             checksums,
             chain,
             threads,
         } => {
-            cmd_verify(dir, bundles, checksums, chain, threads, cli.quiet)?;
+            cmd_verify(cli.dir, bundles, checksums, chain, threads, cli.quiet)?;
         }
         Commands::Export {
-            dir,
             range,
             all,
             bundles,
@@ -319,151 +374,37 @@ fn main() -> Result<()> {
             op_type,
             compress,
         } => {
-            cmd_export(
-                dir, range, all, bundles, format, output, count, after,
+            commands::export::cmd_export(
+                cli.dir, range, all, bundles, format, output, count, after,
                 did, op_type, compress, cli.quiet, cli.verbose
             )?;
         }
+        Commands::Op { command } => {
+            match command {
+                OpCommands::Get { bundle, position } => {
+                    commands::op::cmd_op_get(cli.dir.clone(), bundle, position, cli.quiet)?;
+                }
+                OpCommands::Show { bundle, position } => {
+                    commands::op::cmd_op_show(cli.dir.clone(), bundle, position, cli.quiet)?;
+                }
+                OpCommands::Find { cid } => {
+                    commands::op::cmd_op_find(cli.dir.clone(), cid, cli.quiet)?;
+                }
+            }
+        }
         Commands::Stats {
-            dir,
             bundles,
             stat_type,
             format,
         } => {
-            cmd_stats(dir, bundles, stat_type, format)?;
+            cmd_stats(cli.dir, bundles, stat_type, format)?;
         }
     }
 
     Ok(())
 }
 
-fn cmd_query(
-    expression: String,
-    dir: PathBuf,
-    bundles_spec: Option<String>,
-    threads: usize,
-    mode: QueryModeArg,
-    batch_size: usize,
-    _format: OutputFormat,
-    _output: Option<PathBuf>,
-    stats_only: bool,
-    quiet: bool,
-    verbose: bool,
-) -> Result<()> {
-    let num_threads = if threads == 0 {
-        std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(1)
-    } else {
-        threads
-    };
-
-    // Auto-detect query mode
-    let query_mode = match mode {
-        QueryModeArg::Auto => {
-            if expression.contains('[') || expression.contains('|') || expression.contains('@') {
-                QueryMode::JmesPath
-            } else {
-                QueryMode::Simple
-            }
-        }
-        QueryModeArg::Simple => QueryMode::Simple,
-        QueryModeArg::Jmespath => QueryMode::JmesPath,
-    };
-
-    let options = OptionsBuilder::new()
-        .directory(dir)
-        .query(expression.clone())
-        .query_mode(query_mode)
-        .num_threads(num_threads)
-        .batch_size(batch_size)
-        .build();
-
-    let processor = Processor::new(options)?;
-    let index = processor.load_index()?;
-
-    if verbose && !quiet {
-        eprintln!("📦 Index: v{} ({})", index.version, index.origin);
-        eprintln!("📊 Total bundles: {}", index.last_bundle);
-    }
-
-    let bundle_numbers = parse_bundle_spec(bundles_spec, index.last_bundle)?;
-
-    if !quiet {
-        let mode_str = match query_mode {
-            QueryMode::Simple => "simple",
-            QueryMode::JmesPath => "jmespath",
-        };
-        eprintln!(
-            "🔍 Processing {} bundles | {} mode | {} threads\n",
-            bundle_numbers.len(),
-            mode_str,
-            num_threads
-        );
-    }
-
-    let pb = if quiet {
-        ProgressBar::hidden()
-    } else {
-        let pb = ProgressBar::new(bundle_numbers.len() as u64);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template(
-                    "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}",
-                )?
-                .progress_chars("█▓▒░ "),
-        );
-        pb
-    };
-
-    let start = Instant::now();
-    let output = Arc::new(StdoutHandler::new(stats_only));
-
-    let stats = processor.process(
-        &bundle_numbers,
-        output,
-        Some(|_, stats: &Stats| {
-            if !quiet {
-                let elapsed = start.elapsed().as_secs_f64();
-                let ops_per_sec = if elapsed > 0.0 {
-                    stats.operations as f64 / elapsed
-                } else {
-                    0.0
-                };
-                pb.set_message(format!(
-                    "✓ {} matches | {:.1} ops/s",
-                    format_number(stats.matches as u64),
-                    ops_per_sec
-                ));
-                pb.inc(1);
-            }
-        }),
-    )?;
-
-    pb.finish_and_clear();
-
-    let elapsed = start.elapsed();
-    let match_pct = if stats.operations > 0 {
-        (stats.matches as f64 / stats.operations as f64) * 100.0
-    } else {
-        0.0
-    };
-
-    if !quiet {
-        eprintln!("\n✅ Complete in {}", HumanDuration(elapsed));
-        eprintln!("   Operations: {} ({:.2}% matched)", 
-            format_number(stats.operations as u64), match_pct);
-        eprintln!("   Data processed: {}", format_bytes(stats.total_bytes));
-        if elapsed.as_secs_f64() > 0.0 {
-            eprintln!("   Throughput: {:.0} ops/sec | {}/s",
-                stats.operations as f64 / elapsed.as_secs_f64(),
-                format_bytes((stats.total_bytes as f64 / elapsed.as_secs_f64()) as u64)
-            );
-        }
-    }
-
-    Ok(())
-}
+// cmd_query moved to commands::query module
 
 fn cmd_info(
     dir: PathBuf,
@@ -482,8 +423,8 @@ fn cmd_info(
             println!("Origin:        {}", index.origin);
             println!("Last Bundle:   #{}", index.last_bundle);
             println!("Updated:       {}", index.updated_at);
-            println!("Total Size:    {}", format_bytes(index.total_size_bytes));
-            println!("Uncompressed:  {}", format_bytes(index.total_uncompressed_size_bytes));
+            println!("Total Size:    {}", commands::utils::format_bytes(index.total_size_bytes));
+            println!("Uncompressed:  {}", commands::utils::format_bytes(index.total_uncompressed_size_bytes));
             println!(
                 "Compression:   {:.1}%",
                 (1.0 - index.total_size_bytes as f64 / index.total_uncompressed_size_bytes as f64)
@@ -491,7 +432,7 @@ fn cmd_info(
             );
 
             if let Some(spec) = bundle_spec {
-                let bundles = parse_bundle_spec(Some(spec), index.last_bundle)?;
+                let bundles = commands::utils::parse_bundle_spec(Some(spec), index.last_bundle)?;
                 println!("\n📊 Bundle Details");
                 println!("───────────────────────────────────────");
                 for bundle_num in bundles {
@@ -526,11 +467,11 @@ fn cmd_info(
 fn print_bundle_info(meta: &BundleMetadata, detailed: bool, _verbose: bool) {
     println!("\nBundle #{}", meta.bundle_number);
     println!("  Time Range:  {} → {}", meta.start_time, meta.end_time);
-    println!("  Operations:  {}", format_number(meta.operation_count as u64));
-    println!("  DIDs:        {}", format_number(meta.did_count as u64));
+    println!("  Operations:  {}", commands::utils::format_number(meta.operation_count as u64));
+    println!("  DIDs:        {}", commands::utils::format_number(meta.did_count as u64));
     println!("  Size:        {} ({} compressed)",
-        format_bytes(meta.uncompressed_size),
-        format_bytes(meta.compressed_size)
+        commands::utils::format_bytes(meta.uncompressed_size),
+        commands::utils::format_bytes(meta.compressed_size)
     );
     if detailed {
         println!("  Hash:        {}", meta.hash);
@@ -554,7 +495,7 @@ fn cmd_verify(
     quiet: bool,
 ) -> Result<()> {
     let index = Index::load(&dir)?;
-    let bundle_numbers = parse_bundle_spec(bundles_spec, index.last_bundle)?;
+    let bundle_numbers = commands::utils::parse_bundle_spec(bundles_spec, index.last_bundle)?;
 
     if !quiet {
         eprintln!("🔍 Verifying {} bundles...", bundle_numbers.len());
@@ -566,299 +507,7 @@ fn cmd_verify(
     Ok(())
 }
 
-fn cmd_export(
-    dir: PathBuf,
-    range: Option<String>,
-    all: bool,
-    bundles: Option<String>, // Legacy flag
-    format: ExportFormat,
-    output: Option<PathBuf>,
-    count: Option<usize>,
-    after: Option<String>,
-    did: Option<String>,
-    op_type: Option<String>,
-    _compress: bool,
-    quiet: bool,
-    verbose: bool,
-) -> Result<()> {
-    use std::io::{BufWriter, Write};
-    use std::fs::File;
-    use std::io::BufRead;
-
-    // Load index to get max bundle and metadata
-    let index = plcbundle::Index::load(&dir)?;
-    let max_bundle = index.last_bundle;
-
-    // Determine bundle numbers to process
-    let bundle_numbers: Vec<u32> = if let Some(range_str) = range {
-        // Parse range like "1-100"
-        if range_str.contains('-') {
-            let parts: Vec<&str> = range_str.split('-').collect();
-            if parts.len() == 2 {
-                let start: u32 = parts[0].parse()?;
-                let end: u32 = parts[1].parse()?;
-                if start > end || start == 0 || end > max_bundle {
-                    anyhow::bail!("Invalid range: {}-{}", start, end);
-                }
-                (start..=end).collect()
-            } else {
-                anyhow::bail!("Invalid range format: {}", range_str);
-            }
-        } else {
-            // Single bundle number
-            let num: u32 = range_str.parse()?;
-            if num == 0 || num > max_bundle {
-                anyhow::bail!("Bundle number {} out of range", num);
-            }
-            vec![num]
-        }
-    } else if all {
-        (1..=max_bundle).collect()
-    } else if let Some(bundles_str) = bundles {
-        // Legacy --bundles flag
-        parse_bundle_spec(Some(bundles_str), max_bundle)?
-    } else {
-        anyhow::bail!("Must specify either --range, --all, or --bundles");
-    };
-
-    // Filter bundles by timestamp metadata if --after is specified
-    let bundle_numbers: Vec<u32> = if let Some(ref after_ts) = after {
-        bundle_numbers.into_iter()
-            .filter_map(|num| {
-                if let Some(meta) = index.get_bundle(num) {
-                    // Check if bundle's end_time is after the filter timestamp
-                    // If bundle ends before the filter, skip it
-                    if meta.end_time >= *after_ts {
-                        Some(num)
-                    } else {
-                        None
-                    }
-                } else {
-                    Some(num) // Include if metadata not found (will be checked during processing)
-                }
-            })
-            .collect()
-    } else {
-        bundle_numbers
-    };
-
-    if verbose && !quiet {
-        eprintln!("📦 Index: v{} ({})", index.version, index.origin);
-        eprintln!("📊 Processing {} bundles", bundle_numbers.len());
-        if let Some(ref count) = count {
-            eprintln!("🔢 Export limit: {} operations", format_number(*count as u64));
-        }
-        if let Some(ref after) = after {
-            eprintln!("⏰ After timestamp: {}", after);
-        }
-    }
-
-    // Open output with buffering
-    let writer: Box<dyn Write> = if let Some(output_path) = output {
-        Box::new(BufWriter::with_capacity(1024 * 1024, File::create(output_path)?))
-    } else {
-        Box::new(BufWriter::with_capacity(1024 * 1024, io::stdout()))
-    };
-    let mut writer = writer;
-
-    if !quiet {
-        eprintln!("📤 Exporting operations...");
-    }
-
-    let start = Instant::now();
-    let mut exported_count = 0;
-    let mut output_buffer = String::with_capacity(1024 * 1024); // 1MB buffer
-    const BATCH_SIZE: usize = 10000;
-
-    // Process bundles directly from files
-    for bundle_num in bundle_numbers {
-        // Check count limit
-        if let Some(limit) = count {
-            if exported_count >= limit {
-                break;
-            }
-        }
-
-        let bundle_path = dir.join(format!("{:06}.jsonl.zst", bundle_num));
-        if !bundle_path.exists() {
-            continue;
-        }
-
-        // Open and decode bundle file
-        let file = File::open(&bundle_path)?;
-        let decoder = zstd::Decoder::new(file)?;
-        let reader = std::io::BufReader::with_capacity(1024 * 1024, decoder);
-
-        // Fast path: no filters and Jsonl format - just pass through lines
-        let needs_parsing = after.is_some() || did.is_some() || op_type.is_some() || 
-                           matches!(format, ExportFormat::Json | ExportFormat::Csv | ExportFormat::Parquet);
-
-        if !needs_parsing {
-            // Fast path: no parsing needed, just copy lines
-            for line in reader.lines() {
-                // Check count limit
-                if let Some(limit) = count {
-                    if exported_count >= limit {
-                        break;
-                    }
-                }
-
-                let line = line?;
-                if line.is_empty() {
-                    continue;
-                }
-
-                output_buffer.push_str(&line);
-                output_buffer.push('\n');
-                exported_count += 1;
-
-                // Flush buffer when it gets large
-                if output_buffer.len() >= 1024 * 1024 {
-                    writer.write_all(output_buffer.as_bytes())?;
-                    output_buffer.clear();
-                }
-
-                // Progress update
-                if !quiet && exported_count % BATCH_SIZE == 0 {
-                    eprint!("\r   Exported: {} operations", format_number(exported_count as u64));
-                    io::stderr().flush()?;
-                }
-            }
-        } else {
-            // Slow path: need to parse for filtering or formatting
-            use sonic_rs::JsonValueTrait;
-
-            for line in reader.lines() {
-                // Check count limit
-                if let Some(limit) = count {
-                    if exported_count >= limit {
-                        break;
-                    }
-                }
-
-                let line = line?;
-                if line.is_empty() {
-                    continue;
-                }
-
-                // Parse JSON using sonic-rs for faster parsing
-                let data: sonic_rs::Value = match sonic_rs::from_str(&line) {
-                    Ok(data) => data,
-                    Err(_) => continue, // Skip invalid JSON
-                };
-
-                // Apply filters using sonic-rs Value API
-                if let Some(ref after_ts) = after {
-                    if let Some(created_at) = data.get("createdAt").or_else(|| data.get("created_at")) {
-                        if let Some(ts_str) = created_at.as_str() {
-                            if ts_str < after_ts.as_str() {
-                                continue;
-                            }
-                        } else {
-                            continue;
-                        }
-                    } else {
-                        continue;
-                    }
-                }
-
-                if let Some(ref did_filter) = did {
-                    if let Some(did_val) = data.get("did") {
-                        if let Some(did_str) = did_val.as_str() {
-                            if did_str != did_filter {
-                                continue;
-                            }
-                        } else {
-                            continue;
-                        }
-                    } else {
-                        continue;
-                    }
-                }
-
-                if let Some(ref op_type_filter) = op_type {
-                    if let Some(op_val) = data.get("operation") {
-                        let matches = if op_val.is_str() {
-                            op_val.as_str().unwrap() == op_type_filter
-                        } else if op_val.is_object() {
-                            if let Some(typ_val) = op_val.get("type") {
-                                typ_val.is_str() && typ_val.as_str().unwrap() == op_type_filter
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
-                        if !matches {
-                            continue;
-                        }
-                    } else {
-                        continue;
-                    }
-                }
-
-                // Format operation
-                let formatted = match format {
-                    ExportFormat::Jsonl => {
-                        // Already have the JSON string, use it directly
-                        line
-                    }
-                    ExportFormat::Json => {
-                        // Pretty print using sonic-rs
-                        sonic_rs::to_string_pretty(&data)?
-                    }
-                    ExportFormat::Csv => {
-                        let did = data.get("did").and_then(|v| v.as_str()).unwrap_or("");
-                        let op = data.get("operation").map(|v| sonic_rs::to_string(v).unwrap_or_default()).unwrap_or_default();
-                        let created_at = data.get("createdAt").or_else(|| data.get("created_at"))
-                            .and_then(|v| v.as_str()).unwrap_or("");
-                        let nullified = data.get("nullified").and_then(|v| v.as_bool()).unwrap_or(false);
-                        format!("{},{},{},{}", did, op, created_at, nullified)
-                    }
-                    ExportFormat::Parquet => {
-                        // Fall back to JSON for now
-                        sonic_rs::to_string(&data)?
-                    }
-                };
-
-                output_buffer.push_str(&formatted);
-                output_buffer.push('\n');
-                exported_count += 1;
-
-                // Flush buffer when it gets large
-                if output_buffer.len() >= 1024 * 1024 {
-                    writer.write_all(output_buffer.as_bytes())?;
-                    output_buffer.clear();
-                }
-
-                // Progress update
-                if !quiet && exported_count % BATCH_SIZE == 0 {
-                    eprint!("\r   Exported: {} operations", format_number(exported_count as u64));
-                    io::stderr().flush()?;
-                }
-            }
-        }
-    }
-
-    // Flush remaining buffer
-    if !output_buffer.is_empty() {
-        writer.write_all(output_buffer.as_bytes())?;
-    }
-    writer.flush()?;
-
-    if !quiet {
-        eprintln!("\r   Exported: {} operations", format_number(exported_count as u64));
-        let elapsed = start.elapsed();
-        eprintln!("✅ Complete in {}", HumanDuration(elapsed));
-        if elapsed.as_secs_f64() > 0.0 {
-            eprintln!("   Throughput: {:.0} ops/sec",
-                exported_count as f64 / elapsed.as_secs_f64()
-            );
-        }
-    }
-
-    Ok(())
-}
+// cmd_export moved to commands::export module
 
 fn cmd_stats(
     _dir: PathBuf,
@@ -868,48 +517,4 @@ fn cmd_stats(
 ) -> Result<()> {
     println!("Stats not yet implemented");
     Ok(())
-}
-
-fn parse_bundle_spec(spec: Option<String>, max_bundle: u32) -> Result<Vec<u32>> {
-    match spec {
-        None => Ok((1..=max_bundle).collect()),
-        Some(s) => {
-            if s.starts_with("latest:") {
-                let count: u32 = s.strip_prefix("latest:").unwrap().parse()?;
-                let start = max_bundle.saturating_sub(count - 1);
-                Ok((start..=max_bundle).collect())
-            } else {
-                parse_bundle_range(&s, max_bundle)
-            }
-        }
-    }
-}
-
-fn format_number(n: u64) -> String {
-    let s = n.to_string();
-    let mut result = String::new();
-    for (i, c) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            result.push(',');
-        }
-        result.push(c);
-    }
-    result.chars().rev().collect()
-}
-
-fn format_bytes(bytes: u64) -> String {
-    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
-    let mut size = bytes as f64;
-    let mut unit_idx = 0;
-
-    while size >= 1024.0 && unit_idx < UNITS.len() - 1 {
-        size /= 1024.0;
-        unit_idx += 1;
-    }
-
-    if unit_idx == 0 {
-        format!("{} {}", bytes, UNITS[0])
-    } else {
-        format!("{:.2} {}", size, UNITS[unit_idx])
-    }
 }

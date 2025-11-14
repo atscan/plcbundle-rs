@@ -69,6 +69,123 @@ impl BundleManager {
         Ok(self.filter_load_result(operations, &options))
     }
 
+    // === Single Operation Access ===
+    
+    /// Get a single operation as raw JSON (fastest, preserves field order)
+    /// 
+    /// This method uses frame-based access for efficient random reads.
+    /// Falls back to legacy sequential scan if no frame index is available.
+    pub fn get_operation_raw(&self, bundle_num: u32, position: usize) -> Result<String> {
+        let bundle_path = self.directory.join(format!("{:06}.jsonl.zst", bundle_num));
+        
+        if !bundle_path.exists() {
+            anyhow::bail!("Bundle {} not found", bundle_num);
+        }
+        
+        // Try frame-based access first (new format)
+        match self.get_operation_raw_with_frames(&bundle_path, position) {
+            Ok(json) => return Ok(json),
+            Err(e) => {
+                // Fall back to legacy sequential scan
+                // This happens for old bundles without frame index
+                if let Ok(json) = self.get_operation_raw_legacy(&bundle_path, position) {
+                    return Ok(json);
+                }
+                return Err(e);
+            }
+        }
+    }
+    
+    /// Frame-based operation access (new format with metadata)
+    fn get_operation_raw_with_frames(&self, bundle_path: &std::path::Path, position: usize) -> Result<String> {
+        use crate::bundle_format;
+        use std::io::{Read, Seek, SeekFrom};
+        
+        // Open file and read actual metadata frame size
+        let mut file = std::fs::File::open(bundle_path)?;
+        
+        // Read magic (4 bytes)
+        let mut magic_buf = [0u8; 4];
+        file.read_exact(&mut magic_buf)?;
+        let magic = u32::from_le_bytes(magic_buf);
+        
+        if magic != bundle_format::SKIPPABLE_MAGIC_METADATA {
+            anyhow::bail!("No metadata frame at start of bundle");
+        }
+        
+        // Read frame size (4 bytes)
+        let mut size_buf = [0u8; 4];
+        file.read_exact(&mut size_buf)?;
+        let frame_data_size = u32::from_le_bytes(size_buf) as i64;
+        
+        // Metadata frame total size = magic(4) + size(4) + data
+        let metadata_frame_size = 8 + frame_data_size;
+        
+        // Read the actual metadata
+        let mut metadata_data = vec![0u8; frame_data_size as usize];
+        file.read_exact(&mut metadata_data)?;
+        let metadata: bundle_format::BundleMetadata = serde_json::from_slice(&metadata_data)?;
+        
+        if metadata.frame_offsets.is_empty() {
+            anyhow::bail!("No frame offsets in metadata");
+        }
+        
+        // Now seek back to start and use the frame-based loader
+        file.seek(SeekFrom::Start(0))?;
+        bundle_format::load_operation_at_position(
+            &mut file,
+            position,
+            &metadata.frame_offsets,
+            metadata_frame_size,
+        )
+    }
+    
+    /// Legacy sequential scan (for old bundles without frame index)
+    fn get_operation_raw_legacy(&self, bundle_path: &std::path::Path, position: usize) -> Result<String> {
+        let file = std::fs::File::open(bundle_path)?;
+        let decoder = zstd::Decoder::new(file)?;
+        let reader = std::io::BufReader::new(decoder);
+        
+        use std::io::BufRead;
+        
+        for (idx, line_result) in reader.lines().enumerate() {
+            if idx == position {
+                return Ok(line_result?);
+            }
+        }
+        
+        anyhow::bail!("Operation position {} out of bounds", position)
+    }
+    
+    /// Get a single operation as parsed struct
+    /// 
+    /// This method retrieves the raw JSON and parses it into an Operation struct.
+    /// Use `get_operation_raw()` if you only need the JSON.
+    pub fn get_operation(&self, bundle_num: u32, position: usize) -> Result<Operation> {
+        let json = self.get_operation_raw(bundle_num, position)?;
+        let op: Operation = serde_json::from_str(&json)?;
+        Ok(op)
+    }
+    
+    /// Get operation with timing statistics (for CLI verbose mode)
+    pub fn get_operation_with_stats(&self, bundle_num: u32, position: usize) -> Result<OperationResult> {
+        let start = std::time::Instant::now();
+        let json = self.get_operation_raw(bundle_num, position)?;
+        let duration = start.elapsed();
+        
+        // Update stats
+        {
+            let mut stats = self.stats.write().unwrap();
+            stats.operations_read += 1;
+        }
+        
+        Ok(OperationResult {
+            raw_json: json.clone(),
+            size_bytes: json.len(),
+            load_duration: duration,
+        })
+    }
+
     // === Batch Operations ===
     pub fn get_operations_batch(&self, requests: Vec<OperationRequest>) -> Result<Vec<Operation>> {
         let mut results = Vec::new();
@@ -439,6 +556,13 @@ pub struct LoadResult {
     pub bundle_number: u32,
     pub operations: Vec<Operation>,
     pub metadata: Option<BundleMetadata>,
+}
+
+#[derive(Debug)]
+pub struct OperationResult {
+    pub raw_json: String,
+    pub size_bytes: usize,
+    pub load_duration: std::time::Duration,
 }
 
 #[derive(Debug, Clone)]
