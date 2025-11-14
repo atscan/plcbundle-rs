@@ -66,6 +66,22 @@ enum Commands {
         stats_only: bool,
     },
 
+    /// Initialize a new PLC bundle repository
+    ///
+    /// Creates a new repository with an empty index file. Similar to 'git init'.
+    #[command(
+        after_help = "Examples:\n  \
+            # Initialize in current directory\n  \
+            plcbundle init\n\n  \
+            # Initialize in specific directory\n  \
+            plcbundle init /path/to/bundles\n\n  \
+            # Set custom origin identifier\n  \
+            plcbundle init --origin my-node\n\n  \
+            # Force reinitialize existing repository\n  \
+            plcbundle init --force"
+    )]
+    Init(commands::init::InitCommand),
+
     /// Show index and bundle information
     Info {
         /// Show detailed bundle information
@@ -549,6 +565,10 @@ fn main() -> Result<()> {
                 cli.verbose,
             )?;
         }
+        Commands::Init(cmd) => {
+            commands::init::run(cmd)?;
+        }
+
         Commands::Info {
             detailed,
             bundle,

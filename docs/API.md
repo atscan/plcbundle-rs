@@ -14,7 +14,10 @@ The `plcbundle-rs` library provides a unified, high-level API through the `Bundl
 ```rust
 // === Initialization ===
 BundleManager::new(directory: PathBuf) -> Result<Self>
-BundleManager::with_cache_size(directory: PathBuf, cache_size: usize) -> Result<Self>
+BundleManager::with_verbose(verbose: bool) -> Self
+
+// === Repository Setup ===
+init_repository(directory: PathBuf, origin: String) -> Result<()>  // Creates plc_bundles.json
 
 // === Bundle Loading ===
 load_bundle(num: u32, options: LoadOptions) -> Result<LoadResult>
@@ -56,11 +59,153 @@ clear_caches()
 rebuild_did_index(progress_cb: Option<ProgressCallback>) -> Result<RebuildStats>
 get_did_index_stats() -> DIDIndexStats
 
+// === Sync Operations (Async) ===
+sync_next_bundle(client: &PLCClient) -> Result<u32>
+sync_once(client: &PLCClient) -> Result<usize>
+
+// === Mempool Operations ===
+get_mempool_stats() -> Result<MempoolStats>
+get_mempool_operations() -> Result<Vec<Operation>>
+add_to_mempool(ops: Vec<Operation>) -> Result<usize>
+clear_mempool() -> Result<()>
+
 // === Observability ===
 get_stats() -> ManagerStats
 get_last_bundle() -> u32
 directory() -> &PathBuf
 ```
+
+---
+
+## 11. Sync & Repository Management
+
+### Repository Initialization
+
+```rust
+// Standalone function (used by CLI init command)
+pub fn init_repository(directory: PathBuf, origin: String) -> Result<()>
+```
+
+**Purpose**: Initialize a new PLC bundle repository (like `git init`).
+
+**What it does:**
+- Creates directory if it doesn't exist
+- Creates empty `plc_bundles.json` index file
+- Sets origin identifier
+
+**CLI Usage:**
+```bash
+plcbundle-rs init
+plcbundle-rs init /path/to/bundles --origin my-node
+```
+
+### Sync from PLC Directory
+
+```rust
+pub async fn sync_next_bundle(&mut self, client: &PLCClient) -> Result<u32>
+```
+
+**Purpose**: Fetch operations from PLC directory and create next bundle.
+
+**What it does:**
+1. Gets boundary CIDs from last bundle (prevents duplicates)
+2. Fetches operations from PLC until mempool has 10,000
+3. Deduplicates using boundary CID logic
+4. Creates and saves bundle
+5. Returns bundle number
+
+```rust
+pub async fn sync_once(&mut self, client: &PLCClient) -> Result<usize>
+```
+
+**Purpose**: Sync until caught up with PLC directory (like `git fetch`).
+
+**Returns**: Number of bundles synced
+
+**CLI Usage:**
+```bash
+# Sync once
+plcbundle-rs sync
+
+# Continuous daemon
+plcbundle-rs sync --continuous --interval 30s
+
+# Max bundles
+plcbundle-rs sync --max-bundles 10
+```
+
+### PLC Client
+
+```rust
+pub struct PLCClient {
+    // Private fields
+}
+
+impl PLCClient {
+    pub fn new(base_url: impl Into<String>) -> Result<Self>
+    pub async fn fetch_operations(&self, after: &str, count: usize) -> Result<Vec<PLCOperation>>
+}
+```
+
+**Features:**
+- Rate limiting (90 requests/minute)
+- Automatic retries with exponential backoff
+- 429 (rate limit) handling
+
+### Mempool Operations
+
+```rust
+pub fn get_mempool_stats(&self) -> Result<MempoolStats>
+```
+
+**Purpose**: Get current mempool statistics.
+
+```rust
+pub struct MempoolStats {
+    pub count: usize,
+    pub can_create_bundle: bool,      // count >= 10,000
+    pub target_bundle: u32,
+    pub min_timestamp: DateTime<Utc>,
+    pub first_time: Option<DateTime<Utc>>,
+    pub last_time: Option<DateTime<Utc>>,
+    pub size_bytes: Option<usize>,
+    pub did_count: Option<usize>,
+}
+```
+
+```rust
+pub fn get_mempool_operations(&self) -> Result<Vec<Operation>>
+pub fn add_to_mempool(&self, ops: Vec<Operation>) -> Result<usize>
+pub fn clear_mempool(&self) -> Result<()>
+```
+
+**CLI Usage:**
+```bash
+plcbundle-rs mempool status
+plcbundle-rs mempool dump
+plcbundle-rs mempool clear
+```
+
+### Boundary CID Deduplication
+
+Critical helper functions for preventing duplicates across bundle boundaries:
+
+```rust
+pub fn get_boundary_cids(operations: &[Operation]) -> HashSet<String>
+```
+
+**Purpose**: Extract CIDs that share the same timestamp as the last operation.
+
+```rust
+pub fn strip_boundary_duplicates(
+    operations: Vec<Operation>,
+    prev_boundary: &HashSet<String>
+) -> Vec<Operation>
+```
+
+**Purpose**: Remove operations that were in the previous bundle's boundary.
+
+**Why this matters**: Operations can have identical timestamps. When creating bundles, the last N operations might share a timestamp. The next fetch might return these same operations again. Must deduplicate!
 
 ---
 
