@@ -682,6 +682,8 @@ async fn handle_did_document(
     let resolved_handle = if handle_resolve_time > 0 { Some(input.to_string()) } else { None };
 
     // Resolve DID
+    // Note: resolve_did_with_stats is fast (uses mmap'd DID index) so we call it directly
+    // rather than using spawn_blocking which adds ~100ms overhead
     let result = match state.manager.resolve_did_with_stats(&did) {
         Ok(r) => r,
         Err(e) => {

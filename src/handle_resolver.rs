@@ -20,6 +20,11 @@ impl HandleResolver {
         let base_url = base_url.into().trim_end_matches('/').to_string();
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
+            .pool_max_idle_per_host(10)
+            .pool_idle_timeout(Duration::from_secs(90))
+            .http2_keep_alive_interval(Some(Duration::from_secs(30)))
+            .http2_keep_alive_timeout(Duration::from_secs(10))
+            .tcp_keepalive(Some(Duration::from_secs(60)))
             .build()
             .expect("Failed to create HTTP client");
 
