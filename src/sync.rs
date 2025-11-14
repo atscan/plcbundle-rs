@@ -1,14 +1,12 @@
 // Sync module - PLC directory synchronization
 use crate::operations::Operation;
-use anyhow::{anyhow, Result};
-use chrono::{DateTime, Utc};
+use anyhow::Result;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::time::Duration;
 
 pub const BUNDLE_SIZE: usize = 10_000;
 const DEFAULT_RATE_LIMIT: usize = 90; // requests per minute
-const DEFAULT_FETCH_COUNT: usize = 1000;
 
 // ============================================================================
 // PLC Client
@@ -196,10 +194,6 @@ pub struct SyncStats {
 // ============================================================================
 // Helper Functions
 // ============================================================================
-
-fn parse_timestamp(s: &str) -> Result<DateTime<Utc>> {
-    Ok(DateTime::parse_from_rfc3339(s)?.with_timezone(&Utc))
-}
 
 #[cfg(test)]
 mod tests {

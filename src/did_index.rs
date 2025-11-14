@@ -3,7 +3,7 @@ use anyhow::Result;
 use memmap2::{Mmap, MmapOptions};
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{BufWriter, Write, BufRead};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
@@ -20,7 +20,6 @@ const DID_IDENTIFIER_LEN: usize = 24;
 
 const DIDINDEX_MAGIC: &[u8; 4] = b"PLCD";
 const DIDINDEX_VERSION: u32 = 4;
-const PREFIX_INDEX_SIZE: usize = 256;
 
 // ============================================================================
 // OpLocation - Packed 32-bit location with nullified flag
@@ -96,9 +95,9 @@ impl Config {
 // ============================================================================
 
 struct Shard {
-    shard_num: u8,
+    _shard_num: u8,
     mmap: Option<Mmap>,
-    file: Option<File>,
+    _file: Option<File>,
     last_used: AtomicU64,
     access_count: AtomicU64,
 }
@@ -106,9 +105,9 @@ struct Shard {
 impl Shard {
     fn new_empty(shard_num: u8) -> Self {
         Shard {
-            shard_num,
+            _shard_num: shard_num,
             mmap: None,
-            file: None,
+            _file: None,
             last_used: AtomicU64::new(unix_timestamp()),
             access_count: AtomicU64::new(0),
         }
@@ -119,9 +118,9 @@ impl Shard {
         let mmap = unsafe { MmapOptions::new().map(&file)? };
         
         Ok(Shard {
-            shard_num,
+            _shard_num: shard_num,
             mmap: Some(mmap),
-            file: Some(file),
+            _file: Some(file),
             last_used: AtomicU64::new(unix_timestamp()),
             access_count: AtomicU64::new(1),
         })
@@ -181,7 +180,7 @@ pub struct DIDLookupStats {
 // ============================================================================
 
 pub struct Manager {
-    base_dir: PathBuf,
+    _base_dir: PathBuf,
     index_dir: PathBuf,
     shard_dir: PathBuf,
     config_path: PathBuf,
@@ -212,7 +211,7 @@ impl Manager {
         };
 
         Ok(Manager {
-            base_dir,
+            _base_dir: base_dir,
             index_dir,
             shard_dir,
             config_path,
@@ -525,7 +524,6 @@ impl Manager {
         // Binary search with prefix index optimization
         let mut left = 0;
         let mut right = entry_count;
-        let original_right = right;
 
         // Use prefix index to narrow range
         if !identifier.is_empty() {

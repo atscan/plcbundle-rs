@@ -1,11 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
-use indicatif::{ProgressBar, ProgressStyle, HumanDuration};
 use plcbundle::*;
-use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 mod commands;
 
@@ -275,14 +271,6 @@ enum Commands {
             plcbundle sync --max-bundles 10"
     )]
     Sync(commands::sync::SyncCommand),
-
-    /// Interactive shell mode
-    #[cfg(feature = "interactive")]
-    Shell {
-        /// Bundle directory
-        #[arg(short = 'd', long, default_value = ".", env = "PLC_BUNDLE_DIR")]
-        dir: PathBuf,
-    },
 }
 
 #[derive(Subcommand)]

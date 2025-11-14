@@ -1,6 +1,6 @@
 // DID Index CLI commands
 use anyhow::Result;
-use plcbundle::{BundleManager, LoadOptions};
+use plcbundle::BundleManager;
 use std::path::PathBuf;
 use std::time::Instant;
 

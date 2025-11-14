@@ -392,7 +392,7 @@ pub extern "C" fn bundle_manager_verify_bundle(
     manager: *const CBundleManager,
     bundle_num: u32,
     check_hash: bool,
-    check_chain: bool,
+    _check_chain: bool,
     out_result: *mut CVerifyResult,
 ) -> i32 {
     if manager.is_null() || out_result.is_null() {
@@ -465,7 +465,7 @@ pub extern "C" fn bundle_manager_get_bundle_info(
     manager: *const CBundleManager,
     bundle_num: u32,
     include_operations: bool,
-    include_dids: bool,
+    _include_dids: bool,
     out_info: *mut CBundleInfo,
 ) -> i32 {
     if manager.is_null() || out_info.is_null() {
@@ -740,7 +740,7 @@ pub extern "C" fn bundle_manager_export(
     let manager = unsafe { &*manager };
     let spec = unsafe { &*spec };
 
-    use std::io::{BufRead, BufWriter, Write};
+    use std::io::BufRead;
     use std::fs::File;
     use crate::index::Index;
 

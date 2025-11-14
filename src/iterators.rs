@@ -68,14 +68,14 @@ impl Iterator for RangeIterator {
 }
 
 pub struct QueryIterator {
-    manager: Arc<BundleManager>,
-    spec: QuerySpec,
+    _manager: Arc<BundleManager>,
+    _spec: QuerySpec,
     // TODO: Implement query iterator
 }
 
 impl QueryIterator {
     pub fn new(manager: Arc<BundleManager>, spec: QuerySpec) -> Self {
-        Self { manager, spec }
+        Self { _manager: manager, _spec: spec }
     }
 }
 
