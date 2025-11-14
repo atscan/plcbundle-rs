@@ -63,7 +63,7 @@ pub struct ServerCommand {
     #[arg(long)]
     pub resolver: bool,
 
-    /// Handle resolver URL (e.g., https://quickdid.smokesignal.tools)
+    /// Handle resolver URL (defaults to quickdid.smokesignal.tools if --resolver is enabled)
     #[arg(long)]
     pub handle_resolver: Option<String>,
 
@@ -124,7 +124,20 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
     use std::net::SocketAddr;
 
     // Initialize manager with handle resolver if configured
-    let handle_resolver_url = cmd.handle_resolver.clone();
+    // If --resolver is enabled but --handle-resolver is not provided, use default
+    use plcbundle::DEFAULT_HANDLE_RESOLVER_URL;
+    
+    let handle_resolver_url = if cmd.resolver && cmd.handle_resolver.is_none() {
+        if cmd.verbose {
+            log::debug!("[Resolver] Using default handle resolver: {}", DEFAULT_HANDLE_RESOLVER_URL);
+        }
+        Some(DEFAULT_HANDLE_RESOLVER_URL.to_string())
+    } else {
+        if cmd.verbose && cmd.handle_resolver.is_some() {
+            log::debug!("[Resolver] Using custom handle resolver: {}", cmd.handle_resolver.as_ref().unwrap());
+        }
+        cmd.handle_resolver.clone()
+    };
     let manager = if cmd.sync {
         // Sync mode can auto-init
         BundleManager::with_handle_resolver(dir.clone(), handle_resolver_url.clone())
@@ -156,19 +169,88 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
             .context("Repository not found. Use 'plcbundle init' first or run with --sync")?
     };
 
-    let manager = Arc::new(manager);
+    // Log handle resolver configuration
+    if cmd.verbose {
+        if let Some(url) = manager.get_handle_resolver_base_url() {
+            log::debug!("[Resolver] Handle resolver configured: {}", url);
+        } else {
+            log::debug!("[Resolver] Handle resolver not configured");
+        }
+    }
 
     // Build/verify DID index if resolver enabled
     if cmd.resolver {
-        eprintln!("Building DID index...");
-        // TODO: Implement ensure_did_index with progress callback
-        // For now, just check if it exists
-        let _did_index = manager.directory().join(".plcbundle").join("did_index");
-        if !_did_index.exists() {
-            eprintln!("⚠️  DID index not found. DID resolution will not be available.");
-            eprintln!("    Run 'plcbundle index rebuild' to create the index.");
+        if cmd.verbose {
+            log::debug!("[Resolver] Checking DID index status...");
+        }
+        
+        let did_index_stats = manager.get_did_index_stats();
+        if cmd.verbose {
+            log::debug!("[Resolver] DID index stats: total_dids={}, total_entries={}", 
+                did_index_stats.total_dids, did_index_stats.total_entries);
+        }
+        
+        if did_index_stats.total_dids == 0 {
+            if cmd.verbose {
+                log::debug!("[Resolver] DID index is empty or missing");
+            }
+            
+            let last_bundle = manager.get_last_bundle();
+            if cmd.verbose {
+                log::debug!("[Resolver] Last bundle number: {}", last_bundle);
+            }
+            
+            if last_bundle == 0 {
+                eprintln!("⚠️  No bundles to index. DID resolution will not be available.");
+                eprintln!("    Sync bundles first with 'plcbundle sync' or 'plcbundle server --sync'");
+                if cmd.verbose {
+                    log::debug!("[Resolver] Skipping index build - no bundles available");
+                }
+            } else {
+                eprintln!("Building DID index...");
+                eprintln!("Indexing {} bundles\n", last_bundle);
+                
+                if cmd.verbose {
+                    log::debug!("[Resolver] Starting index rebuild for {} bundles", last_bundle);
+                }
+                
+                let verbose = cmd.verbose; // Copy for closure
+                let start_time = std::time::Instant::now();
+                manager.rebuild_did_index(Some(move |current, total| {
+                    if current % 10 == 0 || current == total {
+                        eprint!("\rProgress: {}/{} ({:.1}%)", current, total, 
+                            (current as f64 / total as f64) * 100.0);
+                    }
+                    if verbose && current % 100 == 0 {
+                        log::debug!("[Resolver] Index progress: {}/{} bundles", current, total);
+                    }
+                }))?;
+                
+                let elapsed = start_time.elapsed();
+                eprintln!();
+                
+                let stats = manager.get_did_index_stats();
+                eprintln!("✓ DID index built");
+                eprintln!("  Total DIDs: {}\n", stats.total_dids);
+                
+                if cmd.verbose {
+                    log::debug!("[Resolver] Index build completed in {:?}", elapsed);
+                    log::debug!("[Resolver] Final stats: total_dids={}, total_entries={}", 
+                        stats.total_dids, stats.total_entries);
+                }
+            }
+        } else {
+            if cmd.verbose {
+                log::debug!("[Resolver] DID index already exists with {} DIDs", did_index_stats.total_dids);
+            }
+        }
+    } else {
+        if cmd.verbose {
+            log::debug!("[Resolver] Resolver disabled, skipping DID index check");
         }
     }
+
+    let manager = Arc::new(manager);
 
     let addr = format!("{}:{}", cmd.host, cmd.port);
     let socket_addr: SocketAddr = addr.parse()

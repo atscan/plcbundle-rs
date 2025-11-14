@@ -6,6 +6,9 @@ use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Default handle resolver URL
+pub const DEFAULT_HANDLE_RESOLVER_URL: &str = "https://quickdid.smokesignal.tools";
+
 /// Client for resolving AT Protocol handles to DIDs via XRPC
 pub struct HandleResolver {
     base_url: String,

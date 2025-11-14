@@ -657,8 +657,8 @@ async fn handle_did_document(
     State(state): State<ServerState>,
     input: &str,
 ) -> impl IntoResponse {
-    // Resolve handle to DID
-    let (did, handle_resolve_time) = match state.manager.resolve_handle_or_did(input) {
+    // Resolve handle to DID (use async version)
+    let (did, handle_resolve_time) = match state.manager.resolve_handle_or_did_async(input).await {
         Ok((d, t)) => (d, t),
         Err(e) => {
             if e.to_string().contains("appears to be a handle") {
@@ -734,7 +734,7 @@ async fn handle_did_data(
     input: &str,
 ) -> impl IntoResponse {
     // Resolve handle to DID
-    let did = match state.manager.resolve_handle_or_did(input) {
+    let did = match state.manager.resolve_handle_or_did_async(input).await {
         Ok((d, _)) => d,
         Err(e) => {
             return (
@@ -791,7 +791,7 @@ async fn handle_did_audit_log(
     input: &str,
 ) -> impl IntoResponse {
     // Resolve handle to DID
-    let did = match state.manager.resolve_handle_or_did(input) {
+    let did = match state.manager.resolve_handle_or_did_async(input).await {
         Ok((d, _)) => d,
         Err(e) => {
             return (

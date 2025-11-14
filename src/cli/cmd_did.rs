@@ -7,19 +7,35 @@ use std::path::PathBuf;
 // DID RESOLVE - Convert DID to W3C DID Document
 // ============================================================================
 
-pub fn cmd_did_resolve(dir: PathBuf, did: String, verbose: bool) -> Result<()> {
-    let manager = BundleManager::new(dir)?;
+pub fn cmd_did_resolve(dir: PathBuf, input: String, handle_resolver_url: Option<String>, verbose: bool) -> Result<()> {
+    use plcbundle::DEFAULT_HANDLE_RESOLVER_URL;
     
-    log::info!("Resolving DID: {}", did);
+    // Use default resolver if none provided
+    let resolver_url = handle_resolver_url.or_else(|| {
+        Some(DEFAULT_HANDLE_RESOLVER_URL.to_string())
+    });
+    
+    // Initialize manager with handle resolver (default or provided)
+    let manager = BundleManager::with_handle_resolver(dir, resolver_url)?;
+    
+    // Resolve handle to DID if needed
+    let (did, handle_resolve_time) = manager.resolve_handle_or_did(&input)?;
+    
+    if handle_resolve_time > 0 {
+        log::info!("Resolved handle: {} → {} (in {}ms)", input, did, handle_resolve_time);
+    } else {
+        log::info!("Resolving DID: {}", did);
+    }
     
     // Get resolve result with stats
     let result = manager.resolve_did_with_stats(&did)?;
     
-    // Get DID index for shard calculation
-    let identifier = &did[8..]; // Strip "did:plc:" prefix
-    let shard_num = calculate_shard_for_display(identifier);
-    
-    log::debug!("DID {} -> identifier '{}' -> shard {:02x}", did, identifier, shard_num);
+    // Get DID index for shard calculation (only for PLC DIDs)
+    if did.starts_with("did:plc:") {
+        let identifier = &did[8..]; // Strip "did:plc:" prefix
+        let shard_num = calculate_shard_for_display(identifier);
+        log::debug!("DID {} -> identifier '{}' -> shard {:02x}", did, identifier, shard_num);
+    }
     
     if let Some(stats) = &result.shard_stats {
         log::debug!("Shard {:02x} loaded, size: {} bytes", result.shard_num, stats.shard_size);
@@ -37,6 +53,9 @@ pub fn cmd_did_resolve(dir: PathBuf, did: String, verbose: bool) -> Result<()> {
     }
     
     if verbose {
+        if handle_resolve_time > 0 {
+            log::info!("Handle resolution: {}ms", handle_resolve_time);
+        }
         log::info!("Index: {:?} | Load: {:?} | Total: {:?}",
             result.index_time, result.load_time, result.total_time);
         log::info!("Source: bundle {:06}, position {}\n", result.bundle_number, result.position);

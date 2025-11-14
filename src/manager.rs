@@ -1381,9 +1381,58 @@ impl BundleManager {
         bundled_ops + mempool_ops
     }
     
+    /// Resolve handle to DID or validate DID format (async version)
+    /// Returns (did, handle_resolve_time_ms)
+    /// Use this version when calling from async code (e.g., server handlers)
+    pub async fn resolve_handle_or_did_async(&self, input: &str) -> Result<(String, u64)> {
+        use std::time::Instant;
+        
+        let input = input.trim();
+        
+        // Normalize handle format (remove at://, @ prefixes)
+        let normalized = if !input.starts_with("did:") {
+            handle_resolver::normalize_handle(input)
+        } else {
+            input.to_string()
+        };
+        
+        // If already a DID, validate and return
+        if normalized.starts_with("did:plc:") {
+            crate::resolver::validate_did_format(&normalized)?;
+            return Ok((normalized, 0));
+        }
+        
+        // Support did:web too
+        if normalized.starts_with("did:web:") {
+            return Ok((normalized, 0));
+        }
+        
+        // It's a handle - need resolver
+        let resolver = match &self.handle_resolver {
+            Some(r) => r,
+            None => {
+                anyhow::bail!(
+                    "Input '{}' appears to be a handle, but handle resolver is not configured\n\n\
+                    Configure resolver with:\n\
+                      plcbundle --handle-resolver {} did resolve {}\n\n\
+                    Or set default in config",
+                    normalized, crate::handle_resolver::DEFAULT_HANDLE_RESOLVER_URL, normalized
+                );
+            }
+        };
+        
+        // Resolve handle (async operation)
+        let resolve_start = Instant::now();
+        let did = resolver.resolve_handle(&normalized).await?;
+        let resolve_time = resolve_start.elapsed();
+        
+        Ok((did, resolve_time.as_millis() as u64))
+    }
+    
     /// Resolve handle to DID or validate DID format
     /// Returns (did, handle_resolve_time_ms)
     /// This is a synchronous wrapper that uses tokio runtime for async resolution
+    /// For async code, use resolve_handle_or_did_async instead
     pub fn resolve_handle_or_did(&self, input: &str) -> Result<(String, u64)> {
         use std::time::Instant;
         
@@ -1414,27 +1463,19 @@ impl BundleManager {
                 anyhow::bail!(
                     "Input '{}' appears to be a handle, but handle resolver is not configured\n\n\
                     Configure resolver with:\n\
-                      plcbundle --handle-resolver https://quickdid.smokesignal.tools did resolve {}\n\n\
+                      plcbundle --handle-resolver {} did resolve {}\n\n\
                     Or set default in config",
-                    normalized, normalized
+                    normalized, crate::handle_resolver::DEFAULT_HANDLE_RESOLVER_URL, normalized
                 );
             }
         };
         
         // Use tokio runtime to resolve handle (async operation)
+        // Not in a runtime - safe to create one and use block_on
         let resolve_start = Instant::now();
-        let did = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                // We're in an async context, use the current handle
-                handle.block_on(resolver.resolve_handle(&normalized))?
-            }
-            Err(_) => {
-                // Create a new runtime if we're not in an async context
-                let runtime = tokio::runtime::Runtime::new()
-                    .map_err(|e| anyhow::anyhow!("Failed to create tokio runtime: {}", e))?;
-                runtime.block_on(resolver.resolve_handle(&normalized))?
-            }
-        };
+        let runtime = tokio::runtime::Runtime::new()
+            .map_err(|e| anyhow::anyhow!("Failed to create tokio runtime: {}", e))?;
+        let did = runtime.block_on(resolver.resolve_handle(&normalized))?;
         let resolve_time = resolve_start.elapsed();
         
         Ok((did, resolve_time.as_millis() as u64))
