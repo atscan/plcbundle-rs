@@ -3,10 +3,11 @@ use anyhow::{Result, Context};
 use clap::Args;
 use std::path::PathBuf;
 use tokio::time::Duration;
-use super::utils;
 
 #[cfg(feature = "server")]
 use plcbundle::BundleManager;
+#[cfg(feature = "server")]
+use super::utils;
 #[cfg(feature = "server")]
 use std::sync::Arc;
 #[cfg(feature = "server")]
@@ -102,6 +103,7 @@ fn parse_duration(s: &str) -> Result<Duration> {
 pub fn run(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
     #[cfg(not(feature = "server"))]
     {
+        let _ = (cmd, dir); // Suppress unused warnings when server feature is disabled
         anyhow::bail!("Server feature is not enabled. Rebuild with --features server");
     }
 
@@ -277,7 +279,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
     let app = server.router();
 
     // Create shutdown notification channel for immediate cancellation
-    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
     // Setup immediate shutdown signal
     let shutdown_tx_clone = shutdown_tx.clone();

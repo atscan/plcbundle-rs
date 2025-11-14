@@ -532,7 +532,7 @@ fn show_hash_mismatches(mismatches: &[HashMismatch], verbose: bool, origins_matc
     }
 }
 
-fn analyze_chain_break(mismatches: &[HashMismatch], local_range: &Option<(u32, u32)>, target_range: &Option<(u32, u32)>) {
+fn analyze_chain_break(mismatches: &[HashMismatch], _local_range: &Option<(u32, u32)>, _target_range: &Option<(u32, u32)>) {
     if mismatches.is_empty() {
         return;
     }

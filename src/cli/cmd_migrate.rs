@@ -5,7 +5,7 @@ use plcbundle::BundleManager;
 use std::path::PathBuf;
 use std::time::Instant;
 use super::progress::ProgressBar;
-use super::utils::{format_bytes, format_number};
+use super::utils::format_bytes;
 use plcbundle::bundle_format;
 
 #[derive(Args)]
@@ -104,18 +104,11 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
         };
 
         if needs_migrate {
-            let old_compression_ratio = if meta.compressed_size > 0 {
-                meta.uncompressed_size as f64 / meta.compressed_size as f64
-            } else {
-                0.0
-            };
-
             needs_migration.push(BundleMigrationInfo {
                 bundle_number: meta.bundle_number,
                 old_size: meta.compressed_size,
                 uncompressed_size: meta.uncompressed_size,
                 old_format,
-                old_compression_ratio,
             });
             total_size += meta.compressed_size;
             *format_counts.entry(needs_migration.last().unwrap().old_format.clone()).or_insert(0) += 1;
@@ -221,7 +214,7 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
         total_old_uncompressed += info.uncompressed_size;
 
         match result {
-            Ok((size_diff, new_uncompressed_size, new_compressed_size)) => {
+            Ok((size_diff, new_uncompressed_size, _new_compressed_size)) => {
                 success += 1;
                 hash_changes.push(info.bundle_number);
 
@@ -379,7 +372,6 @@ struct BundleMigrationInfo {
     old_size: u64,
     uncompressed_size: u64,
     old_format: String,
-    old_compression_ratio: f64,
 }
 
 fn measure_metadata_size(bundle_path: &PathBuf) -> Result<u64> {

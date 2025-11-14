@@ -5,7 +5,6 @@ use anyhow::Result;
 use serde::Deserialize;
 use std::any::Any;
 use std::collections::HashSet;
-use std::io::IsTerminal;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
