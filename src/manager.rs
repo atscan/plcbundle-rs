@@ -662,45 +662,66 @@ impl BundleManager {
     /// Fetch and save next bundle from PLC directory
     pub async fn sync_next_bundle(&mut self, client: &crate::sync::PLCClient) -> Result<u32> {
         use crate::sync::{get_boundary_cids, strip_boundary_duplicates, BUNDLE_SIZE};
+        use std::time::Instant;
 
         let next_bundle_num = self.get_last_bundle() + 1;
+        let bundle_start = Instant::now();
 
         // Get boundary CIDs from last bundle to prevent duplicates
-        let prev_boundary = if next_bundle_num > 1 {
+        let (mut after_time, prev_boundary) = if next_bundle_num > 1 {
             let last = self.load_bundle(next_bundle_num - 1, LoadOptions::default())?;
-            get_boundary_cids(&last.operations)
+            let boundary = get_boundary_cids(&last.operations);
+            let cursor = last.operations.last()
+                .map(|op| op.created_at.clone())
+                .unwrap_or_default();
+            
+            if self.verbose {
+                log::info!("Loaded {} boundary CIDs from bundle {:06} (at {})", 
+                    boundary.len(), next_bundle_num - 1, cursor);
+            }
+            
+            (cursor, boundary)
         } else {
-            HashSet::new()
+            ("1970-01-01T00:00:00Z".to_string(), HashSet::new())
         };
 
-        // Get last timestamp
-        let mut after_time = if next_bundle_num > 1 {
-            let index = self.index.read().unwrap();
-            index
-                .get_bundle(next_bundle_num - 1)
-                .map(|m| m.end_time.clone())
-                .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
-        } else {
-            "1970-01-01T00:00:00Z".to_string()
-        };
+        log::debug!("[DEBUG] Preparing bundle {:06} (mempool: {} ops)...",
+            next_bundle_num, self.get_mempool_stats().map(|s| s.count).unwrap_or(0));
+        log::debug!("[DEBUG] Starting cursor: {}", if after_time.is_empty() || after_time == "1970-01-01T00:00:00Z" { "(none)" } else { &after_time });
+        
+        if !prev_boundary.is_empty() && self.verbose {
+            log::info!("  Starting with {} boundary CIDs from previous bundle", prev_boundary.len());
+        }
 
         // Ensure mempool is initialized
         self.get_mempool()?;
 
         // Fetch until we have 10,000 operations
-        let mut attempts = 0;
+        let mut fetch_num = 0;
+        let mut total_fetched = 0;
+        let mut total_dupes = 0;
+        let mut total_boundary_dupes = 0;
+        let fetch_start = Instant::now();
         const MAX_ATTEMPTS: usize = 20;
 
-        while attempts < MAX_ATTEMPTS {
+        while fetch_num < MAX_ATTEMPTS {
             let stats = self.get_mempool_stats()?;
 
             if stats.count >= BUNDLE_SIZE {
                 break;
             }
 
-            // Fetch operations from PLC
+            fetch_num += 1;
             let needed = BUNDLE_SIZE - stats.count;
-            let plc_ops = client.fetch_operations(&after_time, needed).await?;
+            let request_count = needed.min(1000);
+
+            if self.verbose {
+                log::info!("  Fetch #{}: requesting {} (need {} more, have {}/{})",
+                    fetch_num, request_count, needed, stats.count, BUNDLE_SIZE);
+            }
+
+            let fetch_op_start = Instant::now();
+            let plc_ops = client.fetch_operations(&after_time, request_count).await?;
 
             if plc_ops.is_empty() {
                 anyhow::bail!(
@@ -710,26 +731,73 @@ impl BundleManager {
                 );
             }
 
+            let fetched_count = plc_ops.len();
+            total_fetched += fetched_count;
+
             // Convert and deduplicate
             let mut ops: Vec<Operation> = plc_ops.into_iter().map(Into::into).collect();
+            let before_dedup = ops.len();
             ops = strip_boundary_duplicates(ops, &prev_boundary);
+            let after_dedup = ops.len();
+            
+            let boundary_removed = before_dedup - after_dedup;
+            if boundary_removed > 0 {
+                total_boundary_dupes += boundary_removed;
+                if self.verbose {
+                    log::info!("  Stripped {} boundary duplicates from fetch", boundary_removed);
+                }
+            }
 
             if ops.is_empty() {
                 anyhow::bail!("All fetched operations were duplicates");
             }
 
             // Add to mempool
-            self.add_to_mempool(ops)?;
+            let added = self.add_to_mempool(ops)?;
+            let dupes_in_fetch = after_dedup - added;
+            total_dupes += dupes_in_fetch;
 
-            // Update cursor
-            if let Some(last_time) = self.get_mempool_stats()?.last_time {
-                after_time = last_time.to_rfc3339();
+            let fetch_duration = fetch_op_start.elapsed();
+            let new_stats = self.get_mempool_stats()?;
+            let ops_per_sec = if fetch_duration.as_secs_f64() > 0.0 {
+                added as f64 / fetch_duration.as_secs_f64()
+            } else {
+                0.0
+            };
+
+            if self.verbose {
+                if boundary_removed > 0 || dupes_in_fetch > 0 {
+                    log::info!("  → +{} unique ({} dupes, {} boundary) in {:.9}s • Running: {}/{} ({:.0} ops/sec)",
+                        added, dupes_in_fetch, boundary_removed, fetch_duration.as_secs_f64(),
+                        new_stats.count, BUNDLE_SIZE, ops_per_sec);
+                } else {
+                    log::info!("  → +{} unique in {:.9}s • Running: {}/{} ({:.0} ops/sec)",
+                        added, fetch_duration.as_secs_f64(), new_stats.count, BUNDLE_SIZE, ops_per_sec);
+                }
             }
 
-            attempts += 1;
+            // Update cursor
+            if let Some(last_time) = new_stats.last_time {
+                after_time = last_time.to_rfc3339();
+            }
+        }
+
+        let fetch_total_duration = fetch_start.elapsed();
+        let dedup_pct = if total_fetched > 0 {
+            (total_dupes + total_boundary_dupes) as f64 / total_fetched as f64 * 100.0
+        } else {
+            0.0
+        };
+
+        if self.verbose {
+            let stats = self.get_mempool_stats()?;
+            log::info!("  ✓ Collected {} unique ops from {} fetches ({:.1}% dedup)",
+                stats.count, fetch_num, dedup_pct);
         }
 
         // Take 10,000 operations and create bundle
+        log::debug!("DEBUG: Calling operations.SaveBundle with bundle={}", next_bundle_num);
+        
         let operations = {
             let mut mempool = self.mempool.write().unwrap();
             let mem = mempool.as_mut().ok_or_else(|| anyhow::anyhow!("Mempool not initialized"))?;
@@ -740,16 +808,40 @@ impl BundleManager {
             anyhow::bail!("No operations to create bundle");
         }
 
-        if self.verbose {
-            log::info!("Creating bundle {} with {} operations", next_bundle_num, operations.len());
-        }
+        log::debug!("DEBUG: SaveBundle SUCCESS, setting bundle fields");
 
         // Save bundle to disk
+        let save_start = Instant::now();
         self.save_bundle(next_bundle_num, operations)?;
+        let save_duration = save_start.elapsed();
 
-        if self.verbose {
-            log::info!("Bundle {} created successfully", next_bundle_num);
-        }
+        log::debug!("DEBUG: Adding bundle {} to index", next_bundle_num);
+        log::debug!("DEBUG: Index now has {} bundles", next_bundle_num);
+        log::debug!("DEBUG: Index saved, last bundle = {}", next_bundle_num);
+
+        // Get bundle info for display
+        let (short_hash, age_str) = {
+            let index = self.index.read().unwrap();
+            let bundle_meta = index.get_bundle(next_bundle_num).unwrap();
+            let hash = bundle_meta.content_hash[..7].to_string();
+            
+            // Calculate age
+            let created_time = chrono::DateTime::parse_from_rfc3339(&bundle_meta.start_time)
+                .unwrap()
+                .with_timezone(&chrono::Utc);
+            let now = chrono::Utc::now();
+            let age = now.signed_duration_since(created_time);
+            let age_str = format_age(age);
+            
+            (hash, age_str)
+        };
+
+        log::info!("→ Bundle {:06} | {} | fetch: {:.3}s ({} reqs) | {}",
+            next_bundle_num, short_hash, fetch_total_duration.as_secs_f64(),
+            fetch_num, age_str);
+
+        log::debug!("DEBUG: Bundle done = {}, finish duration = {}ms",
+            next_bundle_num, save_duration.as_millis());
 
         Ok(next_bundle_num)
     }
@@ -913,7 +1005,6 @@ impl BundleManager {
             verbose: self.verbose,
         }
     }
-
     fn load_bundle_from_disk(&self, path: &PathBuf) -> Result<Vec<Operation>> {
         use std::io::BufRead;
         
@@ -1020,6 +1111,32 @@ pub struct QuerySpec {
     pub filter: Option<OperationFilter>,
     pub query: String,
     pub mode: QueryMode,
+}
+
+// Helper function to format age duration
+fn format_age(duration: chrono::Duration) -> String {
+    let days = duration.num_days();
+    if days >= 365 {
+        let years = days as f64 / 365.25;
+        format!("{:.1} years ago", years)
+    } else if days >= 30 {
+        let months = days as f64 / 30.0;
+        format!("{:.1} months ago", months)
+    } else if days > 0 {
+        format!("{} days ago", days)
+    } else {
+        let hours = duration.num_hours();
+        if hours > 0 {
+            format!("{} hours ago", hours)
+        } else {
+            let mins = duration.num_minutes();
+            if mins > 0 {
+                format!("{} minutes ago", mins)
+            } else {
+                "just now".to_string()
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
