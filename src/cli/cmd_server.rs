@@ -333,7 +333,6 @@ async fn run_server_sync_loop(
     verbose: bool,
 ) {
     use plcbundle::sync::PLCClient;
-    use tokio::sync::Mutex;
     use tokio::time::sleep;
 
     // Create PLC client
@@ -345,12 +344,14 @@ async fn run_server_sync_loop(
         }
     };
 
-    // Wrap manager in Mutex for mutable access during sync
-    // Note: This will block other operations during sync, but sync is infrequent
-    let manager_mutex = Arc::new(Mutex::new(()));
     let mut total_synced = 0u32;
     let mut is_initial_sync = true;
     let mut initial_sync_start_bundle = 0u32;
+
+    // Get initial bundle count if needed
+    if is_initial_sync {
+        initial_sync_start_bundle = manager.get_last_bundle();
+    }
 
     eprintln!("[Sync] Starting initial sync...");
 
@@ -359,39 +360,21 @@ async fn run_server_sync_loop(
     }
 
     loop {
-        // Try to acquire lock for sync operation
-        let sync_result = {
-            let _guard = manager_mutex.lock().await;
-
-            // Get mutable access by cloning and recreating
-            let dir = manager.directory().clone();
-            let mut manager_clone = match BundleManager::new(dir) {
-                Ok(m) => {
-                    if is_initial_sync && initial_sync_start_bundle == 0 {
-                        initial_sync_start_bundle = m.get_last_bundle();
-                    }
-                    m.with_verbose(verbose || is_initial_sync)
-                },
-                Err(e) => {
-                    eprintln!("[Sync] Failed to recreate manager: {}", e);
-                    sleep(interval).await;
-                    continue;
-                }
-            };
-
-            // Run single sync attempt
-            manager_clone.sync_next_bundle(&client).await
-        };
+        // Use the shared manager directly - all mutations go through internal locks
+        let sync_result = manager.sync_next_bundle(&client).await;
 
         match sync_result {
-            Ok(plcbundle::SyncResult::BundleCreated(bundle_num)) => {
+            Ok(plcbundle::SyncResult::BundleCreated { bundle_num, mempool_count, duration_ms }) => {
                 total_synced += 1;
 
                 // During initial sync, always show progress
                 if is_initial_sync {
-                    eprintln!("[Sync] ✓ Bundle {:06} synced ({} bundles)", bundle_num, total_synced);
-                } else if verbose {
-                    eprintln!("[Sync] ✓ Bundle {:06} created (total: {})", bundle_num, total_synced);
+                    eprintln!("[Sync] ✓ Bundle {:06} synced ({} bundles) | mempool: {} | time: {}ms",
+                        bundle_num, total_synced, mempool_count, duration_ms);
+                } else {
+                    // Always show bundle creation in monitoring mode (not just verbose)
+                    eprintln!("[Sync] ✓ Bundle {:06} | mempool: {} | time: {}ms",
+                        bundle_num, mempool_count, duration_ms);
                 }
 
                 // Check max bundles limit
@@ -400,6 +383,14 @@ async fn run_server_sync_loop(
                         eprintln!("[Sync] Reached max bundles limit ({})", max_bundles);
                     }
                     break;
+                }
+
+                // During initial sync, sleep briefly (500ms) to avoid hammering the API
+                // After initial sync, use the full interval
+                if is_initial_sync {
+                    sleep(Duration::from_millis(500)).await;
+                } else {
+                    sleep(interval).await;
                 }
             }
             Ok(plcbundle::SyncResult::CaughtUp { next_bundle, mempool_count, new_ops, fetch_duration_ms }) => {
@@ -412,24 +403,26 @@ async fn run_server_sync_loop(
                     }
                     eprintln!("[Sync] Now monitoring for new operations (interval: {:?})...", interval);
                 } else {
-                    // Show mempool status when caught up during monitoring
-                    // Always show if there are new ops, or show all updates in verbose mode
+                    // Always show mempool status when caught up (not just when new_ops > 0 or verbose)
                     if new_ops > 0 {
                         eprintln!("[Sync] ✓ Bundle {:06} | mempool: {} ({:+}) | time: {}ms",
                             next_bundle, mempool_count, new_ops as i32, fetch_duration_ms);
-                    } else if verbose {
+                    } else {
+                        // Show even when no new ops in non-verbose mode
                         eprintln!("[Sync] ✓ Bundle {:06} | mempool: {} | time: {}ms",
                             next_bundle, mempool_count, fetch_duration_ms);
                     }
                 }
+
+                // Always sleep for the full interval when caught up (monitoring mode)
+                sleep(interval).await;
             }
             Err(e) => {
                 eprintln!("[Sync] Error during sync: {}", e);
+                // On error, sleep briefly before retrying
+                sleep(Duration::from_secs(1)).await;
             }
         }
-
-        // Sleep for interval before next sync
-        sleep(interval).await;
     }
 
     if verbose {

@@ -58,20 +58,20 @@ pub fn run(cmd: SyncCommand) -> Result<()> {
         }
 
         let client = PLCClient::new(&cmd.plc)?;
-        let mut manager = BundleManager::new(cmd.dir)?.with_verbose(cmd.verbose);
+        let manager = BundleManager::new(cmd.dir)?.with_verbose(cmd.verbose);
 
         if cmd.continuous {
-            run_continuous(&client, &mut manager, cmd.interval, cmd.quiet).await
+            run_continuous(&client, &manager, cmd.interval, cmd.quiet).await
         } else {
             let max_bundles = if cmd.max_bundles > 0 { Some(cmd.max_bundles) } else { None };
-            run_once(&client, &mut manager, max_bundles, cmd.quiet).await
+            run_once(&client, &manager, max_bundles, cmd.quiet).await
         }
     })
 }
 
 async fn run_once(
     client: &PLCClient,
-    manager: &mut BundleManager,
+    manager: &BundleManager,
     max_bundles: Option<usize>,
     quiet: bool,
 ) -> Result<()> {
@@ -90,7 +90,7 @@ async fn run_once(
 
 async fn run_continuous(
     client: &PLCClient,
-    manager: &mut BundleManager,
+    manager: &BundleManager,
     interval: Duration,
     quiet: bool,
 ) -> Result<()> {

@@ -16,7 +16,11 @@ use chrono::{DateTime, Utc};
 #[derive(Debug, Clone)]
 pub enum SyncResult {
     /// Successfully created a bundle
-    BundleCreated(u32),
+    BundleCreated {
+        bundle_num: u32,
+        mempool_count: usize,
+        duration_ms: u64,
+    },
     /// Caught up to latest PLC data, mempool has partial operations
     CaughtUp {
         next_bundle: u32,
@@ -702,7 +706,7 @@ impl BundleManager {
     // === Sync Operations ===
 
     /// Validate and clean repository state before sync
-    fn validate_sync_state(&mut self) -> Result<()> {
+    fn validate_sync_state(&self) -> Result<()> {
         let last_bundle = self.get_last_bundle();
         let next_bundle_num = last_bundle + 1;
         
@@ -824,7 +828,7 @@ impl BundleManager {
     }
 
     /// Fetch and save next bundle from PLC directory
-    pub async fn sync_next_bundle(&mut self, client: &crate::sync::PLCClient) -> Result<SyncResult> {
+    pub async fn sync_next_bundle(&self, client: &crate::sync::PLCClient) -> Result<SyncResult> {
         use crate::sync::{get_boundary_cids, strip_boundary_duplicates};
         use std::time::Instant;
 
@@ -1090,19 +1094,27 @@ impl BundleManager {
         log::debug!("Bundle done = {}, finish duration = {}ms",
             next_bundle_num, save_duration.as_millis());
 
-        Ok(SyncResult::BundleCreated(next_bundle_num))
+        // Get mempool count after clearing (should be 0, but check anyway)
+        let mempool_count = self.get_mempool_stats().map(|s| s.count).unwrap_or(0);
+        let total_duration_ms = (fetch_total_duration + save_duration).as_millis() as u64;
+
+        Ok(SyncResult::BundleCreated {
+            bundle_num: next_bundle_num,
+            mempool_count,
+            duration_ms: total_duration_ms,
+        })
     }
 
     /// Run single sync cycle
     ///
     /// If max_bundles is Some(n), stop after syncing n bundles
     /// If max_bundles is None, sync until caught up
-    pub async fn sync_once(&mut self, client: &crate::sync::PLCClient, max_bundles: Option<usize>) -> Result<usize> {
+    pub async fn sync_once(&self, client: &crate::sync::PLCClient, max_bundles: Option<usize>) -> Result<usize> {
         let mut synced = 0;
 
         loop {
             match self.sync_next_bundle(client).await {
-                Ok(SyncResult::BundleCreated(_)) => {
+                Ok(SyncResult::BundleCreated { .. }) => {
                     synced += 1;
 
                     // Check if we've reached the limit
@@ -1126,7 +1138,7 @@ impl BundleManager {
     }
 
     /// Save bundle to disk with compression and index updates
-    fn save_bundle(&mut self, bundle_num: u32, operations: Vec<Operation>) -> Result<()> {
+    fn save_bundle(&self, bundle_num: u32, operations: Vec<Operation>) -> Result<()> {
         use anyhow::Context;
         use std::collections::HashSet;
         use std::fs::File;
