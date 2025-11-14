@@ -460,6 +460,11 @@ fn display_comparison(c: &IndexComparison, verbose: bool, origins_match: bool) {
         show_extra_bundles(&c.extra_bundles, verbose);
     }
     
+    // Chain analysis - find where chain broke
+    if !c.hash_mismatches.is_empty() && origins_match {
+        analyze_chain_break(&c.hash_mismatches, &c.local_range, &c.target_range);
+    }
+    
     // Final status
     eprintln!();
     if !c.has_differences() {
@@ -524,6 +529,79 @@ fn show_hash_mismatches(mismatches: &[HashMismatch], verbose: bool, origins_matc
     if mismatches.len() > display_count {
         eprintln!("  ... and {} more (use -v to show all)\n", mismatches.len() - display_count);
     }
+}
+
+fn analyze_chain_break(mismatches: &[HashMismatch], local_range: &Option<(u32, u32)>, target_range: &Option<(u32, u32)>) {
+    if mismatches.is_empty() {
+        return;
+    }
+    
+    eprintln!("\n🔗 Chain Break Analysis");
+    eprintln!("═══════════════════════════════════════════════════\n");
+    
+    // Find the first bundle where chain broke
+    let first_break = mismatches[0].bundle_number;
+    
+    // Determine last good bundle (one before first break)
+    let last_good = if first_break > 1 {
+        first_break - 1
+    } else {
+        0
+    };
+    
+    eprintln!("  Chain Status:");
+    if last_good > 0 {
+        eprintln!("    ✅ Bundles 000001 - {:06}: Chain intact", last_good);
+        eprintln!("    ❌ Bundle {:06}: Chain broken (first mismatch)", first_break);
+    } else {
+        eprintln!("    ❌ Bundle 000001: Chain broken from start");
+    }
+    
+    // Count consecutive breaks
+    let mut consecutive_breaks = 1;
+    for i in 1..mismatches.len() {
+        if mismatches[i].bundle_number == first_break + consecutive_breaks {
+            consecutive_breaks += 1;
+        } else {
+            break;
+        }
+    }
+    
+    if consecutive_breaks > 1 {
+        let last_break = first_break + consecutive_breaks - 1;
+        eprintln!("    ❌ Bundles {:06} - {:06}: Chain broken ({} consecutive)", 
+            first_break, last_break, consecutive_breaks);
+    }
+    
+    // Show total affected
+    eprintln!("\n  Summary:");
+    eprintln!("    Last good bundle:  {:06}", last_good);
+    eprintln!("    First break:      {:06}", first_break);
+    eprintln!("    Total mismatches: {}", mismatches.len());
+    
+    // Show parent hash comparison for first break
+    if let Some(first_mismatch) = mismatches.first() {
+        eprintln!("\n  First Break Details (Bundle {:06}):", first_break);
+        eprintln!("    Local chain hash:  {}", &first_mismatch.local_hash[..16]);
+        eprintln!("    Target chain hash: {}", &first_mismatch.target_hash[..16]);
+        
+        // Check if parent hashes match (indicates where divergence started)
+        eprintln!("\n  💡 Interpretation:");
+        if last_good > 0 {
+            eprintln!("    • Bundles before {:06} are identical", last_good);
+            eprintln!("    • Bundle {:06} has different content or was created differently", first_break);
+            eprintln!("    • All subsequent bundles will have different chain hashes");
+            eprintln!("\n    To fix:");
+            eprintln!("    1. Check bundle {:06} content differences", first_break);
+            eprintln!("    2. Verify operations in bundle {:06} match expected", first_break);
+            eprintln!("    3. Consider re-syncing from bundle {:06} onwards", first_break);
+        } else {
+            eprintln!("    • Chain broken from the very first bundle");
+            eprintln!("    • This indicates completely different repositories");
+        }
+    }
+    
+    eprintln!();
 }
 
 fn show_cursor_mismatches(mismatches: &[HashMismatch], verbose: bool) {

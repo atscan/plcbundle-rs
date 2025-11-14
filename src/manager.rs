@@ -1370,14 +1370,17 @@ impl BundleManager {
         
         // Validate cursor correctness (for non-genesis bundles)
         if bundle_num > 1 {
-            let prev_bundle = self.index.read().unwrap().get_bundle(bundle_num - 1);
-            if let Some(prev) = prev_bundle {
-                if cursor != prev.end_time {
-                    anyhow::bail!(
-                        "Cursor validation failed for bundle {}: expected {} (previous bundle end_time), got {}",
-                        bundle_num, prev.end_time, cursor
-                    );
-                }
+            let expected_cursor = {
+                let index = self.index.read().unwrap();
+                index.get_bundle(bundle_num - 1)
+                    .map(|b| b.end_time.clone())
+                    .unwrap_or_default()
+            };
+            if cursor != expected_cursor {
+                anyhow::bail!(
+                    "Cursor validation failed for bundle {}: expected {} (previous bundle end_time), got {}",
+                    bundle_num, expected_cursor, cursor
+                );
             }
         } else if !cursor.is_empty() {
             anyhow::bail!(
@@ -1617,14 +1620,17 @@ impl BundleManager {
         
         // Validate cursor correctness (for non-genesis bundles)
         if bundle_num > 1 {
-            let prev_bundle = self.index.read().unwrap().get_bundle(bundle_num - 1);
-            if let Some(prev) = prev_bundle {
-                if cursor != prev.end_time {
-                    anyhow::bail!(
-                        "Cursor validation failed for bundle {}: expected {} (previous bundle end_time), got {}",
-                        bundle_num, prev.end_time, cursor
-                    );
-                }
+            let expected_cursor = {
+                let index = self.index.read().unwrap();
+                index.get_bundle(bundle_num - 1)
+                    .map(|b| b.end_time.clone())
+                    .unwrap_or_default()
+            };
+            if cursor != expected_cursor {
+                anyhow::bail!(
+                    "Cursor validation failed for bundle {}: expected {} (previous bundle end_time), got {}",
+                    bundle_num, expected_cursor, cursor
+                );
             }
         } else if !cursor.is_empty() {
             anyhow::bail!(
