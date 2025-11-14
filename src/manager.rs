@@ -50,6 +50,13 @@ pub struct DIDIndexStats {
     pub avg_operations_per_did: f64,
 }
 
+#[derive(Debug, Clone)]
+pub struct RollbackFileStats {
+    pub deleted: usize,
+    pub failed: usize,
+    pub deleted_size: u64,
+}
+
 impl BundleManager {
     pub fn new(directory: PathBuf) -> Result<Self> {
         let index = Index::load(&directory)?;
@@ -1050,6 +1057,34 @@ impl BundleManager {
     pub fn get_bundle_metadata(&self, bundle_num: u32) -> Result<Option<crate::index::BundleMetadata>> {
         let index = self.index.read().unwrap();
         Ok(index.get_bundle(bundle_num).cloned())
+    }
+
+    /// Delete bundle files from disk
+    pub fn delete_bundle_files(&self, bundle_numbers: &[u32]) -> Result<RollbackFileStats> {
+        let mut deleted = 0;
+        let mut failed = 0;
+        let mut deleted_size = 0u64;
+
+        for &bundle_num in bundle_numbers {
+            let bundle_path = self.directory.join(format!("{:06}.jsonl.zst", bundle_num));
+            
+            // Get file size before deletion
+            if let Ok(metadata) = std::fs::metadata(&bundle_path) {
+                deleted_size += metadata.len();
+            }
+            
+            match std::fs::remove_file(&bundle_path) {
+                Ok(_) => deleted += 1,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => deleted += 1,
+                Err(_) => failed += 1,
+            }
+        }
+
+        Ok(RollbackFileStats {
+            deleted,
+            failed,
+            deleted_size,
+        })
     }
 
     fn clone_for_arc(&self) -> Self {

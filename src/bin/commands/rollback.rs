@@ -236,7 +236,7 @@ fn confirm_rollback(keep_files: bool) -> Result<bool> {
 
 fn perform_rollback(
     manager: &mut BundleManager,
-    dir: &PathBuf,
+    _dir: &PathBuf,
     plan: &RollbackPlan,
     cmd: &RollbackCommand,
 ) -> Result<()> {
@@ -247,7 +247,7 @@ fn perform_rollback(
     current_step += 1;
     if !cmd.keep_files {
         println!("[{}/{}] Deleting bundle files...", current_step, total_steps);
-        delete_bundle_files(dir, &plan.bundles_to_delete, cmd.verbose)?;
+        delete_bundle_files(manager, &plan.bundles_to_delete, cmd.verbose)?;
         println!("      ✓ Deleted {} file(s)\n", plan.bundles_to_delete.len());
     } else {
         println!("[{}/{}] Skipping file deletion (--keep-files)...", current_step, total_steps);
@@ -278,44 +278,24 @@ fn perform_rollback(
     Ok(())
 }
 
-fn delete_bundle_files(dir: &PathBuf, bundles: &[u32], verbose: bool) -> Result<()> {
-    let mut deleted_count = 0;
-    let mut failed_count = 0;
-    let mut first_error = None;
-
-    for &bundle_num in bundles {
-        let bundle_path = dir.join(format!("{:06}.jsonl.zst", bundle_num));
-        
-        match std::fs::remove_file(&bundle_path) {
-            Ok(_) => {
-                deleted_count += 1;
-                if verbose {
-                    println!("      ✓ Deleted {:06}", bundle_num);
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // File doesn't exist, that's ok
-                deleted_count += 1;
-            }
-            Err(e) => {
-                failed_count += 1;
-                if verbose {
-                    println!("      ⚠️  Failed to delete {:06}: {}", bundle_num, e);
-                }
-                if first_error.is_none() {
-                    first_error = Some(e);
-                }
-            }
+fn delete_bundle_files(manager: &BundleManager, bundles: &[u32], verbose: bool) -> Result<()> {
+    if verbose {
+        for &bundle_num in bundles {
+            println!("      Deleting {:06}...", bundle_num);
         }
     }
 
-    if failed_count > 0 {
-        bail!(
-            "failed to delete {} bundles (deleted {} successfully): {}",
-            failed_count,
-            deleted_count,
-            first_error.unwrap()
-        );
+    let stats = manager.delete_bundle_files(bundles)?;
+
+    if verbose {
+        println!("      ✓ Deleted {} file(s)", stats.deleted);
+        if stats.failed > 0 {
+            println!("      ⚠️  Failed to delete {} file(s)", stats.failed);
+        }
+    }
+
+    if stats.failed > 0 {
+        bail!("Failed to delete {} bundle files", stats.failed);
     }
 
     Ok(())

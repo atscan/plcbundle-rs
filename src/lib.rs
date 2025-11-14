@@ -24,7 +24,8 @@ pub use manager::{BundleManager, LoadOptions, LoadResult, OperationResult, Query
                   BundleRange, ExportFormat, CompressionType,
                   VerifySpec, VerifyResult, ChainVerifySpec, ChainVerifyResult,
                   BundleInfo, InfoFlags, RollbackSpec, RollbackPlan, RollbackResult,
-                  WarmUpSpec, WarmUpStrategy, RebuildStats, DIDIndexStats, ManagerStats, ResolveResult};
+                  WarmUpSpec, WarmUpStrategy, RebuildStats, DIDIndexStats, ManagerStats, ResolveResult,
+                  RollbackFileStats};
 pub use did_index::DIDLookupStats;
 pub use operations::{Operation, OperationFilter, OperationRequest};
 pub use iterators::{QueryIterator, ExportIterator, RangeIterator};

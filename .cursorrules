@@ -1,0 +1,106 @@
+# plcbundle-rs Coding Rules
+
+## Core Design Principles
+
+1. **Single Entry Point**: All operations go through `BundleManager`
+2. **Options Pattern**: Complex operations use dedicated option structs  
+3. **Result Types**: Operations return structured result types, not raw tuples
+4. **Streaming by Default**: Use iterators for large datasets
+5. **NO DIRECT FILE ACCESS**: CLI commands NEVER open bundle files directly
+
+## Critical Rules
+
+### File Access
+- ❌ **NEVER** use `std::fs::File::open` for bundle files in CLI commands
+- ❌ **NEVER** use `std::fs::read` for bundle data in CLI commands  
+- ❌ **NEVER** use `std::fs::remove_file` for bundles in CLI commands
+- ✅ **ALWAYS** use `BundleManager` methods for bundle operations
+- ✅ **ALWAYS** add new operations to `BundleManager` API if needed
+
+### API-First Development
+- All CLI commands in `src/bin/commands/` must use **ONLY** public `BundleManager` APIs
+- If a CLI command needs file access, add the method to `BundleManager` first
+- The `BundleManager` is the single source of truth for all bundle operations
+
+### Examples
+
+**❌ WRONG - Direct file access:**
+```rust
+let bundle_path = dir.join(format!("{:06}.jsonl.zst", bundle_num));
+std::fs::remove_file(&bundle_path)?;
+```
+
+**✅ CORRECT - Via BundleManager API:**
+```rust
+manager.delete_bundle_files(&[bundle_num])?;
+```
+
+## Architecture
+
+```
+CLI Commands → BundleManager API → Internal Implementation
+     ↓              ↓                       ↓
+   Uses         Provides               Opens files
+   Only         Public API             Directly
+```
+
+## When Adding New Features
+
+1. Design the API method in `BundleManager` first
+2. Document it in `docs/API.md`
+3. Implement the method in `src/manager.rs`
+4. Export types in `src/lib.rs` if needed
+5. Use the API from CLI command
+
+## Reference Documentation
+
+- Full API design: `docs/API.md`
+- Bundle format: `docs/BUNDLE_FORMAT.md`
+- All public APIs are listed in `docs/API.md` Quick Reference
+
+## Common Patterns
+
+### Loading Bundles
+```rust
+// ❌ Don't open files directly
+let file = File::open(bundle_path)?;
+
+// ✅ Use the API
+let result = manager.load_bundle(bundle_num, LoadOptions::default())?;
+```
+
+### Getting Operations
+```rust
+// ❌ Don't parse files directly
+let json = std::fs::read_to_string(bundle_path)?;
+
+// ✅ Use the API
+let json = manager.get_operation_raw(bundle_num, position)?;
+```
+
+### Deleting Bundles
+```rust
+// ❌ Don't remove files directly
+std::fs::remove_file(bundle_path)?;
+
+// ✅ Use the API
+manager.delete_bundle_files(&[bundle_num])?;
+```
+
+## Testing
+
+When implementing features:
+- Test through the public API
+- Don't test internal implementation details
+- CLI tests should use actual `BundleManager` instances
+
+## Questions?
+
+If you're implementing a feature and need file access:
+1. Check if `BundleManager` already has the method
+2. If not, add it to `BundleManager` first
+3. Update `docs/API.md` with the new method
+4. Then use it from the CLI
+
+**Remember: The CLI is just a thin wrapper around `BundleManager`!**
+
