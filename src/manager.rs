@@ -762,6 +762,19 @@ impl BundleManager {
             None
         };
         
+        // Special case: When creating the first bundle (next_bundle_num == 1, meaning
+        // last_bundle == 0, i.e., empty repository), any existing mempool is likely stale
+        // from a previous sync attempt. Clear it to start fresh from the beginning.
+        if next_bundle_num == 1 && mempool_stats.count > 0 {
+            log::warn!("Starting first bundle (empty repository), but mempool has {} operations", mempool_stats.count);
+            if let Some(first_time) = mempool_stats.first_time {
+                log::warn!("Mempool operations start at: {}", first_time.format("%Y-%m-%d %H:%M:%S"));
+            }
+            log::warn!("Clearing mempool to start fresh from the beginning...");
+            self.clear_mempool()?;
+            return Ok(());
+        }
+        
         // Check if mempool operations are chronologically valid relative to last bundle
         if let Some(last_time) = last_bundle_time {
             if let Some(first_mempool_time) = mempool_stats.first_time {
