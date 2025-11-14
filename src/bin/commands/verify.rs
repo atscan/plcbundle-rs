@@ -65,7 +65,7 @@ pub fn run(cmd: VerifyCommand, dir: PathBuf) -> Result<()> {
     if !cmd.verbose {
         let full_path = std::fs::canonicalize(&dir)
             .unwrap_or_else(|_| dir.clone());
-        eprintln!("Working in: {}\n", full_path.display());
+        eprintln!("\n📁 Working in: {}\n", full_path.display());
     }
 
     // Determine what to verify
@@ -83,22 +83,23 @@ pub fn run(cmd: VerifyCommand, dir: PathBuf) -> Result<()> {
 
 fn verify_single_bundle(manager: &BundleManager, bundle_num: u32, verbose: bool, full: bool, fast: bool) -> Result<()> {
     // Print verification mode at the beginning
+    eprintln!("\n🔍 Verification Mode:");
     if fast {
-        eprintln!("Verification mode: FAST (metadata frame only)");
-        eprintln!("  Use without --fast for normal verification (compressed hash)");
-        eprintln!("  Use --full for complete verification (compressed + content hash)");
+        eprintln!("  ⚡ FAST (metadata frame only)");
+        eprintln!("  ℹ️  Use without --fast for normal verification (compressed hash)");
+        eprintln!("  ℹ️  Use --full for complete verification (compressed + content hash)");
     } else if full {
-        eprintln!("Verification mode: FULL (compressed hash + content hash)");
-        eprintln!("  Use without --full for normal verification (compressed hash only)");
-        eprintln!("  Use --fast for fast verification (metadata frame only)");
+        eprintln!("  🔐 FULL (compressed hash + content hash)");
+        eprintln!("  ℹ️  Use without --full for normal verification (compressed hash only)");
+        eprintln!("  ℹ️  Use --fast for fast verification (metadata frame only)");
     } else {
-        eprintln!("Verification mode: NORMAL (compressed hash only)");
-        eprintln!("  Use --full for complete verification (compressed + content hash)");
-        eprintln!("  Use --fast for fast verification (metadata frame only)");
+        eprintln!("  ✓ NORMAL (compressed hash only)");
+        eprintln!("  ℹ️  Use --full for complete verification (compressed + content hash)");
+        eprintln!("  ℹ️  Use --fast for fast verification (metadata frame only)");
     }
     eprintln!();
     
-    eprintln!("Verifying bundle {:06}...", bundle_num);
+    eprintln!("🔬 Verifying bundle {:06}...", bundle_num);
 
     let start = Instant::now();
     // For single bundle, check content hash if --full flag is set
@@ -112,7 +113,7 @@ fn verify_single_bundle(manager: &BundleManager, bundle_num: u32, verbose: bool,
     let elapsed = start.elapsed();
 
     if result.valid {
-        eprintln!("✓ Bundle {:06} is valid ({:?})", bundle_num, elapsed);
+        eprintln!("✅ Bundle {:06} is valid ({:?})", bundle_num, elapsed);
         
         // Show what was verified
         let mut verified_items = Vec::new();
@@ -124,16 +125,16 @@ fn verify_single_bundle(manager: &BundleManager, bundle_num: u32, verbose: bool,
                 verified_items.push("content hash");
             }
         }
-        eprintln!("  Verified: {}", verified_items.join(", "));
+        eprintln!("  ✓ Verified: {}", verified_items.join(", "));
         
         if fast {
-            eprintln!("ℹ Note: This was a fast verification (metadata frame only).");
-            eprintln!("  Use without --fast for normal verification (compressed hash)");
-            eprintln!("  Use --full for complete verification (compressed + content hash)");
+            eprintln!("\nℹ️  Note: This was a fast verification (metadata frame only).");
+            eprintln!("   Use without --fast for normal verification (compressed hash)");
+            eprintln!("   Use --full for complete verification (compressed + content hash)");
         } else if !full {
-            eprintln!("⚠ Note: This was a partial verification (compressed hash only).");
-            eprintln!("  Use --full for complete verification (compressed + content hash)");
-            eprintln!("  Use --fast for fast verification (metadata frame only)");
+            eprintln!("\n⚠️  Note: This was a partial verification (compressed hash only).");
+            eprintln!("   Use --full for complete verification (compressed + content hash)");
+            eprintln!("   Use --fast for fast verification (metadata frame only)");
         }
         
         if verbose {
@@ -148,10 +149,11 @@ fn verify_single_bundle(manager: &BundleManager, bundle_num: u32, verbose: bool,
         }
         Ok(())
     } else {
-        eprintln!("✗ Bundle {:06} is invalid ({:?})", bundle_num, elapsed);
+        eprintln!("❌ Bundle {:06} is invalid ({:?})", bundle_num, elapsed);
         if !result.errors.is_empty() {
+            eprintln!("\n⚠️  Errors:");
             for err in &result.errors {
-                eprintln!("  Error: {}", err);
+                eprintln!("   • {}", err);
             }
         }
         bail!("bundle verification failed")
@@ -162,7 +164,7 @@ fn verify_chain(manager: &BundleManager, verbose: bool, full: bool, fast: bool, 
     let last_bundle = manager.get_last_bundle();
     
     if last_bundle == 0 {
-        eprintln!("No bundles to verify");
+        eprintln!("ℹ️  No bundles to verify");
         return Ok(());
     }
 
@@ -175,33 +177,35 @@ fn verify_chain(manager: &BundleManager, verbose: bool, full: bool, fast: bool, 
     }
 
     if bundles.is_empty() {
-        eprintln!("No bundles to verify");
+        eprintln!("ℹ️  No bundles to verify");
         return Ok(());
     }
 
     // Print verification mode at the beginning
+    eprintln!("\n🔍 Verification Mode:");
     if fast {
-        eprintln!("Verification mode: FAST (metadata frame only)");
-        eprintln!("  Use without --fast for normal verification (compressed hash)");
-        eprintln!("  Use --full for complete verification (compressed + content hash)");
+        eprintln!("  ⚡ FAST (metadata frame only)");
+        eprintln!("  ℹ️  Use without --fast for normal verification (compressed hash)");
+        eprintln!("  ℹ️  Use --full for complete verification (compressed + content hash)");
     } else if full {
-        eprintln!("Verification mode: FULL (compressed hash + content hash)");
-        eprintln!("  Use without --full for normal verification (compressed hash only)");
-        eprintln!("  Use --fast for fast verification (metadata frame only)");
+        eprintln!("  🔐 FULL (compressed hash + content hash)");
+        eprintln!("  ℹ️  Use without --full for normal verification (compressed hash only)");
+        eprintln!("  ℹ️  Use --fast for fast verification (metadata frame only)");
     } else {
-        eprintln!("Verification mode: NORMAL (compressed hash only)");
-        eprintln!("  Use --full for complete verification (compressed + content hash)");
-        eprintln!("  Use --fast for fast verification (metadata frame only)");
+        eprintln!("  ✓ NORMAL (compressed hash only)");
+        eprintln!("  ℹ️  Use --full for complete verification (compressed + content hash)");
+        eprintln!("  ℹ️  Use --fast for fast verification (metadata frame only)");
     }
     eprintln!();
     
     // Print root hash (first bundle) and head hash (latest) at start
-    eprintln!("Chain root:   {}", bundles[0].hash);
-    eprintln!("Chain head:   {} (target)", bundles[bundles.len() - 1].hash);
-    eprintln!("Total bundles: {}", format_number(bundles.len() as u64));
-    eprintln!("");
+    eprintln!("🔗 Chain Information:");
+    eprintln!("   Root:   {} (bundle {:06})", bundles[0].hash, bundles[0].bundle_number);
+    eprintln!("   Head:   {} (bundle {:06})", bundles[bundles.len() - 1].hash, bundles[bundles.len() - 1].bundle_number);
+    eprintln!("   Total:  {} bundles", format_number(bundles.len() as u64));
+    eprintln!();
 
-    eprintln!("Verifying chain of {} bundles...\n", format_number(bundles.len() as u64));
+    eprintln!("🔬 Verifying chain of {} bundles...\n", format_number(bundles.len() as u64));
 
     let start = Instant::now();
     
@@ -220,7 +224,7 @@ fn verify_chain(manager: &BundleManager, verbose: bool, full: bool, fast: bool, 
     let total_uncompressed_size: u64 = bundles.iter().map(|b| b.uncompressed_size).sum();
 
     // Pass 1: Parallel bundle hash verification
-    eprintln!("Pass 1: Verifying bundle hashes...");
+    eprintln!("📦 Pass 1: Verifying bundle hashes...");
     // Always show progress bar (it will detect if TTY and show appropriate format)
     let progress = Some(ProgressBar::with_bytes(bundles.len(), total_uncompressed_size));
 
@@ -297,11 +301,11 @@ fn verify_chain(manager: &BundleManager, verbose: bool, full: bool, fast: bool, 
         
         if !valid {
             if verbose {
-                eprintln!("  Bundle {:06}... INVALID", bundle_num);
+                eprintln!("  Bundle {:06}... ❌ INVALID", bundle_num);
             }
-            eprintln!("\n✗ Bundle {:06} hash verification failed", bundle_num);
+            eprintln!("\n❌ Bundle {:06} hash verification failed", bundle_num);
             if let Some(ref e) = err {
-                eprintln!("  Error: {}", e);
+                eprintln!("  ⚠️  Error: {}", e);
                 if first_error.is_none() {
                     first_error = Some(anyhow::anyhow!("{}", e));
                 }
@@ -324,15 +328,15 @@ fn verify_chain(manager: &BundleManager, verbose: bool, full: bool, fast: bool, 
 
     // Pass 2: Verify chain links sequentially
     if error_count == 0 {
-        eprintln!("\nPass 2: Verifying chain links...");
+        eprintln!("\n🔗 Pass 2: Verifying chain links...");
         for i in 1..bundles.len() {
             let prev_meta = &bundles[i - 1];
             let meta = &bundles[i];
             
             if meta.parent != prev_meta.hash {
-                eprintln!("\n✗ Chain broken at bundle {:06}", meta.bundle_number);
-                eprintln!("  Expected parent: {}...", &prev_meta.hash[..16.min(prev_meta.hash.len())]);
-                eprintln!("  Actual parent:   {}...", &meta.parent[..16.min(meta.parent.len())]);
+                eprintln!("\n❌ Chain broken at bundle {:06}", meta.bundle_number);
+                eprintln!("  ⚠️  Expected parent: {}...", &prev_meta.hash[..16.min(prev_meta.hash.len())]);
+                eprintln!("  ⚠️  Actual parent:   {}...", &meta.parent[..16.min(meta.parent.len())]);
                 error_count += 1;
                 if first_error.is_none() {
                     first_error = Some(anyhow::anyhow!("chain broken at bundle {}", meta.bundle_number));
@@ -340,7 +344,7 @@ fn verify_chain(manager: &BundleManager, verbose: bool, full: bool, fast: bool, 
             }
         }
         if error_count == 0 {
-            eprintln!("✓ All chain links valid");
+            eprintln!("✅ All chain links valid");
         }
     }
 
@@ -359,63 +363,65 @@ fn verify_chain(manager: &BundleManager, verbose: bool, full: bool, fast: bool, 
             }
         }
         verified_items.push("chain links");
-        eprintln!("✓ Chain is valid ({} bundles verified)", format_number(verified_count as u64));
-        eprintln!("  Verified: {}", verified_items.join(", "));
+        eprintln!("\n✅ Chain is valid ({} bundles verified)", format_number(verified_count as u64));
+        eprintln!("   ✓ Verified: {}", verified_items.join(", "));
         eprintln!();
         
         if fast {
-            eprintln!("ℹ Note: This was a fast verification (metadata frame only).");
-            eprintln!("  Use without --fast for normal verification (compressed hash)");
-            eprintln!("  Use --full for complete verification (compressed + content hash)");
+            eprintln!("ℹ️  Note: This was a fast verification (metadata frame only).");
+            eprintln!("   Use without --fast for normal verification (compressed hash)");
+            eprintln!("   Use --full for complete verification (compressed + content hash)");
         } else if !full {
-            eprintln!("⚠ Note: This was a partial verification (compressed hash only).");
-            eprintln!("  Use --full for complete verification (compressed + content hash)");
-            eprintln!("  Use --fast for fast verification (metadata frame only)");
+            eprintln!("⚠️  Note: This was a partial verification (compressed hash only).");
+            eprintln!("   Use --full for complete verification (compressed + content hash)");
+            eprintln!("   Use --fast for fast verification (metadata frame only)");
         }
         eprintln!();
-        eprintln!("  First bundle: {:06}", bundles[0].bundle_number);
-        eprintln!("  Last bundle:  {:06}", bundles[bundles.len() - 1].bundle_number);
-        eprintln!("  Chain root:   {}", bundles[0].hash);
-        eprintln!("  Chain head:   {}", bundles[bundles.len() - 1].hash);
+        
+        eprintln!("📊 Chain Summary:");
+        eprintln!("   First bundle: {:06}", bundles[0].bundle_number);
+        eprintln!("   Last bundle:  {:06}", bundles[bundles.len() - 1].bundle_number);
+        eprintln!("   Chain root:   {}", bundles[0].hash);
+        eprintln!("   Chain head:   {}", bundles[bundles.len() - 1].hash);
 
         // Additional stats
         let total_size: u64 = bundles.iter().map(|b| b.compressed_size).sum();
         let total_ops: u64 = bundles.iter().map(|b| b.operation_count as u64).sum();
         let total_dids: u64 = bundles.iter().map(|b| b.did_count as u64).sum();
         
-        eprintln!("\nStatistics:");
-        eprintln!("  Total size:     {} (compressed)", format_bytes(total_size));
-        eprintln!("  Total ops:      {}", format_number(total_ops));
-        eprintln!("  Total DIDs:     {}", format_number(total_dids));
-        eprintln!("  Avg ops/bundle: {}", format_number(total_ops / bundles.len() as u64));
-        eprintln!("  Avg size/bundle: {}", format_bytes(total_size / bundles.len() as u64));
+        eprintln!("\n📈 Statistics:");
+        eprintln!("   Total size:     {} (compressed)", format_bytes(total_size));
+        eprintln!("   Total ops:      {}", format_number(total_ops));
+        eprintln!("   Total DIDs:     {}", format_number(total_dids));
+        eprintln!("   Avg ops/bundle: {}", format_number(total_ops / bundles.len() as u64));
+        eprintln!("   Avg size/bundle: {}", format_bytes(total_size / bundles.len() as u64));
 
         // Timing information
-        eprintln!("\nPerformance:");
-        eprintln!("  Time:       {:?}", elapsed);
+        eprintln!("\n⚡ Performance:");
+        eprintln!("   Time:       {:?}", elapsed);
         if elapsed.as_secs_f64() > 0.0 {
             let bundles_per_sec = verified_count as f64 / elapsed.as_secs_f64();
-            eprintln!("  Throughput: {:.1} bundles/sec", bundles_per_sec);
+            eprintln!("   Throughput: {:.1} bundles/sec", bundles_per_sec);
 
             if total_size > 0 {
                 let mb_per_sec_compressed = total_size as f64 / elapsed.as_secs_f64() / (1024.0 * 1024.0);
-                eprintln!("  Data rate:  {:.1} MB/sec (compressed)", mb_per_sec_compressed);
+                eprintln!("   Data rate:  {:.1} MB/sec (compressed)", mb_per_sec_compressed);
             }
             
             if total_uncompressed_size > 0 {
                 let mb_per_sec_uncompressed = total_uncompressed_size as f64 / elapsed.as_secs_f64() / (1024.0 * 1024.0);
-                eprintln!("  Data rate:  {:.1} MB/sec (uncompressed)", mb_per_sec_uncompressed);
+                eprintln!("   Data rate:  {:.1} MB/sec (uncompressed)", mb_per_sec_uncompressed);
             }
         }
         Ok(())
     } else {
-        eprintln!("✗ Chain verification failed");
-        eprintln!("  Verified: {}/{} bundles", verified_count, bundles.len());
-        eprintln!("  Errors: {}", error_count);
+        eprintln!("\n❌ Chain verification failed");
+        eprintln!("   Verified: {}/{} bundles", verified_count, bundles.len());
+        eprintln!("   Errors:   {}", error_count);
         if !failed_bundles.is_empty() && failed_bundles.len() <= 10 {
-            eprintln!("  Failed bundles: {:?}", failed_bundles);
+            eprintln!("   ⚠️  Failed bundles: {:?}", failed_bundles);
         }
-        eprintln!("  Time: {:?}", elapsed);
+        eprintln!("   Time:     {:?}", elapsed);
         if let Some(err) = first_error {
             Err(err)
         } else {
@@ -443,9 +449,9 @@ fn verify_range(
         workers
     };
 
-    eprint!("Verifying bundles {:06} - {:06}", start, end);
+    eprintln!("\n🔬 Verifying bundles {:06} - {:06}", start, end);
     if parallel {
-        eprint!(" (parallel, {} workers)", actual_workers);
+        eprintln!("   Using {} worker thread(s)", actual_workers);
     }
     eprintln!();
 
@@ -461,14 +467,14 @@ fn verify_range(
     let elapsed = overall_start.elapsed();
 
     // Add timing summary
-    eprintln!("\nPerformance:");
-    eprintln!("  Time:       {:?}", elapsed);
+    eprintln!("\n⚡ Performance:");
+    eprintln!("   Time:       {:?}", elapsed);
     if elapsed.as_secs_f64() > 0.0 {
         let bundles_per_sec = total as f64 / elapsed.as_secs_f64();
-        eprintln!("  Throughput: {:.1} bundles/sec", bundles_per_sec);
+        eprintln!("   Throughput: {:.1} bundles/sec", bundles_per_sec);
 
         let avg_time = elapsed / total as u32;
-        eprintln!("  Avg/bundle: {:?}", avg_time);
+        eprintln!("   Avg/bundle: {:?}", avg_time);
     }
 
     verify_err
@@ -511,7 +517,7 @@ fn verify_range_sequential(
         match result {
             Err(e) => {
                 if verbose {
-                    eprintln!("ERROR - {}", e);
+                    eprintln!("❌ ERROR - {}", e);
                 }
                 failed += 1;
                 failed_bundles.push(bundle_num);
@@ -524,13 +530,13 @@ fn verify_range_sequential(
                         } else {
                             result.errors[0].clone()
                         };
-                        eprintln!("INVALID - {}", err_msg);
+                        eprintln!("❌ INVALID - {}", err_msg);
                     }
                     failed += 1;
                     failed_bundles.push(bundle_num);
                 } else {
                     if verbose {
-                        eprintln!("✓");
+                        eprintln!("✅");
                     }
                     verified += 1;
                 }
@@ -548,15 +554,15 @@ fn verify_range_sequential(
 
     eprintln!();
     if failed == 0 {
-        eprintln!("✓ All {} bundles verified successfully", verified);
+        eprintln!("✅ All {} bundles verified successfully", verified);
         Ok(())
     } else {
-        eprintln!("✗ Verification failed");
-        eprintln!("  Verified: {}/{}", verified, total);
-        eprintln!("  Failed: {}", failed);
+        eprintln!("❌ Verification failed");
+        eprintln!("   Verified: {}/{}", verified, total);
+        eprintln!("   Failed:   {}", failed);
 
         if !failed_bundles.is_empty() && failed_bundles.len() <= 20 {
-            eprint!("\nFailed bundles: ");
+            eprint!("\n   ⚠️  Failed bundles: ");
             for (i, num) in failed_bundles.iter().enumerate() {
                 if i > 0 {
                     eprint!(", ");
@@ -565,7 +571,7 @@ fn verify_range_sequential(
             }
             eprintln!();
         } else if failed_bundles.len() > 20 {
-            eprintln!("\nFailed bundles: {:06}, {:06}, ... and {} more",
+            eprintln!("\n   ⚠️  Failed bundles: {:06}, {:06}, ... and {} more",
                 failed_bundles[0], failed_bundles[1], failed_bundles.len() - 2);
         }
 

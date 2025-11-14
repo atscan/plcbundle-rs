@@ -70,14 +70,15 @@ pub fn run(cmd: DiffCommand, dir: PathBuf) -> Result<()> {
 }
 
 async fn diff_indexes(manager: &BundleManager, dir: &PathBuf, target: &str, verbose: bool) -> Result<()> {
-    eprintln!("Comparing: {}", dir.display());
-    eprintln!("  Against: {}\n", target);
+    eprintln!("\n🔍 Comparing repositories");
+    eprintln!("   Local:  {}", dir.display());
+    eprintln!("   Target: {}\n", target);
     
     // Load local index
     let local_index = manager.get_index();
     
     // Load target index
-    eprintln!("Loading target index...");
+    eprintln!("📥 Loading target index...");
     let target_index = remote::fetch_index(target).await
         .context("Failed to load target index")?;
     
@@ -89,13 +90,15 @@ async fn diff_indexes(manager: &BundleManager, dir: &PathBuf, target: &str, verb
     
     // If there are hash mismatches, suggest deep dive
     if !comparison.hash_mismatches.is_empty() {
-        eprintln!("\n💡 Tip: Use --bundle flag to investigate specific mismatches:");
+        eprintln!("\n💡 Tip: Investigate specific mismatches with:");
         eprintln!("   plcbundle diff {} --bundle {} --show-operations",
             target, comparison.hash_mismatches[0].bundle_number);
     }
     
-    if comparison.has_differences() {
-        bail!("indexes have differences");
+    // Only fail if there are critical hash mismatches
+    // Missing/extra bundles are not errors, just informational
+    if !comparison.hash_mismatches.is_empty() || !comparison.content_mismatches.is_empty() {
+        bail!("indexes have critical differences (hash mismatches)");
     }
     
     Ok(())
@@ -108,7 +111,7 @@ async fn diff_specific_bundle(
     show_ops: bool,
     sample_size: usize,
 ) -> Result<()> {
-    eprintln!("Deep Diff: Bundle {:06}", bundle_num);
+    eprintln!("\n🔬 Deep Diff: Bundle {:06}", bundle_num);
     eprintln!("═══════════════════════════════════════════════════════════════\n");
     
     // Get local metadata
@@ -116,12 +119,12 @@ async fn diff_specific_bundle(
         .ok_or_else(|| anyhow::anyhow!("Bundle {} not found in local index", bundle_num))?;
     
     // Load local bundle
-    eprintln!("Loading local bundle {:06}...", bundle_num);
+    eprintln!("📦 Loading local bundle {:06}...", bundle_num);
     let local_result = manager.load_bundle(bundle_num, plcbundle::LoadOptions::default())?;
     let local_ops = local_result.operations;
     
     // Load remote index to get metadata
-    eprintln!("Loading remote index...");
+    eprintln!("📥 Loading remote index...");
     let remote_index = remote::fetch_index(target).await
         .context("Failed to load remote index")?;
     
@@ -129,7 +132,7 @@ async fn diff_specific_bundle(
         .ok_or_else(|| anyhow::anyhow!("Bundle {} not found in remote index", bundle_num))?;
     
     // Load remote bundle
-    eprintln!("Loading remote bundle {:06}...\n", bundle_num);
+    eprintln!("📦 Loading remote bundle {:06}...\n", bundle_num);
     let remote_ops = if target.starts_with("http://") || target.starts_with("https://") {
         remote::fetch_bundle_operations(target, bundle_num).await
             .context("Failed to load remote bundle")?
@@ -286,18 +289,42 @@ fn compare_indexes(local: &Index, target: &Index) -> IndexComparison {
 }
 
 fn display_comparison(c: &IndexComparison, verbose: bool) {
-    eprintln!("Comparison Results");
-    eprintln!("══════════════════\n");
+    eprintln!("\n📊 Comparison Results");
+    eprintln!("═══════════════════════\n");
     
     eprintln!("Summary");
     eprintln!("───────");
     eprintln!("  Local bundles:      {}", c.local_count);
     eprintln!("  Target bundles:     {}", c.target_count);
     eprintln!("  Common bundles:     {}", c.common_count);
-    eprintln!("  Missing bundles:    {}", format_count(c.missing_bundles.len()));
-    eprintln!("  Extra bundles:      {}", format_count(c.extra_bundles.len()));
-    eprintln!("  Hash mismatches:    {}", format_count_critical(c.hash_mismatches.len()));
-    eprintln!("  Content mismatches: {}", format_count(c.content_mismatches.len()));
+    
+    // Missing bundles - informational, not critical
+    if !c.missing_bundles.is_empty() {
+        eprintln!("  Missing bundles:    ℹ️  {} (in target, not in local)", format_count(c.missing_bundles.len()));
+    } else {
+        eprintln!("  Missing bundles:    {}", format_count(c.missing_bundles.len()));
+    }
+    
+    // Extra bundles - informational
+    if !c.extra_bundles.is_empty() {
+        eprintln!("  Extra bundles:      ℹ️  {} (in local, not in target)", format_count(c.extra_bundles.len()));
+    } else {
+        eprintln!("  Extra bundles:      {}", format_count(c.extra_bundles.len()));
+    }
+    
+    // Hash mismatches - CRITICAL
+    if !c.hash_mismatches.is_empty() {
+        eprintln!("  Hash mismatches:    ⚠️  {} (CRITICAL - different content)", format_count_critical(c.hash_mismatches.len()));
+    } else {
+        eprintln!("  Hash mismatches:    {}", format_count_critical(c.hash_mismatches.len()));
+    }
+    
+    // Content mismatches - less critical than chain hash
+    if !c.content_mismatches.is_empty() {
+        eprintln!("  Content mismatches: ⚠️  {} (different content hash)", format_count(c.content_mismatches.len()));
+    } else {
+        eprintln!("  Content mismatches: {}", format_count(c.content_mismatches.len()));
+    }
     
     if let Some((start, end)) = c.local_range {
         eprintln!("\n  Local range:        {:06} - {:06}", start, end);
@@ -327,19 +354,24 @@ fn display_comparison(c: &IndexComparison, verbose: bool) {
     // Final status
     eprintln!();
     if !c.has_differences() {
-        eprintln!("✓ Indexes are identical");
+        eprintln!("✅ Indexes are identical");
     } else {
-        eprintln!("✗ Indexes have differences");
+        // Only show as error if there are hash mismatches (critical)
         if !c.hash_mismatches.is_empty() {
-            eprintln!("\n⚠️  WARNING: Chain hash mismatches detected!");
-            eprintln!("This indicates different bundle content or chain integrity issues.");
+            eprintln!("❌ Indexes differ (CRITICAL: hash mismatches detected)");
+            eprintln!("\n⚠️  WARNING: Chain hash mismatches indicate different bundle content");
+            eprintln!("   or chain integrity issues. This requires investigation.");
+        } else {
+            // Just missing/extra bundles - not critical
+            eprintln!("ℹ️  Indexes differ (missing or extra bundles, but hashes match)");
+            eprintln!("   This is normal when comparing repositories at different sync states.");
         }
     }
 }
 
 fn show_hash_mismatches(mismatches: &[HashMismatch], verbose: bool) {
     eprintln!("\n⚠️  CHAIN HASH MISMATCHES (CRITICAL)");
-    eprintln!("════════════════════════════════════\n");
+    eprintln!("═══════════════════════════════════════════════════\n");
     
     let display_count = if mismatches.len() > 10 && !verbose {
         10
@@ -368,8 +400,9 @@ fn show_hash_mismatches(mismatches: &[HashMismatch], verbose: bool) {
 }
 
 fn show_missing_bundles(bundles: &[u32], verbose: bool) {
-    eprintln!("\nMissing Bundles (in target but not local)");
-    eprintln!("──────────────────────────────────────────");
+    eprintln!("\nℹ️  Missing Bundles (in target but not in local)");
+    eprintln!("   This is normal if repositories are at different sync states.");
+    eprintln!("─────────────────────────────────────────────────────────────");
     
     if verbose || bundles.len() <= 20 {
         let display_count = if bundles.len() > 20 && !verbose {
@@ -391,8 +424,9 @@ fn show_missing_bundles(bundles: &[u32], verbose: bool) {
 }
 
 fn show_extra_bundles(bundles: &[u32], verbose: bool) {
-    eprintln!("\nExtra Bundles (in local but not target)");
-    eprintln!("────────────────────────────────────────");
+    eprintln!("\nℹ️  Extra Bundles (in local but not in target)");
+    eprintln!("   This is normal if repositories are at different sync states.");
+    eprintln!("─────────────────────────────────────────────────────────────");
     
     if verbose || bundles.len() <= 20 {
         let display_count = if bundles.len() > 20 && !verbose {
@@ -448,8 +482,8 @@ fn display_bundle_metadata_comparison_full(
     remote_meta: &plcbundle::index::BundleMetadata,
     _bundle_num: u32,
 ) {
-    eprintln!("Metadata Comparison");
-    eprintln!("───────────────────\n");
+    eprintln!("📋 Metadata Comparison");
+    eprintln!("───────────────────────\n");
     
     eprintln!("  Bundle Number:      {:06}", remote_meta.bundle_number);
     
@@ -461,7 +495,7 @@ fn display_bundle_metadata_comparison_full(
         } else {
             format!("local={}, remote={}", local_ops.len(), remote_meta.operation_count)
         },
-        if op_count_match { "✓" } else { "✗" }
+        if op_count_match { "✅" } else { "❌" }
     );
     eprintln!("    Local:  {}", local_ops.len());
     eprintln!("    Remote: {}", remote_meta.operation_count);
@@ -474,7 +508,7 @@ fn display_bundle_metadata_comparison_full(
         } else {
             format!("local={}, remote={}", local_meta.did_count, remote_meta.did_count)
         },
-        if did_count_match { "✓" } else { "✗" }
+        if did_count_match { "✅" } else { "❌" }
     );
     
     // Compare sizes
@@ -485,7 +519,7 @@ fn display_bundle_metadata_comparison_full(
         } else {
             format!("local={}, remote={}", local_meta.compressed_size, remote_meta.compressed_size)
         },
-        if size_match { "✓" } else { "✗" }
+        if size_match { "✅" } else { "❌" }
     );
     
     let uncomp_match = local_meta.uncompressed_size == remote_meta.uncompressed_size;
@@ -495,14 +529,14 @@ fn display_bundle_metadata_comparison_full(
         } else {
             format!("local={}, remote={}", local_meta.uncompressed_size, remote_meta.uncompressed_size)
         },
-        if uncomp_match { "✓" } else { "✗" }
+        if uncomp_match { "✅" } else { "❌" }
     );
     
     // Compare times
     let start_match = local_meta.start_time == remote_meta.start_time;
     eprintln!("  Start Time:         {}  {}",
         if start_match { "identical" } else { "differs" },
-        if start_match { "✓" } else { "✗" }
+        if start_match { "✅" } else { "❌" }
     );
     eprintln!("    Local:  {}", local_meta.start_time);
     eprintln!("    Remote: {}", remote_meta.start_time);
@@ -510,7 +544,7 @@ fn display_bundle_metadata_comparison_full(
     let end_match = local_meta.end_time == remote_meta.end_time;
     eprintln!("  End Time:           {}  {}",
         if end_match { "identical" } else { "differs" },
-        if end_match { "✓" } else { "✗" }
+        if end_match { "✅" } else { "❌" }
     );
     eprintln!("    Local:  {}", local_meta.end_time);
     eprintln!("    Remote: {}", remote_meta.end_time);
@@ -521,8 +555,8 @@ fn display_operation_comparison(
     remote_ops: &[plcbundle::Operation],
     sample_size: usize,
 ) {
-    eprintln!("Operation Comparison");
-    eprintln!("════════════════════\n");
+    eprintln!("🔍 Operation Comparison");
+    eprintln!("════════════════════════\n");
     
     if local_ops.len() != remote_ops.len() {
         eprintln!("  ⚠️  Different operation counts: local={}, remote={}\n",
@@ -617,7 +651,7 @@ fn display_operation_comparison(
     }
     
     if missing_in_local.is_empty() && missing_in_remote.is_empty() && position_mismatches.is_empty() {
-        eprintln!("  ✓ All operations match (same CIDs, same order)\n");
+        eprintln!("  ✅ All operations match (same CIDs, same order)\n");
     }
     
     // Show sample operations for context
@@ -629,12 +663,12 @@ fn display_operation_comparison(
             let remote_match = if let Some(ref cid) = op.cid {
                 if let Some(&remote_pos) = remote_cids.get(cid) {
                     if remote_pos == i {
-                        " ✓".to_string()
+                        " ✅".to_string()
                     } else {
-                        format!(" ~ (remote pos: {:04})", remote_pos)
+                        format!(" ⚠️  (remote pos: {:04})", remote_pos)
                     }
                 } else {
-                    " ✗ (missing in remote)".to_string()
+                    " ❌ (missing in remote)".to_string()
                 }
             } else {
                 String::new()
@@ -653,12 +687,12 @@ fn display_hash_analysis_full(
     remote_meta: &plcbundle::index::BundleMetadata,
     _bundle_num: u32,
 ) {
-    eprintln!("Hash Analysis");
-    eprintln!("═════════════\n");
+    eprintln!("🔐 Hash Analysis");
+    eprintln!("════════════════\n");
     
     // Content hash (most important)
     let content_match = local_meta.content_hash == remote_meta.content_hash;
-    eprintln!("  Content Hash:       {}", if content_match { "✓" } else { "✗" });
+    eprintln!("  Content Hash:       {}", if content_match { "✅" } else { "❌" });
     eprintln!("    Local:  {}", local_meta.content_hash);
     eprintln!("    Remote: {}", remote_meta.content_hash);
     if !content_match {
@@ -668,7 +702,7 @@ fn display_hash_analysis_full(
     
     // Compressed hash
     let comp_match = local_meta.compressed_hash == remote_meta.compressed_hash;
-    eprintln!("  Compressed Hash:    {}", if comp_match { "✓" } else { "✗" });
+    eprintln!("  Compressed Hash:    {}", if comp_match { "✅" } else { "❌" });
     eprintln!("    Local:  {}", local_meta.compressed_hash);
     eprintln!("    Remote: {}", remote_meta.compressed_hash);
     if !comp_match && content_match {
@@ -678,14 +712,14 @@ fn display_hash_analysis_full(
     
     // Chain hash
     let chain_match = local_meta.hash == remote_meta.hash;
-    eprintln!("  Chain Hash:         {}", if chain_match { "✓" } else { "✗" });
+    eprintln!("  Chain Hash:         {}", if chain_match { "✅" } else { "❌" });
     eprintln!("    Local:  {}", local_meta.hash);
     eprintln!("    Remote: {}", remote_meta.hash);
     if !chain_match {
         // Analyze why chain hash differs
         let parent_match = local_meta.parent == remote_meta.parent;
         eprintln!("\n  Chain Components:");
-        eprintln!("    Parent:  {}", if parent_match { "✓" } else { "✗" });
+        eprintln!("    Parent:  {}", if parent_match { "✅" } else { "❌" });
         eprintln!("      Local:  {}", local_meta.parent);
         eprintln!("      Remote: {}", remote_meta.parent);
         
