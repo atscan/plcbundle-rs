@@ -1,4 +1,4 @@
-.PHONY: build install release clean test run help
+.PHONY: build install release clean test run help version patch minor major
 
 # Default target
 help:
@@ -42,3 +42,24 @@ lint: ## Run clippy linter
 
 check: ## Check without building
 	cargo check
+
+# Version management with cargo-release
+# Requires: cargo install cargo-release
+
+version: ## Show current version
+	@cargo metadata --format-version 1 | jq -r '.packages[] | select(.name=="plcbundle") | .version'
+
+patch: ## Bump patch version (0.1.0 -> 0.1.1)
+	cargo release patch --execute
+
+minor: ## Bump minor version (0.1.0 -> 0.2.0)
+	cargo release minor --execute
+
+major: ## Bump major version (0.1.0 -> 1.0.0)
+	cargo release major --execute
+
+release-dry-run: ## Dry run of release (no changes)
+	cargo release patch --dry-run
+
+release-preview: ## Preview what would change in a release
+	cargo release patch --no-publish --no-push --no-tag --allow-dirty

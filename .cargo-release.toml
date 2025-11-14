@@ -1,0 +1,62 @@
+# cargo-release configuration for plcbundle-rs
+# See: https://github.com/crate-ci/cargo-release
+
+[workspace]
+# Workspace-level settings
+
+[package]
+# Package-level settings for the main crate
+
+# Version bumping strategy
+# Options: "major", "minor", "patch", "rc", "beta", "alpha", "dev"
+# Default is to prompt, but you can set a default here
+# version = "patch"
+
+# Changelog configuration
+[package.changelog]
+# Enable changelog generation
+enable = true
+# Path to changelog file
+path = "CHANGELOG.md"
+# Template for changelog entries (optional)
+# template = "changelog-template.md"
+
+# Git configuration
+[package.git]
+# Create git tags for releases
+tag = true
+# Tag name format (default: "v{version}")
+tag-name = "v{version}"
+# Push tags to remote
+push = true
+# Commit changes
+commit = true
+# Commit message format
+commit-message = "chore: release {version}"
+# Sign commits (requires GPG setup)
+# sign-commit = false
+# Sign tags (requires GPG setup)
+# sign-tag = false
+
+# Pre-release hooks (optional)
+# [package.pre-release]
+# Run before version bump
+# pre-release-command = "cargo test"
+
+# Post-release hooks (optional)
+# [package.post-release]
+# Run after release
+# post-release-command = "echo 'Release {version} completed'"
+
+# Publishing configuration
+[package.publish]
+# Auto-publish to crates.io (set to false to publish manually)
+# auto-publish = false
+# Dry-run mode (don't actually publish)
+# dry-run = false
+
+# Additional files to update (optional)
+# [package.files]
+# Files that contain version numbers to update
+# files = ["README.md", "docs/API.md"]
+
