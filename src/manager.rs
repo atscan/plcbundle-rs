@@ -677,10 +677,110 @@ impl BundleManager {
 
     // === Sync Operations ===
 
+    /// Validate and clean repository state before sync
+    fn validate_sync_state(&mut self) -> Result<()> {
+        let last_bundle = self.get_last_bundle();
+        let next_bundle_num = last_bundle + 1;
+        
+        // Check for and delete mempool files for already-completed bundles
+        let mut found_stale_files = false;
+        if let Ok(entries) = std::fs::read_dir(&self.directory) {
+            for entry in entries.flatten() {
+                if let Some(name) = entry.file_name().to_str() {
+                    if name.starts_with("plc_mempool_") && name.ends_with(".jsonl") {
+                        // Extract bundle number from filename: plc_mempool_NNNNNN.jsonl
+                        if let Some(num_str) = name.strip_prefix("plc_mempool_").and_then(|s| s.strip_suffix(".jsonl")) {
+                            if let Ok(bundle_num) = num_str.parse::<u32>() {
+                                // Delete mempool files for completed bundles or way future bundles
+                                if bundle_num <= last_bundle || bundle_num > next_bundle_num {
+                                    log::warn!("Removing stale mempool file for bundle {:06}", bundle_num);
+                                    let _ = std::fs::remove_file(entry.path());
+                                    found_stale_files = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        if found_stale_files {
+            log::info!("Cleaned up stale mempool files");
+        }
+        
+        let mempool_stats = self.get_mempool_stats()?;
+        
+        if mempool_stats.count == 0 {
+            return Ok(()); // Empty mempool is always valid
+        }
+        
+        // Check if mempool operations are for the correct bundle
+        let mempool_ops = self.get_mempool_operations()?;
+        if mempool_ops.is_empty() {
+            return Ok(());
+        }
+        
+        // Get the last operation from the previous bundle
+        let last_bundle_time = if next_bundle_num > 1 {
+            let last_bundle_result = self.load_bundle(next_bundle_num - 1, LoadOptions::default())?;
+            if let Some(last_op) = last_bundle_result.operations.last() {
+                chrono::DateTime::parse_from_rfc3339(&last_op.created_at)
+                    .ok()
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        
+        // Check if mempool operations are chronologically valid relative to last bundle
+        if let Some(last_time) = last_bundle_time {
+            if let Some(first_mempool_time) = mempool_stats.first_time {
+                // Case 1: Mempool operations are BEFORE the last bundle (definitely stale)
+                if first_mempool_time < last_time {
+                    log::warn!("Detected stale mempool data (operations before last bundle)");
+                    log::warn!("First mempool op: {}, Last bundle op: {}", 
+                        first_mempool_time.format("%Y-%m-%d %H:%M:%S"),
+                        last_time.format("%Y-%m-%d %H:%M:%S"));
+                    log::warn!("Clearing mempool to start fresh...");
+                    self.clear_mempool()?;
+                    return Ok(());
+                }
+                
+                // Case 2: Mempool operations are slightly after last bundle, but way too close
+                // This indicates they're from a previous failed attempt at this bundle
+                let time_diff = first_mempool_time.signed_duration_since(last_time);
+                if time_diff < chrono::Duration::seconds(60) && mempool_stats.count < crate::sync::BUNDLE_SIZE {
+                    log::warn!("Detected potentially stale mempool data (too close to last bundle timestamp)");
+                    log::warn!("Time difference: {}s, Operations: {}/{}", 
+                        time_diff.num_seconds(), mempool_stats.count, crate::sync::BUNDLE_SIZE);
+                    log::warn!("This likely indicates a previous failed sync attempt. Clearing mempool...");
+                    self.clear_mempool()?;
+                    return Ok(());
+                }
+            }
+        }
+        
+        // Check if mempool has way too many operations (likely from failed previous attempt)
+        if mempool_stats.count > crate::sync::BUNDLE_SIZE {
+            log::warn!("Mempool has {} operations (expected max {})", 
+                mempool_stats.count, crate::sync::BUNDLE_SIZE);
+            log::warn!("This indicates a previous sync attempt failed. Clearing mempool...");
+            self.clear_mempool()?;
+            return Ok(());
+        }
+        
+        Ok(())
+    }
+
     /// Fetch and save next bundle from PLC directory
     pub async fn sync_next_bundle(&mut self, client: &crate::sync::PLCClient) -> Result<u32> {
         use crate::sync::{get_boundary_cids, strip_boundary_duplicates, BUNDLE_SIZE};
         use std::time::Instant;
+
+        // Validate repository state before starting
+        self.validate_sync_state()?;
 
         let next_bundle_num = self.get_last_bundle() + 1;
 
@@ -1202,7 +1302,7 @@ impl BundleManager {
         })
     }
 
-    fn clone_for_arc(&self) -> Self {
+    pub fn clone_for_arc(&self) -> Self {
         Self {
             directory: self.directory.clone(),
             index: Arc::clone(&self.index),

@@ -93,24 +93,44 @@ enum Commands {
         format: InfoFormat,
     },
 
-    /// Verify bundle integrity
-    Verify {
-        /// Bundle range to verify
-        #[arg(short, long)]
-        bundles: Option<String>,
+    /// List bundles (machine-readable)
+    #[command(
+        after_help = "Examples:\n  \
+            # List all bundles\n  \
+            plcbundle ls\n\n  \
+            # Last 10 bundles\n  \
+            plcbundle ls -n 10\n\n  \
+            # Oldest first\n  \
+            plcbundle ls --reverse\n\n  \
+            # Custom format\n  \
+            plcbundle ls --format \"bundle,hash,date,size\"\n\n  \
+            # CSV format\n  \
+            plcbundle ls --separator \",\"\n\n  \
+            # Scripting examples\n  \
+            plcbundle ls | awk '{print $1}'           # Just bundle numbers\n  \
+            plcbundle ls | grep 000150                # Find specific bundle\n  \
+            plcbundle ls -n 5 | cut -f1,4             # First and 4th columns\n  \
+            plcbundle ls --format bundle,hash         # Custom columns\n  \
+            plcbundle ls --separator \",\" > bundles.csv # Export to CSV"
+    )]
+    Ls(commands::ls::LsCommand),
 
-        /// Verify checksums
-        #[arg(long)]
-        checksums: bool,
-
-        /// Verify chain continuity
-        #[arg(long)]
-        chain: bool,
-
-        /// Parallel verification
-        #[arg(short = 'j', long, default_value = "0")]
-        threads: usize,
-    },
+    /// Verify bundle integrity and chain
+    #[command(
+        after_help = "Examples:\n  \
+            # Verify entire chain\n  \
+            plcbundle verify\n  \
+            plcbundle verify --chain\n\n  \
+            # Verify specific bundle\n  \
+            plcbundle verify --bundle 42\n\n  \
+            # Verify range of bundles\n  \
+            plcbundle verify --range 1-100\n\n  \
+            # Verbose output\n  \
+            plcbundle verify --chain -v\n\n  \
+            # Parallel verification (faster for ranges)\n  \
+            plcbundle verify --range 1-1000 --parallel --workers 8"
+    )]
+    Verify(commands::verify::VerifyCommand),
 
     /// Export operations to different formats
     Export {
@@ -580,13 +600,15 @@ fn main() -> Result<()> {
         } => {
             cmd_info(cli.dir, detailed, bundle, format, cli.verbose)?;
         }
-        Commands::Verify {
-            bundles,
-            checksums,
-            chain,
-            threads,
-        } => {
-            cmd_verify(cli.dir, bundles, checksums, chain, threads, cli.quiet)?;
+
+        Commands::Ls(cmd) => {
+            commands::ls::run(cmd, cli.dir)?;
+        }
+
+        Commands::Verify(cmd) => {
+            let mut cmd = cmd;
+            cmd.verbose = cli.verbose;
+            commands::verify::run(cmd, cli.dir)?;
         }
         Commands::Export {
             range,
@@ -761,26 +783,6 @@ fn print_bundle_info(meta: &BundleMetadata, detailed: bool, _verbose: bool) {
     }
 }
 
-fn cmd_verify(
-    dir: PathBuf,
-    bundles_spec: Option<String>,
-    _checksums: bool,
-    _chain: bool,
-    _threads: usize,
-    quiet: bool,
-) -> Result<()> {
-    let index = Index::load(&dir)?;
-    let bundle_numbers = commands::utils::parse_bundle_spec(bundles_spec, index.last_bundle)?;
-
-    if !quiet {
-        eprintln!("🔍 Verifying {} bundles...", bundle_numbers.len());
-    }
-
-    // Verification logic would go here
-    println!("Verification not yet fully implemented");
-
-    Ok(())
-}
 
 // cmd_export moved to commands::export module
 

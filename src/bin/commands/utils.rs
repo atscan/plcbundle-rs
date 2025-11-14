@@ -44,6 +44,25 @@ pub fn parse_bundle_range(spec: &str, _max_bundle: u32) -> Result<Vec<u32>> {
     Ok(result)
 }
 
+/// Parse a simple bundle range string (e.g., "1-100") into (start, end)
+pub fn parse_bundle_range_simple(spec: &str) -> Result<(u32, u32)> {
+    if spec.contains('-') {
+        let parts: Vec<&str> = spec.split('-').collect();
+        if parts.len() != 2 {
+            anyhow::bail!("Invalid range format: {}", spec);
+        }
+        let start: u32 = parts[0].trim().parse()?;
+        let end: u32 = parts[1].trim().parse()?;
+        if start > end {
+            anyhow::bail!("Invalid range: {} > {}", start, end);
+        }
+        Ok((start, end))
+    } else {
+        let num: u32 = spec.trim().parse()?;
+        Ok((num, num))
+    }
+}
+
 /// Format number with thousand separators
 pub fn format_number(n: u64) -> String {
     let s = n.to_string();

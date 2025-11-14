@@ -19,7 +19,7 @@ anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sonic-rs = "0.5"
-jmespath = { version = "0.3", features = ["sync"] }
+jmespath = { version = "0.4", features = ["sync"] }
 zstd = "0.13"
 rayon = "1.10"
 blake3 = "1.5"
@@ -28,13 +28,13 @@ chrono = "0.4"
 fnv = "1.0"
 
 # Async HTTP client for PLC sync
-reqwest = { version = "0.11", features = ["json"] }
-tokio = { version = "1.35", features = ["full"] }
+reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1.40", features = ["full"] }
 httpdate = "1.0"
 
 # Optional CLI dependencies
 clap = { version = "4.5", features = ["derive"], optional = true }
-indicatif = { version = "0.17", optional = true }
+indicatif = { version = "0.18", optional = true }
 log = { version = "0.4", optional = true }
 env_logger = { version = "0.11", optional = true }
 sha2 = "0.10.9"
