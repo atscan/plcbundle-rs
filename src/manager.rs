@@ -3,7 +3,7 @@ use crate::index::{Index, BundleMetadata};
 use crate::operations::{Operation, OperationFilter, OperationRequest};
 use crate::iterators::{QueryIterator, ExportIterator, RangeIterator};
 use crate::options::QueryMode;
-use crate::{cache, did_index, verification, mempool};
+use crate::{cache, did_index, verification, mempool, handle_resolver};
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -18,6 +18,7 @@ pub struct BundleManager {
     did_index: Arc<RwLock<did_index::Manager>>,
     stats: Arc<RwLock<ManagerStats>>,
     mempool: Arc<RwLock<Option<mempool::Mempool>>>,
+    handle_resolver: Option<Arc<handle_resolver::HandleResolver>>,
     verbose: bool,
 }
 
@@ -59,8 +60,15 @@ pub struct RollbackFileStats {
 
 impl BundleManager {
     pub fn new(directory: PathBuf) -> Result<Self> {
+        Self::with_handle_resolver(directory, None)
+    }
+
+    pub fn with_handle_resolver(directory: PathBuf, handle_resolver_url: Option<String>) -> Result<Self> {
         let index = Index::load(&directory)?;
         let did_index = did_index::Manager::new(directory.clone())?;
+
+        let handle_resolver = handle_resolver_url
+            .map(|url| Arc::new(handle_resolver::HandleResolver::new(url)));
 
         Ok(Self {
             directory: directory.clone(),
@@ -69,6 +77,7 @@ impl BundleManager {
             did_index: Arc::new(RwLock::new(did_index)),
             stats: Arc::new(RwLock::new(ManagerStats::default())),
             mempool: Arc::new(RwLock::new(None)),
+            handle_resolver,
             verbose: false,
         })
     }
@@ -1374,19 +1383,61 @@ impl BundleManager {
     
     /// Resolve handle to DID or validate DID format
     /// Returns (did, handle_resolve_time_ms)
-    /// For now, handles are not supported (returns error), only DIDs are validated
+    /// This is a synchronous wrapper that uses tokio runtime for async resolution
     pub fn resolve_handle_or_did(&self, input: &str) -> Result<(String, u64)> {
         use std::time::Instant;
         
-        // Check if it's a DID
-        if input.starts_with("did:") {
-            // Validate DID format
-            crate::resolver::validate_did_format(input)?;
-            return Ok((input.to_string(), 0));
+        let input = input.trim();
+        
+        // Normalize handle format (remove at://, @ prefixes)
+        let normalized = if !input.starts_with("did:") {
+            handle_resolver::normalize_handle(input)
+        } else {
+            input.to_string()
+        };
+        
+        // If already a DID, validate and return
+        if normalized.starts_with("did:plc:") {
+            crate::resolver::validate_did_format(&normalized)?;
+            return Ok((normalized, 0));
         }
         
-        // Handle resolution not implemented yet
-        anyhow::bail!("Handle resolution not implemented. Input '{}' appears to be a handle", input);
+        // Support did:web too
+        if normalized.starts_with("did:web:") {
+            return Ok((normalized, 0));
+        }
+        
+        // It's a handle - need resolver
+        let resolver = match &self.handle_resolver {
+            Some(r) => r,
+            None => {
+                anyhow::bail!(
+                    "Input '{}' appears to be a handle, but handle resolver is not configured\n\n\
+                    Configure resolver with:\n\
+                      plcbundle --handle-resolver https://quickdid.smokesignal.tools did resolve {}\n\n\
+                    Or set default in config",
+                    normalized, normalized
+                );
+            }
+        };
+        
+        // Use tokio runtime to resolve handle (async operation)
+        let resolve_start = Instant::now();
+        let did = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                // We're in an async context, use the current handle
+                handle.block_on(resolver.resolve_handle(&normalized))?
+            }
+            Err(_) => {
+                // Create a new runtime if we're not in an async context
+                let runtime = tokio::runtime::Runtime::new()
+                    .map_err(|e| anyhow::anyhow!("Failed to create tokio runtime: {}", e))?;
+                runtime.block_on(resolver.resolve_handle(&normalized))?
+            }
+        };
+        let resolve_time = resolve_start.elapsed();
+        
+        Ok((did, resolve_time.as_millis() as u64))
     }
     
     /// Get resolver statistics
@@ -1400,8 +1451,7 @@ impl BundleManager {
     /// Get handle resolver base URL
     /// Returns None if handle resolver is not configured
     pub fn get_handle_resolver_base_url(&self) -> Option<String> {
-        // Handle resolver not implemented yet
-        None
+        self.handle_resolver.as_ref().map(|r| r.get_base_url().to_string())
     }
 
     pub fn clone_for_arc(&self) -> Self {
@@ -1412,6 +1462,7 @@ impl BundleManager {
             did_index: Arc::clone(&self.did_index),
             stats: Arc::clone(&self.stats),
             mempool: Arc::clone(&self.mempool),
+            handle_resolver: self.handle_resolver.clone(),
             verbose: self.verbose,
         }
     }

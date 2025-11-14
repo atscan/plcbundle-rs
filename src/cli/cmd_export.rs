@@ -6,9 +6,9 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use super::utils;
-
-// Re-export for convenience - the actual enum is defined in main.rs with ValueEnum
-pub use crate::ExportFormat;
+// ExportFormat is defined in plcbundle-rs.rs
+// Access it via the parent module
+use super::ExportFormat;
 
 pub fn cmd_export(
     dir: PathBuf,

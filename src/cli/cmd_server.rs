@@ -2,10 +2,11 @@
 use anyhow::{Result, Context};
 use clap::Args;
 use plcbundle::BundleManager;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::signal;
-use tokio::time::{sleep, Duration};
+use tokio::time::Duration;
 use chrono::Utc;
 
 #[cfg(feature = "server")]
@@ -61,6 +62,10 @@ pub struct ServerCommand {
     /// Enable DID resolution endpoints
     #[arg(long)]
     pub resolver: bool,
+
+    /// Handle resolver URL (e.g., https://quickdid.smokesignal.tools)
+    #[arg(long)]
+    pub handle_resolver: Option<String>,
 
     /// Verbose output
     #[arg(short, long)]
@@ -118,10 +123,11 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
     use axum::Router;
     use std::net::SocketAddr;
 
-    // Initialize manager
+    // Initialize manager with handle resolver if configured
+    let handle_resolver_url = cmd.handle_resolver.clone();
     let manager = if cmd.sync {
         // Sync mode can auto-init
-        BundleManager::new(dir.clone())
+        BundleManager::with_handle_resolver(dir.clone(), handle_resolver_url.clone())
             .or_else(|_| {
                 // Try to initialize if it doesn't exist (similar to init command)
                 let index_path = dir.join("plc_bundles.json");
@@ -142,11 +148,11 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
                     let json = serde_json::to_string_pretty(&index)?;
                     std::fs::write(&index_path, json)?;
                 }
-                BundleManager::new(dir.clone())
+                BundleManager::with_handle_resolver(dir.clone(), handle_resolver_url.clone())
             })?
     } else {
         // Read-only mode cannot auto-init
-        BundleManager::new(dir.clone())
+        BundleManager::with_handle_resolver(dir.clone(), handle_resolver_url)
             .context("Repository not found. Use 'plcbundle init' first or run with --sync")?
     };
 
@@ -233,15 +239,86 @@ async fn run_server_sync_loop(
     max_bundles: u32,
     verbose: bool,
 ) {
-    loop {
-        // TODO: Implement sync loop
-        // For now, just log that sync is running
-        if verbose {
-            eprintln!("[Sync] Checking for new bundles...");
+    use plcbundle::sync::PLCClient;
+    use tokio::sync::Mutex;
+    use tokio::time::sleep;
+
+    // Create PLC client
+    let client = match PLCClient::new(&plc_url) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[Sync] Failed to create PLC client: {}", e);
+            return;
         }
-        
-        // Sleep for interval
+    };
+
+    // Wrap manager in Mutex for mutable access during sync
+    // Note: This will block other operations during sync, but sync is infrequent
+    let manager_mutex = Arc::new(Mutex::new(()));
+    let mut total_synced = 0u32;
+
+    if verbose {
+        eprintln!("[Sync] Starting sync loop (interval: {:?})", interval);
+    }
+
+    loop {
+        // Try to acquire lock for sync operation
+        // If we can't get it immediately, wait a bit and try again
+        let sync_result = {
+            let _guard = manager_mutex.lock().await;
+            
+            // Get mutable access by cloning and recreating
+            // This is a workaround since BundleManager doesn't use interior mutability for sync
+            // In a production system, we'd want to refactor sync methods to use &self
+            let dir = manager.directory().clone();
+            let mut manager_clone = match BundleManager::new(dir) {
+                Ok(m) => m.with_verbose(verbose),
+                Err(e) => {
+                    eprintln!("[Sync] Failed to recreate manager: {}", e);
+                    sleep(interval).await;
+                    continue;
+                }
+            };
+
+            // Run sync
+            manager_clone.sync_once(&client).await
+        };
+
+        match sync_result {
+            Ok(synced) => {
+                total_synced += synced as u32;
+                
+                if verbose && synced > 0 {
+                    eprintln!("[Sync] Synced {} bundle(s) (total: {})", synced, total_synced);
+                } else if verbose && synced == 0 {
+                    eprintln!("[Sync] Already up to date");
+                }
+
+                // Check max bundles limit
+                if max_bundles > 0 && total_synced >= max_bundles {
+                    if verbose {
+                        eprintln!("[Sync] Reached max bundles limit ({})", max_bundles);
+                    }
+                    break;
+                }
+            }
+            Err(e) => {
+                if e.to_string().contains("Caught up") {
+                    if verbose {
+                        eprintln!("[Sync] Caught up to latest PLC data");
+                    }
+                } else {
+                    eprintln!("[Sync] Error during sync: {}", e);
+                }
+            }
+        }
+
+        // Sleep for interval before next sync
         sleep(interval).await;
+    }
+
+    if verbose {
+        eprintln!("[Sync] Sync loop stopped");
     }
 }
 

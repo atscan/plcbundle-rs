@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use super::utils;
-
-// Re-export for convenience - the actual enums are defined in main.rs with ValueEnum
-pub use crate::{QueryModeArg, OutputFormat};
+// QueryModeArg and OutputFormat are defined in plcbundle-rs.rs
+// Access them via the parent module
+use super::{QueryModeArg, OutputFormat};
 
 pub struct StdoutHandler {
     lock: Mutex<()>,

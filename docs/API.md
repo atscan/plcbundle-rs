@@ -68,6 +68,16 @@ fetch_remote_index(target: &str) -> Result<Index>
 fetch_remote_bundle(base_url: &str, bundle_num: u32) -> Result<Vec<Operation>>
 fetch_remote_operation(base_url: &str, bundle_num: u32, position: usize) -> Result<String>
 
+// === Server API Methods ===
+get_plc_origin() -> String
+stream_bundle_raw(bundle_num: u32) -> Result<File>
+stream_bundle_decompressed(bundle_num: u32) -> Result<Box<dyn Read + Send>>
+get_current_cursor() -> u64
+resolve_handle_or_did(input: &str) -> Result<(String, u64)>
+get_resolver_stats() -> HashMap<String, serde_json::Value>
+get_handle_resolver_base_url() -> Option<String>
+get_did_index() -> Arc<RwLock<did_index::Manager>>
+
 // === Mempool Operations ===
 get_mempool_stats() -> Result<MempoolStats>
 get_mempool_operations() -> Result<Vec<Operation>>
@@ -651,7 +661,91 @@ pub struct DIDIndexStats {
 
 ---
 
-## 10. Observability
+## 10. Server API Methods
+
+The following methods are specifically designed for use by the HTTP server component. They provide streaming capabilities, cursor tracking, and resolver functionality.
+
+### Streaming Bundle Data
+
+```rust
+/// Stream bundle raw (compressed) data
+pub fn stream_bundle_raw(&self, bundle_num: u32) -> Result<std::fs::File>
+
+/// Stream bundle decompressed (JSONL) data
+pub fn stream_bundle_decompressed(&self, bundle_num: u32) -> Result<Box<dyn std::io::Read + Send>>
+```
+
+**Purpose**: Efficient streaming of bundle data for HTTP responses.
+
+**Use Cases:**
+- Server: `/data/:number` endpoint (raw compressed)
+- Server: `/jsonl/:number` endpoint (decompressed JSONL)
+- WebSocket: Streaming operations to clients
+
+### Cursor & Position Tracking
+
+```rust
+/// Get current cursor (global position of last operation)
+/// Cursor = (last_bundle * 10000) + mempool_ops_count
+pub fn get_current_cursor(&self) -> u64
+```
+
+**Purpose**: Track the global position in the operation stream for WebSocket streaming.
+
+**Use Cases:**
+- WebSocket: `/ws?cursor=N` to resume from a specific position
+- Server: Status endpoint showing current position
+
+### Handle & DID Resolution
+
+```rust
+/// Resolve handle to DID or validate DID format
+/// Returns (did, handle_resolve_time_ms)
+pub fn resolve_handle_or_did(&self, input: &str) -> Result<(String, u64)>
+
+/// Get handle resolver base URL (if configured)
+pub fn get_handle_resolver_base_url(&self) -> Option<String>
+
+/// Get resolver statistics
+pub fn get_resolver_stats(&self) -> HashMap<String, serde_json::Value>
+```
+
+**Purpose**: Support handle-to-DID resolution and resolver metrics.
+
+**Use Cases:**
+- Server: `/:did` endpoints (accepts both DIDs and handles)
+- Server: `/status` endpoint (resolver stats)
+- Server: `/debug/resolver` endpoint
+
+### DID Index Access
+
+```rust
+/// Get DID index manager (for stats and direct access)
+pub fn get_did_index(&self) -> Arc<RwLock<did_index::Manager>>
+```
+
+**Purpose**: Direct access to DID index for server endpoints.
+
+**Use Cases:**
+- Server: `/debug/didindex` endpoint
+- Server: `/status` endpoint (DID index stats)
+
+### PLC Origin
+
+```rust
+/// Get PLC origin from index
+pub fn get_plc_origin(&self) -> String
+```
+
+**Purpose**: Get the origin identifier for the repository.
+
+**Use Cases:**
+- Server: Root endpoint (display origin)
+- Server: `/status` endpoint
+
+---
+
+## 11. Observability
 
 ### Manager Statistics
 

@@ -22,8 +22,8 @@ release: ## Build optimized release binary
 	@echo ""
 	@echo "Release binary: target/release/bundleq"
 
-install: ## Install to ~/.cargo/bin
-	cargo install --path .
+install: ## Install to ~/.cargo/bin (with all features)
+	cargo install --all-features --path .
 
 clean: ## Clean build artifacts
 	cargo clean

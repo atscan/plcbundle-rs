@@ -229,6 +229,34 @@ When adding/changing APIs:
 
 ---
 
+## CLI Module Naming
+
+### `cmd_` Prefix Only for Commands
+
+The `cmd_` prefix should **only** be used for actual CLI commands (subcommands that users invoke). Helper modules and utilities should **not** have the `cmd_` prefix.
+
+**Structure:**
+```
+src/cli/
+  ├── plcbundle-rs.rs      (main entry point)
+  ├── cmd_*.rs             (CLI commands only)
+  ├── progress.rs          (helper: progress bar)
+  ├── utils.rs             (helper: utility functions)
+  └── logger.rs            (helper: logging setup)
+```
+
+**Rules:**
+- ✅ `cmd_export.rs` - CLI command
+- ✅ `cmd_query.rs` - CLI command
+- ✅ `cmd_verify.rs` - CLI command
+- ❌ `cmd_utils.rs` - Should be `utils.rs` (helper)
+- ❌ `cmd_progress.rs` - Should be `progress.rs` (helper)
+- ❌ `cmd_logger.rs` - Should be `logger.rs` (helper)
+
+**Rationale:** This makes it immediately clear which files are user-facing commands vs internal helpers when browsing the codebase.
+
+---
+
 See also:
 - **`docs/specification.md`** - **Official PLC Bundle V1 specification (MUST READ)**
 - `docs/API.md` - Complete API reference
