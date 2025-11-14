@@ -1414,6 +1414,194 @@ impl BundleManager {
         Ok(())
     }
 
+    /// Migrate a bundle to multi-frame format
+    /// 
+    /// This method loads a bundle and re-saves it with multi-frame compression
+    /// (100 operations per frame) with frame offsets for efficient random access.
+    /// 
+    /// Returns: (size_diff, new_uncompressed_size, new_compressed_size)
+    pub fn migrate_bundle(&self, bundle_num: u32) -> Result<(i64, u64, u64)> {
+        use anyhow::Context;
+        use std::fs::File;
+        use std::collections::HashSet;
+
+        // Get existing bundle metadata
+        let meta = self.get_bundle_metadata(bundle_num)?
+            .ok_or_else(|| anyhow::anyhow!("Bundle {} not in index", bundle_num))?;
+        
+        let old_size = meta.compressed_size;
+
+        // Load bundle operations
+        let load_result = self.load_bundle(bundle_num, LoadOptions {
+            verify_hash: false,
+            decompress: true,
+            cache: false,
+            parse_operations: true,
+        })?;
+
+        let operations = load_result.operations;
+        if operations.is_empty() {
+            anyhow::bail!("Bundle {} has no operations", bundle_num);
+        }
+
+        // Extract metadata
+        let start_time = operations.first().unwrap().created_at.clone();
+        let end_time = operations.last().unwrap().created_at.clone();
+        let operation_count = operations.len() as u32;
+
+        // Count unique DIDs
+        let unique_dids: HashSet<String> = operations.iter().map(|op| op.did.clone()).collect();
+        let did_count = unique_dids.len() as u32;
+
+        // Compress operations into frames using library function
+        let frame_result = crate::bundle_format::compress_operations_to_frames(&operations)?;
+        let compressed_size = frame_result.compressed_size;
+        let uncompressed_size = frame_result.uncompressed_size;
+
+        // Calculate hashes using library functions
+        let content_hash = crate::bundle_format::calculate_content_hash(&operations)?;
+        
+        // Combine all compressed frames for hash calculation
+        let mut all_compressed_data = Vec::new();
+        for frame in &frame_result.compressed_frames {
+            all_compressed_data.extend_from_slice(frame);
+        }
+        let compressed_hash = crate::bundle_format::calculate_compressed_hash(&all_compressed_data);
+
+        // Calculate chain hash
+        let (parent, chain_hash) = if bundle_num > 1 {
+            use sha2::{Sha256, Digest};
+            let parent_chain_hash = self.index
+                .read()
+                .unwrap()
+                .get_bundle(bundle_num - 1)
+                .map(|b| b.hash.clone())
+                .unwrap_or_default();
+            
+            let chain_input = format!("{}:{}", parent_chain_hash, content_hash);
+            let mut hasher = Sha256::new();
+            hasher.update(chain_input.as_bytes());
+            let hash = format!("{:x}", hasher.finalize());
+            
+            (parent_chain_hash, hash)
+        } else {
+            use sha2::{Sha256, Digest};
+            let chain_input = format!("plcbundle:genesis:{}", content_hash);
+            let mut hasher = Sha256::new();
+            hasher.update(chain_input.as_bytes());
+            let hash = format!("{:x}", hasher.finalize());
+            
+            (String::new(), hash)
+        };
+
+        let cursor = end_time.clone();
+        let origin = self.index.read().unwrap().origin.clone();
+
+        // Create bundle metadata using library function
+        let bundle_metadata_frame = crate::bundle_format::create_bundle_metadata(
+            bundle_num,
+            &origin,
+            &content_hash,
+            if !parent.is_empty() { Some(&parent) } else { None },
+            operation_count as usize,
+            did_count as usize,
+            &start_time,
+            &end_time,
+            frame_result.frame_offsets.len() - 1,
+            constants::FRAME_SIZE,
+            &frame_result.frame_offsets,
+        );
+
+        // Create backup path
+        let bundle_path = self.directory.join(format!("{:06}.jsonl.zst", bundle_num));
+        let backup_path = bundle_path.with_extension("jsonl.zst.bak");
+
+        // Backup existing file
+        if bundle_path.exists() {
+            std::fs::copy(&bundle_path, &backup_path)
+                .with_context(|| format!("Failed to backup bundle: {}", bundle_path.display()))?;
+        }
+
+        // Write new bundle with multi-frame format using library function
+        let mut file = File::create(&bundle_path)
+            .with_context(|| format!("Failed to create bundle file: {}", bundle_path.display()))?;
+        
+        crate::bundle_format::write_bundle_with_frames(
+            &mut file,
+            &bundle_metadata_frame,
+            &frame_result.compressed_frames,
+        )
+        .with_context(|| format!("Failed to write bundle: {}", bundle_path.display()))?;
+
+        // Verify metadata was written correctly
+        let embedded_meta = crate::bundle_format::extract_metadata_from_file(&bundle_path)
+            .with_context(|| "Failed to extract embedded metadata after migration")?;
+
+        if embedded_meta.frame_offsets.is_empty() {
+            // Restore backup on failure
+            if backup_path.exists() {
+                std::fs::rename(&backup_path, &bundle_path)?;
+            }
+            anyhow::bail!("Frame offsets missing in metadata after migration");
+        }
+
+        // Verify content hash matches
+        if embedded_meta.content_hash != content_hash {
+            // Restore backup on failure
+            if backup_path.exists() {
+                std::fs::rename(&backup_path, &bundle_path)?;
+            }
+            anyhow::bail!("Content hash mismatch after migration");
+        }
+
+        // Remove backup on success
+        if backup_path.exists() {
+            std::fs::remove_file(&backup_path)
+                .with_context(|| format!("Failed to remove backup: {}", backup_path.display()))?;
+        }
+
+        // Update index
+        let bundle_metadata = crate::index::BundleMetadata {
+            bundle_number: bundle_num,
+            start_time,
+            end_time,
+            operation_count,
+            did_count,
+            hash: chain_hash,
+            content_hash,
+            parent,
+            compressed_hash,
+            compressed_size,
+            uncompressed_size,
+            cursor,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        {
+            let mut index = self.index.write().unwrap();
+            // Update existing bundle metadata
+            if let Some(existing) = index.bundles.iter_mut().find(|b| b.bundle_number == bundle_num) {
+                *existing = bundle_metadata.clone();
+            } else {
+                index.bundles.push(bundle_metadata.clone());
+            }
+            
+            // Recalculate totals
+            index.total_size_bytes = index.bundles.iter().map(|b| b.compressed_size).sum();
+            index.total_uncompressed_size_bytes = index.bundles.iter().map(|b| b.uncompressed_size).sum();
+            index.updated_at = chrono::Utc::now().to_rfc3339();
+
+            // Save index to disk
+            let index_path = self.directory.join("plc_bundles.json");
+            let index_json = serde_json::to_string_pretty(&*index)?;
+            std::fs::write(&index_path, index_json)
+                .with_context(|| format!("Failed to write index to: {}", index_path.display()))?;
+        }
+
+        let size_diff = compressed_size as i64 - old_size as i64;
+        Ok((size_diff, uncompressed_size, compressed_size))
+    }
+
     // === Helpers ===
     pub fn get_last_bundle(&self) -> u32 {
         self.index.read().unwrap().last_bundle
