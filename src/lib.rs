@@ -12,6 +12,7 @@ pub mod verification;
 pub mod iterators;
 pub mod bundle_format;
 pub mod resolver;
+pub mod mempool;
 
 // Re-export main types
 pub use options::{Options, OptionsBuilder, QueryMode};
@@ -27,3 +28,4 @@ pub use did_index::DIDLookupStats;
 pub use operations::{Operation, OperationFilter, OperationRequest};
 pub use iterators::{QueryIterator, ExportIterator, RangeIterator};
 pub use resolver::{DIDDocument, DIDState, resolve_did_document, build_did_state, validate_did_format};
+pub use mempool::{Mempool, MempoolStats};

@@ -222,6 +222,26 @@ enum Commands {
         command: IndexCommands,
     },
 
+    /// Manage mempool operations
+    ///
+    /// The mempool stores operations waiting to be bundled. It maintains
+    /// strict chronological order and automatically validates consistency.
+    #[command(alias = "mp")]
+    #[command(
+        after_help = "Examples:\n  \
+            # Show mempool status\n  \
+            plcbundle mempool\n  \
+            plcbundle mempool status\n\n  \
+            # Clear all operations\n  \
+            plcbundle mempool clear\n\n  \
+            # Export operations as JSONL\n  \
+            plcbundle mempool dump\n  \
+            plcbundle mempool dump > operations.jsonl\n\n  \
+            # Using alias\n  \
+            plcbundle mp status"
+    )]
+    Mempool(commands::mempool::MempoolCommand),
+
     /// Interactive shell mode
     #[cfg(feature = "interactive")]
     Shell {
@@ -599,6 +619,10 @@ fn main() -> Result<()> {
                     commands::index::cmd_index_verify(cli.dir, verbose)?;
                 }
             }
+        }
+
+        Commands::Mempool(cmd) => {
+            commands::mempool::run(cmd)?;
         }
     }
 

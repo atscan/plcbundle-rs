@@ -3,12 +3,13 @@ use crate::index::{Index, BundleMetadata};
 use crate::operations::{Operation, OperationFilter, OperationRequest};
 use crate::iterators::{QueryIterator, ExportIterator, RangeIterator};
 use crate::options::QueryMode;
-use crate::{cache, did_index, verification};
+use crate::{cache, did_index, verification, mempool};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::io::Write;
+use chrono::{DateTime, Utc};
 
 pub struct BundleManager {
     directory: PathBuf,
@@ -16,6 +17,8 @@ pub struct BundleManager {
     cache: Arc<cache::BundleCache>,
     did_index: Arc<RwLock<did_index::Manager>>,
     stats: Arc<RwLock<ManagerStats>>,
+    mempool: Arc<RwLock<Option<mempool::Mempool>>>,
+    verbose: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -51,14 +54,21 @@ impl BundleManager {
     pub fn new(directory: PathBuf) -> Result<Self> {
         let index = Index::load(&directory)?;
         let did_index = did_index::Manager::new(directory.clone())?;
-        
+
         Ok(Self {
             directory: directory.clone(),
             index: Arc::new(RwLock::new(index)),
             cache: Arc::new(cache::BundleCache::new(100)),
             did_index: Arc::new(RwLock::new(did_index)),
             stats: Arc::new(RwLock::new(ManagerStats::default())),
+            mempool: Arc::new(RwLock::new(None)),
+            verbose: false,
         })
+    }
+
+    pub fn with_verbose(mut self, verbose: bool) -> Self {
+        self.verbose = verbose;
+        self
     }
 
     // === Smart Loading ===
@@ -537,6 +547,116 @@ impl BundleManager {
         self.stats.write().unwrap().cache_misses = 0;
     }
 
+    // === Mempool Management ===
+
+    /// Initialize or get existing mempool for the next bundle
+    pub fn get_mempool(&self) -> Result<()> {
+        let mut mempool_guard = self.mempool.write().unwrap();
+
+        if mempool_guard.is_none() {
+            let last_bundle = self.get_last_bundle();
+            let target_bundle = last_bundle + 1;
+
+            // Get min timestamp from last bundle's last operation
+            let min_timestamp = self.get_last_bundle_timestamp()?;
+
+            let mp = mempool::Mempool::new(
+                &self.directory,
+                target_bundle,
+                min_timestamp,
+                self.verbose,
+            )?;
+
+            *mempool_guard = Some(mp);
+        }
+
+        Ok(())
+    }
+
+    /// Get mempool statistics
+    pub fn get_mempool_stats(&self) -> Result<mempool::MempoolStats> {
+        let mempool_guard = self.mempool.read().unwrap();
+
+        match mempool_guard.as_ref() {
+            Some(mp) => Ok(mp.stats()),
+            None => {
+                // Return empty stats if no mempool
+                let last_bundle = self.get_last_bundle();
+                let min_timestamp = self.get_last_bundle_timestamp()?;
+                Ok(mempool::MempoolStats {
+                    count: 0,
+                    can_create_bundle: false,
+                    target_bundle: last_bundle + 1,
+                    min_timestamp,
+                    validated: false,
+                    first_time: None,
+                    last_time: None,
+                    size_bytes: None,
+                    did_count: None,
+                })
+            }
+        }
+    }
+
+    /// Get all mempool operations
+    pub fn get_mempool_operations(&self) -> Result<Vec<Operation>> {
+        let mempool_guard = self.mempool.read().unwrap();
+
+        match mempool_guard.as_ref() {
+            Some(mp) => Ok(mp.get_operations().to_vec()),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// Clear mempool
+    pub fn clear_mempool(&self) -> Result<()> {
+        let mut mempool_guard = self.mempool.write().unwrap();
+
+        if let Some(mp) = mempool_guard.as_mut() {
+            mp.clear();
+            mp.save()?;
+        }
+
+        Ok(())
+    }
+
+    /// Add operations to mempool
+    pub fn add_to_mempool(&self, ops: Vec<Operation>) -> Result<usize> {
+        self.get_mempool()?;
+
+        let mut mempool_guard = self.mempool.write().unwrap();
+
+        if let Some(mp) = mempool_guard.as_mut() {
+            let added = mp.add(ops)?;
+            mp.save_if_needed()?;
+            Ok(added)
+        } else {
+            anyhow::bail!("Mempool not initialized")
+        }
+    }
+
+    /// Get the last bundle's last operation timestamp
+    fn get_last_bundle_timestamp(&self) -> Result<DateTime<Utc>> {
+        let last_bundle = self.get_last_bundle();
+
+        if last_bundle == 0 {
+            // No bundles yet, use epoch
+            return Ok(DateTime::from_timestamp(0, 0).unwrap());
+        }
+
+        // Load last bundle and get last operation's timestamp
+        let result = self.load_bundle(last_bundle, LoadOptions::default())?;
+
+        if let Some(last_op) = result.operations.last() {
+            let timestamp = DateTime::parse_from_rfc3339(&last_op.created_at)?
+                .with_timezone(&Utc);
+            Ok(timestamp)
+        } else {
+            // Bundle is empty (shouldn't happen), use epoch
+            Ok(DateTime::from_timestamp(0, 0).unwrap())
+        }
+    }
+
     // === Helpers ===
     pub fn get_last_bundle(&self) -> u32 {
         self.index.read().unwrap().last_bundle
@@ -553,6 +673,8 @@ impl BundleManager {
             cache: Arc::clone(&self.cache),
             did_index: Arc::clone(&self.did_index),
             stats: Arc::clone(&self.stats),
+            mempool: Arc::clone(&self.mempool),
+            verbose: self.verbose,
         }
     }
 
