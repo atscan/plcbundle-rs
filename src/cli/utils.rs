@@ -111,9 +111,13 @@ pub fn display_path(path: &Path) -> PathBuf {
 /// Number of worker threads to use
 pub fn get_num_workers(workers: usize, fallback: usize) -> usize {
     if workers == 0 {
-        std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(fallback)
+        match std::thread::available_parallelism() {
+            Ok(n) => n.get(),
+            Err(e) => {
+                eprintln!("Warning: Failed to detect CPU count: {}, using fallback: {}", e, fallback);
+                fallback
+            }
+        }
     } else {
         workers
     }

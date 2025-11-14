@@ -1145,8 +1145,9 @@ impl BundleManager {
         let (short_hash, age_str) = {
             let index = self.index.read().unwrap();
             let bundle_meta = index.get_bundle(next_bundle_num).unwrap();
-            let hash = bundle_meta.content_hash[..7].to_string();
-            
+            // Use chain hash (first 7 chars) for display
+            let hash = bundle_meta.hash[..7].to_string();
+
             // Calculate age
             let created_time = chrono::DateTime::parse_from_rfc3339(&bundle_meta.start_time)
                 .unwrap()
@@ -1154,7 +1155,7 @@ impl BundleManager {
             let now = chrono::Utc::now();
             let age = now.signed_duration_since(created_time);
             let age_str = format_age(age);
-            
+
             (hash, age_str)
         };
 
