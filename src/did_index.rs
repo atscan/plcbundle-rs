@@ -164,6 +164,19 @@ impl ShardBuilder {
 }
 
 // ============================================================================
+// Stats structures
+// ============================================================================
+
+#[derive(Debug, Clone)]
+pub struct DIDLookupStats {
+    pub shard_size: usize,
+    pub total_entries: usize,
+    pub prefix_narrowed_to: usize,
+    pub binary_search_attempts: usize,
+    pub locations_found: usize,
+}
+
+// ============================================================================
 // Manager - Main DID index manager
 // ============================================================================
 
@@ -230,6 +243,30 @@ impl Manager {
             Ok(self.search_shard(data, &identifier))
         } else {
             Ok(Vec::new())
+        }
+    }
+
+    // Get DID locations with detailed statistics
+    pub fn get_did_locations_with_stats(&self, did: &str) -> Result<(Vec<OpLocation>, DIDLookupStats, u8)> {
+        self.total_lookups.fetch_add(1, Ordering::Relaxed);
+
+        let identifier = extract_identifier(did)?;
+        let shard_num = self.calculate_shard(&identifier);
+        let shard = self.load_shard(shard_num)?;
+
+        shard.touch();
+
+        if let Some(data) = shard.data() {
+            let (locations, stats) = self.search_shard_with_stats(data, &identifier);
+            Ok((locations, stats, shard_num))
+        } else {
+            Ok((Vec::new(), DIDLookupStats {
+                shard_size: 0,
+                total_entries: 0,
+                prefix_narrowed_to: 0,
+                binary_search_attempts: 0,
+                locations_found: 0,
+            }, shard_num))
         }
     }
 
@@ -392,12 +429,13 @@ impl Manager {
     // ========================================================================
 
     fn calculate_shard(&self, identifier: &str) -> u8 {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        use fnv::FnvHasher;
+        use std::hash::Hasher;
         
-        let mut hasher = DefaultHasher::new();
-        identifier.hash(&mut hasher);
-        (hasher.finish() % DID_SHARD_COUNT as u64) as u8
+        let mut hasher = FnvHasher::default();
+        hasher.write(identifier.as_bytes());
+        let hash = hasher.finish() as u32;
+        (hash % DID_SHARD_COUNT as u32) as u8
     }
 
     fn load_shard(&self, shard_num: u8) -> Result<Arc<Shard>> {
@@ -446,23 +484,48 @@ impl Manager {
     }
 
     fn search_shard(&self, data: &[u8], identifier: &str) -> Vec<OpLocation> {
+        let (locations, _) = self.search_shard_with_stats(data, identifier);
+        locations
+    }
+
+    fn search_shard_with_stats(&self, data: &[u8], identifier: &str) -> (Vec<OpLocation>, DIDLookupStats) {
+
         if data.len() < 1056 {
-            return Vec::new();
+            return (Vec::new(), DIDLookupStats {
+                shard_size: data.len(),
+                total_entries: 0,
+                prefix_narrowed_to: 0,
+                binary_search_attempts: 0,
+                locations_found: 0,
+            });
         }
 
         // Validate header
         if &data[0..4] != DIDINDEX_MAGIC {
-            return Vec::new();
+            return (Vec::new(), DIDLookupStats {
+                shard_size: data.len(),
+                total_entries: 0,
+                prefix_narrowed_to: 0,
+                binary_search_attempts: 0,
+                locations_found: 0,
+            });
         }
 
         let entry_count = u32::from_le_bytes([data[9], data[10], data[11], data[12]]) as usize;
         if entry_count == 0 {
-            return Vec::new();
+            return (Vec::new(), DIDLookupStats {
+                shard_size: data.len(),
+                total_entries: 0,
+                prefix_narrowed_to: 0,
+                binary_search_attempts: 0,
+                locations_found: 0,
+            });
         }
 
         // Binary search with prefix index optimization
         let mut left = 0;
         let mut right = entry_count;
+        let original_right = right;
 
         // Use prefix index to narrow range
         if !identifier.is_empty() {
@@ -501,15 +564,25 @@ impl Manager {
             }
         }
 
+        let prefix_narrowed_to = right - left;
+
         // Binary search in narrowed range
         let offset_table_start = 1056;
+        let mut attempts = 0;
         
         while left < right {
+            attempts += 1;
             let mid = (left + right) / 2;
             let offset_pos = offset_table_start + (mid * 4);
             
             if offset_pos + 4 > data.len() {
-                return Vec::new();
+                return (Vec::new(), DIDLookupStats {
+                    shard_size: data.len(),
+                    total_entries: entry_count,
+                    prefix_narrowed_to,
+                    binary_search_attempts: attempts,
+                    locations_found: 0,
+                });
             }
 
             let entry_offset = u32::from_le_bytes([
@@ -520,7 +593,13 @@ impl Manager {
             ]) as usize;
 
             if entry_offset + DID_IDENTIFIER_LEN > data.len() {
-                return Vec::new();
+                return (Vec::new(), DIDLookupStats {
+                    shard_size: data.len(),
+                    total_entries: entry_count,
+                    prefix_narrowed_to,
+                    binary_search_attempts: attempts,
+                    locations_found: 0,
+                });
             }
 
             let entry_id = std::str::from_utf8(&data[entry_offset..entry_offset + DID_IDENTIFIER_LEN])
@@ -528,14 +607,27 @@ impl Manager {
 
             match identifier.cmp(entry_id) {
                 std::cmp::Ordering::Equal => {
-                    return self.read_locations(data, entry_offset);
+                    let locations = self.read_locations(data, entry_offset);
+                    return (locations.clone(), DIDLookupStats {
+                        shard_size: data.len(),
+                        total_entries: entry_count,
+                        prefix_narrowed_to,
+                        binary_search_attempts: attempts,
+                        locations_found: locations.len(),
+                    });
                 }
                 std::cmp::Ordering::Less => right = mid,
                 std::cmp::Ordering::Greater => left = mid + 1,
             }
         }
 
-        Vec::new()
+        (Vec::new(), DIDLookupStats {
+            shard_size: data.len(),
+            total_entries: entry_count,
+            prefix_narrowed_to,
+            binary_search_attempts: attempts,
+            locations_found: 0,
+        })
     }
 
     fn read_locations(&self, data: &[u8], mut offset: usize) -> Vec<OpLocation> {

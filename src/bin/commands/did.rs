@@ -12,16 +12,59 @@ pub fn cmd_did_resolve(dir: PathBuf, did: String, verbose: bool) -> Result<()> {
     
     if verbose {
         eprintln!("Resolving DID: {}", did);
+        
+        // Get DID index stats
+        let did_index = manager.get_did_index();
+        let did_index_read = did_index.read().unwrap();
+        let identifier = &did[8..]; // Strip "did:plc:" prefix
+        let shard_num = calculate_shard_for_display(identifier);
+        
+        eprintln!("DEBUG: DID {} -> identifier '{}' -> shard {:02x}", did, identifier, shard_num);
+        drop(did_index_read);
+        
+        // Get resolve result with stats
+        let result = manager.resolve_did_with_stats(&did)?;
+        
+        if let Some(stats) = &result.shard_stats {
+            eprintln!("DEBUG: Shard {:02x} loaded, size: {} bytes", result.shard_num, stats.shard_size);
+            
+            let reduction = if stats.total_entries > 0 {
+                ((stats.total_entries - stats.prefix_narrowed_to) as f64 / stats.total_entries as f64) * 100.0
+            } else {
+                0.0
+            };
+            
+            eprintln!("DEBUG: Prefix index narrowed search: {} entries → {} entries ({:.1}% reduction)",
+                stats.total_entries, stats.prefix_narrowed_to, reduction);
+            eprintln!("DEBUG: Binary search found {} locations after {} attempts",
+                stats.locations_found, stats.binary_search_attempts);
+        }
+        
+        eprintln!("Index: {:?} | Load: {:?} | Total: {:?}",
+            result.index_time, result.load_time, result.total_time);
+        eprintln!("Source: bundle {:06}, position {}\n", result.bundle_number, result.position);
+        
+        // Output document
+        let json = serde_json::to_string_pretty(&result.document)?;
+        println!("{}", json);
+    } else {
+        // Non-verbose: just output document
+        let document = manager.resolve_did(&did)?;
+        let json = serde_json::to_string_pretty(&document)?;
+        println!("{}", json);
     }
 
-    // Resolve DID to document
-    let document = manager.resolve_did(&did)?;
-
-    // Output document as JSON
-    let json = serde_json::to_string_pretty(&document)?;
-    println!("{}", json);
-
     Ok(())
+}
+
+fn calculate_shard_for_display(identifier: &str) -> u8 {
+    use fnv::FnvHasher;
+    use std::hash::Hasher;
+    
+    let mut hasher = FnvHasher::default();
+    hasher.write(identifier.as_bytes());
+    let hash = hasher.finish() as u32;
+    (hash % 256) as u8
 }
 
 // ============================================================================

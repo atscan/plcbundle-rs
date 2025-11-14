@@ -27,6 +27,19 @@ pub struct ManagerStats {
     pub queries_executed: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct ResolveResult {
+    pub document: crate::resolver::DIDDocument,
+    pub bundle_number: u32,
+    pub position: usize,
+    pub index_time: std::time::Duration,
+    pub load_time: std::time::Duration,
+    pub total_time: std::time::Duration,
+    pub locations_found: usize,
+    pub shard_num: u8,
+    pub shard_stats: Option<did_index::DIDLookupStats>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct DIDIndexStats {
     pub total_dids: usize,
@@ -241,18 +254,55 @@ impl BundleManager {
 
     /// Resolve DID to current W3C DID Document
     pub fn resolve_did(&self, did: &str) -> Result<crate::resolver::DIDDocument> {
+        let result = self.resolve_did_with_stats(did)?;
+        Ok(result.document)
+    }
+
+    /// Resolve DID with detailed timing statistics
+    pub fn resolve_did_with_stats(&self, did: &str) -> Result<ResolveResult> {
+        use std::time::Instant;
+
+        let total_start = Instant::now();
+
         // Validate DID format
         crate::resolver::validate_did_format(did)?;
 
-        // Get all operations for this DID
-        let operations = self.get_did_operations(did)?;
+        // Get all operations for this DID with timing
+        let index_start = Instant::now();
+        let did_index = self.did_index.read().unwrap();
+        let (locations, shard_stats, shard_num) = did_index.get_did_locations_with_stats(did)?;
+        let index_time = index_start.elapsed();
 
-        if operations.is_empty() {
+        if locations.is_empty() {
             anyhow::bail!("DID not found: {}", did);
         }
 
-        // Resolve to DID document
-        crate::resolver::resolve_did_document(did, &operations)
+        // Find latest non-nullified operation
+        let latest = locations
+            .iter()
+            .filter(|loc| !loc.nullified())
+            .max_by_key(|loc| loc.global_position())
+            .ok_or_else(|| anyhow::anyhow!("All operations nullified"))?;
+
+        // Load the operation
+        let load_start = Instant::now();
+        let operation = self.get_operation(latest.bundle() as u32, latest.position() as usize)?;
+        let load_time = load_start.elapsed();
+
+        // Build document
+        let document = crate::resolver::resolve_did_document(did, &[operation])?;
+
+        Ok(ResolveResult {
+            document,
+            bundle_number: latest.bundle() as u32,
+            position: latest.position() as usize,
+            index_time,
+            load_time,
+            total_time: total_start.elapsed(),
+            locations_found: locations.len(),
+            shard_num,
+            shard_stats: Some(shard_stats),
+        })
     }
 
     pub fn batch_resolve_dids(&self, dids: Vec<String>) -> Result<HashMap<String, Vec<Operation>>> {
