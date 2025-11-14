@@ -82,8 +82,8 @@ pub fn cmd_query(
     let index = processor.load_index()?;
 
     if verbose && !quiet {
-        eprintln!("📦 Index: v{} ({})", index.version, index.origin);
-        eprintln!("📊 Total bundles: {}", index.last_bundle);
+        log::debug!("📦 Index: v{} ({})", index.version, index.origin);
+        log::debug!("📊 Total bundles: {}", index.last_bundle);
     }
 
     let bundle_numbers = utils::parse_bundle_spec(bundles_spec, index.last_bundle)?;
@@ -93,7 +93,7 @@ pub fn cmd_query(
             QueryMode::Simple => "simple",
             QueryMode::JmesPath => "jmespath",
         };
-        eprintln!(
+        log::debug!(
             "🔍 Processing {} bundles | {} mode | {} threads\n",
             bundle_numbers.len(),
             mode_str,
@@ -149,12 +149,12 @@ pub fn cmd_query(
     };
 
     if !quiet {
-        eprintln!("\n✅ Complete in {}", HumanDuration(elapsed));
-        eprintln!("   Operations: {} ({:.2}% matched)", 
+        log::info!("\n✅ Complete in {}", HumanDuration(elapsed));
+        log::info!("   Operations: {} ({:.2}% matched)", 
             utils::format_number(stats.operations as u64), match_pct);
-        eprintln!("   Data processed: {}", utils::format_bytes(stats.total_bytes));
+        log::info!("   Data processed: {}", utils::format_bytes(stats.total_bytes));
         if elapsed.as_secs_f64() > 0.0 {
-            eprintln!("   Throughput: {:.0} ops/sec | {}/s",
+            log::info!("   Throughput: {:.0} ops/sec | {}/s",
                 stats.operations as f64 / elapsed.as_secs_f64(),
                 utils::format_bytes((stats.total_bytes as f64 / elapsed.as_secs_f64()) as u64)
             );

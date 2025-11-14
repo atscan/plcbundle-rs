@@ -10,19 +10,19 @@ pub fn cmd_index_build(dir: PathBuf, force: bool) -> Result<()> {
     // Check if index exists
     let did_index = manager.get_did_index_stats();
     if did_index.total_dids > 0 && !force {
-        eprintln!("DID index already exists (use --force to rebuild)");
-        eprintln!("Total DIDs: {}", did_index.total_dids);
+        log::info!("DID index already exists (use --force to rebuild)");
+        log::info!("Total DIDs: {}", did_index.total_dids);
         return Ok(());
     }
     
     let last_bundle = manager.get_last_bundle();
     if last_bundle == 0 {
-        eprintln!("No bundles to index");
+        log::info!("No bundles to index");
         return Ok(());
     }
     
-    eprintln!("Building DID index...");
-    eprintln!("Indexing {} bundles\n", last_bundle);
+    log::info!("Building DID index...");
+    log::info!("Indexing {} bundles\n", last_bundle);
     
     let start = Instant::now();
     
@@ -38,9 +38,9 @@ pub fn cmd_index_build(dir: PathBuf, force: bool) -> Result<()> {
     let elapsed = start.elapsed();
     let stats = manager.get_did_index_stats();
     
-    eprintln!("\n✓ DID index built in {:?}", elapsed);
-    eprintln!("  Total DIDs: {}", stats.total_dids);
-    eprintln!("  Location: {}/.plcbundle/", dir.display());
+    log::info!("\n✓ DID index built in {:?}", elapsed);
+    log::info!("  Total DIDs: {}", stats.total_dids);
+    log::info!("  Location: {}/.plcbundle/", dir.display());
     
     Ok(())
 }
@@ -50,12 +50,12 @@ pub fn cmd_index_repair(dir: PathBuf) -> Result<()> {
     
     let did_index = manager.get_did_index_stats();
     if did_index.total_dids == 0 {
-        eprintln!("DID index does not exist");
-        eprintln!("Use: plcbundle-rs index build");
+        log::error!("DID index does not exist");
+        log::info!("Use: plcbundle-rs index build");
         return Ok(());
     }
     
-    eprintln!("Repairing DID index...\n");
+    log::info!("Repairing DID index...\n");
     
     let start = Instant::now();
     
@@ -71,8 +71,8 @@ pub fn cmd_index_repair(dir: PathBuf) -> Result<()> {
     let elapsed = start.elapsed();
     let stats = manager.get_did_index_stats();
     
-    eprintln!("\n✓ DID index repaired in {:?}", elapsed);
-    eprintln!("  Total DIDs: {}", stats.total_dids);
+    log::info!("\n✓ DID index repaired in {:?}", elapsed);
+    log::info!("  Total DIDs: {}", stats.total_dids);
     
     Ok(())
 }
@@ -95,8 +95,8 @@ pub fn cmd_index_stats(dir: PathBuf, json: bool) -> Result<()> {
         .and_then(|v| v.as_bool())
         .unwrap_or(false) 
     {
-        eprintln!("DID index does not exist");
-        eprintln!("Run: plcbundle-rs index build");
+        log::error!("DID index does not exist");
+        log::info!("Run: plcbundle-rs index build");
         return Ok(());
     }
     
@@ -151,12 +151,12 @@ pub fn cmd_index_verify(dir: PathBuf, _verbose: bool) -> Result<()> {
         .and_then(|v| v.as_bool())
         .unwrap_or(false) 
     {
-        eprintln!("DID index does not exist");
-        eprintln!("Run: plcbundle-rs index build");
+        log::error!("DID index does not exist");
+        log::info!("Run: plcbundle-rs index build");
         return Ok(());
     }
     
-    eprintln!("Verifying DID index...\n");
+    log::info!("Verifying DID index...\n");
     
     let total_dids = stats_map.get("total_dids")
         .and_then(|v| v.as_i64())
@@ -169,15 +169,15 @@ pub fn cmd_index_verify(dir: PathBuf, _verbose: bool) -> Result<()> {
     let manager_last = manager.get_last_bundle();
     
     if last_bundle < manager_last as i64 {
-        eprintln!("⚠️  Warning: Index is behind (has bundle {}, repo has {})", 
+        log::warn!("⚠️  Warning: Index is behind (has bundle {}, repo has {})", 
             last_bundle, manager_last);
-        eprintln!("    Run: plcbundle-rs index repair");
+        log::info!("    Run: plcbundle-rs index repair");
         return Ok(());
     }
     
-    eprintln!("✓ DID index is valid");
-    eprintln!("  Total DIDs:  {}", total_dids);
-    eprintln!("  Last bundle: {:06}", last_bundle);
+    log::info!("✓ DID index is valid");
+    log::info!("  Total DIDs:  {}", total_dids);
+    log::info!("  Last bundle: {:06}", last_bundle);
     
     Ok(())
 }

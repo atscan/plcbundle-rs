@@ -83,13 +83,13 @@ pub fn cmd_export(
     };
 
     if verbose && !quiet {
-        eprintln!("📦 Index: v{} ({})", index.version, index.origin);
-        eprintln!("📊 Processing {} bundles", bundle_numbers.len());
+        log::debug!("📦 Index: v{} ({})", index.version, index.origin);
+        log::debug!("📊 Processing {} bundles", bundle_numbers.len());
         if let Some(ref count) = count {
-            eprintln!("🔢 Export limit: {} operations", utils::format_number(*count as u64));
+            log::debug!("🔢 Export limit: {} operations", utils::format_number(*count as u64));
         }
         if let Some(ref after) = after {
-            eprintln!("⏰ After timestamp: {}", after);
+            log::debug!("⏰ After timestamp: {}", after);
         }
     }
 
@@ -102,7 +102,7 @@ pub fn cmd_export(
     let mut writer = writer;
 
     if !quiet {
-        eprintln!("📤 Exporting operations...");
+        log::info!("📤 Exporting operations...");
     }
 
     let start = Instant::now();
@@ -287,11 +287,11 @@ pub fn cmd_export(
     writer.flush()?;
 
     if !quiet {
-        eprintln!("\r   Exported: {} operations", utils::format_number(exported_count as u64));
+        log::info!("\r   Exported: {} operations", utils::format_number(exported_count as u64));
         let elapsed = start.elapsed();
-        eprintln!("✅ Complete in {}", HumanDuration(elapsed));
+        log::info!("✅ Complete in {}", HumanDuration(elapsed));
         if elapsed.as_secs_f64() > 0.0 {
-            eprintln!("   Throughput: {:.0} ops/sec",
+            log::info!("   Throughput: {:.0} ops/sec",
                 exported_count as f64 / elapsed.as_secs_f64()
             );
         }

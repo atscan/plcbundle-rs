@@ -76,7 +76,7 @@ pub fn cmd_op_get(
         let result = manager.get_operation_with_stats(bundle_num, op_index)?;
         let global_pos = ((bundle_num - 1) as u64 * BUNDLE_SIZE as u64) + op_index as u64;
         
-        eprintln!("[Load] Bundle {:06}:{:04} (pos={}) in {:?} | {} bytes",
+        log::info!("[Load] Bundle {:06}:{:04} (pos={}) in {:?} | {} bytes",
             bundle_num, op_index, global_pos, result.load_duration, result.size_bytes);
         
         println!("{}", result.raw_json);
@@ -221,7 +221,7 @@ pub fn cmd_op_find(
     let last_bundle = manager.get_last_bundle();
     
     if !quiet {
-        eprintln!("Searching {} bundles for CID: {}\n", last_bundle, cid);
+        log::info!("Searching {} bundles for CID: {}\n", last_bundle, cid);
     }
     
     for bundle_num in 1..=last_bundle {
@@ -262,8 +262,8 @@ pub fn cmd_op_find(
     }
     
     if !quiet {
-        eprintln!("\nCID not found: {}", cid);
-        eprintln!("(Searched {} bundles)", last_bundle);
+        log::error!("\nCID not found: {}", cid);
+        log::info!("(Searched {} bundles)", last_bundle);
     }
     
     anyhow::bail!("CID not found");

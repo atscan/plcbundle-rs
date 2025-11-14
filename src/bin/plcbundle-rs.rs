@@ -482,6 +482,9 @@ pub enum StatType {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    
+    // Initialize logger based on verbosity flags
+    commands::logger::init_logger(cli.verbose, cli.quiet);
 
     match cli.command {
         Commands::Query {
