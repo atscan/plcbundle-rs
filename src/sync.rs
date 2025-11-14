@@ -14,6 +14,7 @@ pub struct PLCClient {
     client: reqwest::Client,
     base_url: String,
     rate_limiter: RateLimiter,
+    last_retry_after: std::sync::Arc<tokio::sync::Mutex<Option<Duration>>>,
 }
 
 impl PLCClient {
@@ -24,6 +25,7 @@ impl PLCClient {
                 .build()?,
             base_url: base_url.into(),
             rate_limiter: RateLimiter::new(constants::DEFAULT_RATE_LIMIT, Duration::from_secs(constants::HTTP_TIMEOUT_SECS)),
+            last_retry_after: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
         })
     }
 
@@ -32,8 +34,66 @@ impl PLCClient {
         after: &str,
         count: usize,
     ) -> Result<Vec<PLCOperation>> {
-        self.rate_limiter.wait().await;
+        self.fetch_operations_with_retry(after, count, 5).await
+    }
 
+    async fn fetch_operations_with_retry(
+        &self,
+        after: &str,
+        count: usize,
+        max_retries: usize,
+    ) -> Result<Vec<PLCOperation>> {
+        let mut backoff = Duration::from_secs(1);
+        let mut last_err = None;
+
+        for attempt in 1..=max_retries {
+            // Wait for rate limiter token
+            self.rate_limiter.wait().await;
+
+            // Clear previous retry_after
+            *self.last_retry_after.lock().await = None;
+
+            match self.do_fetch_operations(after, count).await {
+                Ok(operations) => return Ok(operations),
+                Err(e) => {
+                    last_err = Some(e);
+
+                    // Check if it's a rate limit error (429)
+                    let retry_after = self.last_retry_after.lock().await.take();
+                    if let Some(retry_after) = retry_after {
+                        eprintln!(
+                            "[Sync] Rate limited by PLC directory, waiting {:?} before retry {}/{}",
+                            retry_after, attempt, max_retries
+                        );
+                        tokio::time::sleep(retry_after).await;
+                        continue;
+                    }
+
+                    // Other errors - exponential backoff
+                    if attempt < max_retries {
+                        eprintln!(
+                            "[Sync] Request failed (attempt {}/{}): {}, retrying in {:?}",
+                            attempt, max_retries, last_err.as_ref().unwrap(), backoff
+                        );
+                        tokio::time::sleep(backoff).await;
+                        backoff *= 2; // Exponential backoff
+                    }
+                }
+            }
+        }
+
+        anyhow::bail!(
+            "Failed after {} attempts: {}",
+            max_retries,
+            last_err.unwrap_or_else(|| anyhow::anyhow!("Unknown error"))
+        )
+    }
+
+    async fn do_fetch_operations(
+        &self,
+        after: &str,
+        count: usize,
+    ) -> Result<Vec<PLCOperation>> {
         let url = format!("{}/export", self.base_url);
         let response = self
             .client
@@ -42,6 +102,13 @@ impl PLCClient {
             .header("User-Agent", constants::user_agent())
             .send()
             .await?;
+
+        // Handle rate limiting (429)
+        if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let retry_after = parse_retry_after(&response);
+            *self.last_retry_after.lock().await = Some(retry_after);
+            anyhow::bail!("Rate limited (429)");
+        }
 
         if !response.status().is_success() {
             anyhow::bail!("PLC request failed: {}", response.status());
@@ -66,6 +133,30 @@ impl PLCClient {
 
         Ok(operations)
     }
+}
+
+/// Parse the Retry-After header from a response
+/// Returns the duration to wait before retrying, defaulting to 5 minutes if parsing fails
+fn parse_retry_after(response: &reqwest::Response) -> Duration {
+    if let Some(retry_after_header) = response.headers().get("retry-after") {
+        if let Ok(retry_after_str) = retry_after_header.to_str() {
+            // Try parsing as seconds (integer) - most common format
+            if let Ok(seconds) = retry_after_str.parse::<u64>() {
+                return Duration::from_secs(seconds);
+            }
+
+            // Try parsing as HTTP date (RFC 7231)
+            // httpdate::parse_http_date returns a SystemTime
+            if let Ok(http_time) = httpdate::parse_http_date(retry_after_str) {
+                if let Ok(duration) = http_time.duration_since(std::time::SystemTime::now()) {
+                    return duration;
+                }
+            }
+        }
+    }
+
+    // Default to 5 minutes if no header or parsing fails
+    Duration::from_secs(300)
 }
 
 // Simple token bucket rate limiter
