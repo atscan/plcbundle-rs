@@ -759,13 +759,38 @@ impl BundleManager {
                 
                 // Case 2: Mempool operations are slightly after last bundle, but way too close
                 // This indicates they're from a previous failed attempt at this bundle
+                // BUT: Only clear if the mempool file is old (modified > 1 hour ago)
+                // If it's recent, it might be a legitimate resume of a slow sync
                 let time_diff = first_mempool_time.signed_duration_since(last_time);
                 if time_diff < chrono::Duration::seconds(60) && mempool_stats.count < crate::sync::BUNDLE_SIZE {
-                    log::warn!("Detected potentially stale mempool data (too close to last bundle timestamp)");
-                    log::warn!("Time difference: {}s, Operations: {}/{}", 
-                        time_diff.num_seconds(), mempool_stats.count, crate::sync::BUNDLE_SIZE);
-                    log::warn!("This likely indicates a previous failed sync attempt. Clearing mempool...");
-                    self.clear_mempool()?;
+                    // Check mempool file modification time
+                    let mempool_filename = format!("plc_mempool_{:06}.jsonl", next_bundle_num);
+                    let mempool_path = self.directory.join(mempool_filename);
+
+                    let is_stale = if let Ok(metadata) = std::fs::metadata(&mempool_path) {
+                        if let Ok(modified) = metadata.modified() {
+                            let modified_time = std::time::SystemTime::now()
+                                .duration_since(modified)
+                                .unwrap_or(std::time::Duration::from_secs(0));
+                            modified_time > std::time::Duration::from_secs(3600) // 1 hour
+                        } else {
+                            false // Can't get modified time, assume not stale
+                        }
+                    } else {
+                        false // File doesn't exist, assume not stale
+                    };
+
+                    if is_stale {
+                        log::warn!("Detected potentially stale mempool data (too close to last bundle timestamp)");
+                        log::warn!("Time difference: {}s, Operations: {}/{}",
+                            time_diff.num_seconds(), mempool_stats.count, crate::sync::BUNDLE_SIZE);
+                        log::warn!("This likely indicates a previous failed sync attempt. Clearing mempool...");
+                        self.clear_mempool()?;
+                    } else {
+                        if self.verbose {
+                            log::debug!("Mempool appears recent, allowing resume despite close timestamp");
+                        }
+                    }
                     return Ok(());
                 }
             }
@@ -1021,6 +1046,9 @@ impl BundleManager {
         self.save_bundle(next_bundle_num, operations)?;
         let save_duration = save_start.elapsed();
 
+        // Clear mempool after successful bundle save
+        self.clear_mempool()?;
+
         log::debug!("Adding bundle {} to index", next_bundle_num);
         log::debug!("Index now has {} bundles", next_bundle_num);
         log::debug!("Index saved, last bundle = {}", next_bundle_num);
@@ -1053,12 +1081,24 @@ impl BundleManager {
     }
 
     /// Run single sync cycle
-    pub async fn sync_once(&mut self, client: &crate::sync::PLCClient) -> Result<usize> {
+    ///
+    /// If max_bundles is Some(n), stop after syncing n bundles
+    /// If max_bundles is None, sync until caught up
+    pub async fn sync_once(&mut self, client: &crate::sync::PLCClient, max_bundles: Option<usize>) -> Result<usize> {
         let mut synced = 0;
 
         loop {
             match self.sync_next_bundle(client).await {
-                Ok(_) => synced += 1,
+                Ok(_) => {
+                    synced += 1;
+
+                    // Check if we've reached the limit
+                    if let Some(max) = max_bundles {
+                        if synced >= max {
+                            break;
+                        }
+                    }
+                }
                 Err(e) if e.to_string().contains("Caught up") => break,
                 Err(e) => return Err(e),
             }

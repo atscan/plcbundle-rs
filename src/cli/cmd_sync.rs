@@ -12,15 +12,15 @@ pub struct SyncCommand {
     pub plc: String,
 
     /// Keep syncing (run as daemon)
-    #[arg(long)]
+    #[arg(long, conflicts_with = "max_bundles")]
     pub continuous: bool,
 
     /// Sync interval for continuous mode
     #[arg(long, default_value = "60s", value_parser = parse_duration)]
     pub interval: Duration,
 
-    /// Maximum bundles to fetch (0 = all)
-    #[arg(long, default_value = "0")]
+    /// Maximum bundles to fetch (0 = all, only for one-time sync)
+    #[arg(long, default_value = "0", conflicts_with = "continuous")]
     pub max_bundles: usize,
 
     /// Directory containing PLC bundles
@@ -61,9 +61,10 @@ pub fn run(cmd: SyncCommand) -> Result<()> {
         let mut manager = BundleManager::new(cmd.dir)?.with_verbose(cmd.verbose);
 
         if cmd.continuous {
-            run_continuous(&client, &mut manager, cmd.interval, cmd.max_bundles, cmd.quiet).await
+            run_continuous(&client, &mut manager, cmd.interval, cmd.quiet).await
         } else {
-            run_once(&client, &mut manager, cmd.quiet).await
+            let max_bundles = if cmd.max_bundles > 0 { Some(cmd.max_bundles) } else { None };
+            run_once(&client, &mut manager, max_bundles, cmd.quiet).await
         }
     })
 }
@@ -71,9 +72,10 @@ pub fn run(cmd: SyncCommand) -> Result<()> {
 async fn run_once(
     client: &PLCClient,
     manager: &mut BundleManager,
+    max_bundles: Option<usize>,
     quiet: bool,
 ) -> Result<()> {
-    let synced = manager.sync_once(client).await?;
+    let synced = manager.sync_once(client, max_bundles).await?;
 
     if !quiet {
         if synced == 0 {
@@ -90,28 +92,18 @@ async fn run_continuous(
     client: &PLCClient,
     manager: &mut BundleManager,
     interval: Duration,
-    max_bundles: usize,
     quiet: bool,
 ) -> Result<()> {
     let mut total_synced = 0;
 
     loop {
-        let synced = manager.sync_once(client).await?;
+        let synced = manager.sync_once(client, None).await?;
         total_synced += synced;
 
         if !quiet && synced > 0 {
             eprintln!("✓ Synced {} bundles (total: {})", synced, total_synced);
         }
 
-        if max_bundles > 0 && total_synced >= max_bundles {
-            if !quiet {
-                eprintln!("\n✓ Reached max bundles limit ({})", max_bundles);
-            }
-            break;
-        }
-
         tokio::time::sleep(interval).await;
     }
-
-    Ok(())
 }

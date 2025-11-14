@@ -355,11 +355,18 @@ async fn run_server_sync_loop(
     }
 
     loop {
+        // Calculate remaining bundles to sync
+        let remaining = if max_bundles > 0 {
+            Some((max_bundles.saturating_sub(total_synced)) as usize)
+        } else {
+            None
+        };
+
         // Try to acquire lock for sync operation
         // If we can't get it immediately, wait a bit and try again
         let sync_result = {
             let _guard = manager_mutex.lock().await;
-            
+
             // Get mutable access by cloning and recreating
             // This is a workaround since BundleManager doesn't use interior mutability for sync
             // In a production system, we'd want to refactor sync methods to use &self
@@ -373,14 +380,14 @@ async fn run_server_sync_loop(
                 }
             };
 
-            // Run sync
-            manager_clone.sync_once(&client).await
+            // Run sync with remaining limit
+            manager_clone.sync_once(&client, remaining).await
         };
 
         match sync_result {
             Ok(synced) => {
                 total_synced += synced as u32;
-                
+
                 if verbose && synced > 0 {
                     eprintln!("[Sync] Synced {} bundle(s) (total: {})", synced, total_synced);
                 } else if verbose && synced == 0 {
