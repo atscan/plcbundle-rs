@@ -300,7 +300,36 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
         let shutdown_rx_sync = shutdown_rx.clone();
 
         tokio::spawn(async move {
-            run_server_sync_loop(manager_clone, plc_url, interval, max_bundles, verbose, shutdown_rx_sync).await;
+            use plcbundle::sync::{PLCClient, SyncManager, SyncConfig};
+            
+            // Create PLC client
+            let client = match PLCClient::new(&plc_url) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("[Sync] Failed to create PLC client: {}", e);
+                    return;
+                }
+            };
+
+            let config = SyncConfig {
+                plc_url: plc_url.clone(),
+                continuous: true,
+                interval,
+                max_bundles: max_bundles as usize,
+                verbose,
+                enable_did_batching: true,
+                did_batch_size: 100,
+                shutdown_rx: Some(shutdown_rx_sync),
+            };
+
+            use plcbundle::sync::ServerLogger;
+            let logger = ServerLogger::new(verbose, interval);
+            let sync_manager = SyncManager::new(manager_clone, client, config)
+                .with_logger(logger);
+
+            if let Err(e) = sync_manager.run_continuous().await {
+                eprintln!("[Sync] Sync loop error: {}", e);
+            }
         });
     }
 
@@ -335,212 +364,6 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "server")]
-async fn run_server_sync_loop(
-    manager: Arc<BundleManager>,
-    plc_url: String,
-    interval: Duration,
-    max_bundles: u32,
-    verbose: bool,
-    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
-) {
-    use plcbundle::sync::PLCClient;
-    use tokio::time::sleep;
-
-    // Create PLC client
-    let client = match PLCClient::new(&plc_url) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("[Sync] Failed to create PLC client: {}", e);
-            return;
-        }
-    };
-
-    let mut total_synced = 0u32;
-    let mut is_initial_sync = true;
-    let mut pending_did_index_start = 0u32; // First bundle that needs DID index update
-    let mut pending_did_index_count = 0u32; // Number of bundles pending DID index update
-
-    eprintln!("[Sync] Starting initial sync...");
-
-    if verbose {
-        eprintln!("[Sync] Sync loop interval: {:?}", interval);
-    }
-
-    loop {
-        // Check for shutdown before starting sync
-        if *shutdown_rx.borrow() {
-            if verbose {
-                eprintln!("[Sync] Shutdown requested, stopping...");
-            }
-            break;
-        }
-
-        // Use the shared manager directly - all mutations go through internal locks
-        // Skip DID index updates during initial sync (will be done in batches)
-        let skip_did_index = is_initial_sync;
-        let sync_result = manager.sync_next_bundle(&client, skip_did_index).await;
-
-        match sync_result {
-            Ok(plcbundle::SyncResult::BundleCreated { 
-                bundle_num, 
-                mempool_count: _, 
-                duration_ms,
-                fetch_duration_ms,
-                fetch_requests,
-                hash,
-                age,
-            }) => {
-                total_synced += 1;
-
-                // Track bundles pending DID index update during initial sync
-                if is_initial_sync {
-                    if pending_did_index_start == 0 {
-                        pending_did_index_start = bundle_num;
-                    }
-                    pending_did_index_count += 1;
-                    
-                    // Update DID index every 100 bundles during initial sync
-                    if pending_did_index_count >= 100 {
-                        let end_bundle = bundle_num;
-                        if let Err(e) = manager.batch_update_did_index(pending_did_index_start, end_bundle) {
-                            eprintln!("[Sync] Warning: Failed to batch update DID index: {}", e);
-                        } else if verbose {
-                            eprintln!("[Sync] ✓ DID index updated for bundles {:06} to {:06}", pending_did_index_start, end_bundle);
-                        }
-                        pending_did_index_start = 0;
-                        pending_did_index_count = 0;
-                    }
-                }
-
-                // Show single compact message with all timing info
-                // Format: [INFO] → Bundle 000011 | 25d7f96 | fetch: 3.836s (11 reqs) | total: 20.033s | 2.5 years ago
-                let fetch_secs = fetch_duration_ms as f64 / 1000.0;
-                let total_secs = duration_ms as f64 / 1000.0;
-                let save_secs = (duration_ms - fetch_duration_ms) as f64 / 1000.0;
-                
-                eprintln!("[INFO] → Bundle {:06} | {} | fetch: {:.3}s ({} reqs) | save: {:.1}s | total: {:.3}s | {}",
-                    bundle_num, hash, fetch_secs, fetch_requests, save_secs, total_secs, age);
-
-                // Check max bundles limit
-                if max_bundles > 0 && total_synced >= max_bundles {
-                    if verbose {
-                        eprintln!("[Sync] Reached max bundles limit ({})", max_bundles);
-                    }
-                    break;
-                }
-
-                // Check for shutdown before sleeping
-                if *shutdown_rx.borrow() {
-                    if verbose {
-                        eprintln!("[Sync] Shutdown requested, stopping...");
-                    }
-                    break;
-                }
-
-                // During initial sync, sleep briefly (500ms) to avoid hammering the API
-                // After initial sync, use the full interval
-                // Use select to allow cancellation during sleep
-                if is_initial_sync {
-                    tokio::select! {
-                        _ = sleep(Duration::from_millis(500)) => {}
-                        _ = shutdown_rx.changed() => {
-                            if *shutdown_rx.borrow() {
-                                break;
-                            }
-                        }
-                    }
-                } else {
-                    tokio::select! {
-                        _ = sleep(interval) => {}
-                        _ = shutdown_rx.changed() => {
-                            if *shutdown_rx.borrow() {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            Ok(plcbundle::SyncResult::CaughtUp { next_bundle, mempool_count, new_ops, fetch_duration_ms }) => {
-                // Check for shutdown
-                if *shutdown_rx.borrow() {
-                    if verbose {
-                        eprintln!("[Sync] Shutdown requested, stopping...");
-                    }
-                    break;
-                }
-
-                // Caught up - initial sync is complete
-                if is_initial_sync {
-                    is_initial_sync = false;
-                    
-                    // Update any remaining pending DID index bundles
-                    if pending_did_index_count > 0 {
-                        let last_bundle = manager.get_last_bundle();
-                        if pending_did_index_start > 0 && last_bundle >= pending_did_index_start {
-                            if let Err(e) = manager.batch_update_did_index(pending_did_index_start, last_bundle) {
-                                eprintln!("[Sync] Warning: Failed to batch update DID index: {}", e);
-                            } else if verbose {
-                                eprintln!("[Sync] ✓ DID index updated for bundles {:06} to {:06}", pending_did_index_start, last_bundle);
-                            }
-                        }
-                        pending_did_index_start = 0;
-                        pending_did_index_count = 0;
-                    }
-                    
-                    eprintln!("[Sync] ✓ Initial sync complete ({} bundles synced)", total_synced);
-                    if mempool_count > 0 {
-                        eprintln!("[Sync] ✓ Mempool: {} operations", mempool_count);
-                    }
-                    eprintln!("[Sync] Now monitoring for new operations (interval: {:?})...", interval);
-                } else {
-                    // Always show mempool status when caught up (not just when new_ops > 0 or verbose)
-                    if new_ops > 0 {
-                        eprintln!("[Sync] ✓ Bundle {:06} | mempool: {} ({:+}) | time: {}ms",
-                            next_bundle, mempool_count, new_ops as i32, fetch_duration_ms);
-                    } else {
-                        // Show even when no new ops in non-verbose mode
-                        eprintln!("[Sync] ✓ Bundle {:06} | mempool: {} | time: {}ms",
-                            next_bundle, mempool_count, fetch_duration_ms);
-                    }
-                }
-
-                // Always sleep for the full interval when caught up (monitoring mode)
-                // Use select to allow cancellation during sleep
-                tokio::select! {
-                    _ = sleep(interval) => {}
-                    _ = shutdown_rx.changed() => {
-                        if *shutdown_rx.borrow() {
-                            break;
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("[Sync] Error during sync: {}", e);
-                
-                // Check for shutdown before retrying
-                if *shutdown_rx.borrow() {
-                    break;
-                }
-                
-                // On error, sleep briefly before retrying (with cancellation support)
-                tokio::select! {
-                    _ = sleep(Duration::from_secs(1)) => {}
-                    _ = shutdown_rx.changed() => {
-                        if *shutdown_rx.borrow() {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if verbose {
-        eprintln!("[Sync] Sync loop stopped");
-    }
-}
 
 #[cfg(feature = "server")]
 async fn run_resolver_ping_loop(

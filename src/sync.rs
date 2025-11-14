@@ -256,6 +256,40 @@ pub fn strip_boundary_duplicates(
 }
 
 // ============================================================================
+// Sync Events
+// ============================================================================
+
+#[derive(Debug, Clone)]
+pub enum SyncEvent {
+    BundleCreated {
+        bundle_num: u32,
+        hash: String,
+        age: String,
+        fetch_duration_ms: u64,
+        save_duration_ms: u64,
+        total_duration_ms: u64,
+        fetch_requests: usize,
+    },
+    CaughtUp {
+        next_bundle: u32,
+        mempool_count: usize,
+        new_ops: usize,
+        fetch_duration_ms: u64,
+    },
+    DidIndexBatch {
+        start_bundle: u32,
+        end_bundle: u32,
+    },
+    InitialSyncComplete {
+        total_bundles: u32,
+        mempool_count: usize,
+    },
+    Error {
+        error: String,
+    },
+}
+
+// ============================================================================
 // Sync Configuration
 // ============================================================================
 
@@ -266,6 +300,9 @@ pub struct SyncConfig {
     pub interval: Duration,
     pub max_bundles: usize,
     pub verbose: bool,
+    pub enable_did_batching: bool,
+    pub did_batch_size: u32,
+    pub shutdown_rx: Option<tokio::sync::watch::Receiver<bool>>,
 }
 
 impl Default for SyncConfig {
@@ -276,6 +313,9 @@ impl Default for SyncConfig {
             interval: Duration::from_secs(60),
             max_bundles: 0,
             verbose: false,
+            enable_did_batching: false,
+            did_batch_size: 100,
+            shutdown_rx: None,
         }
     }
 }
@@ -285,6 +325,548 @@ pub struct SyncStats {
     pub bundles_synced: usize,
     pub operations_fetched: usize,
     pub total_duration: Duration,
+}
+
+// ============================================================================
+// Sync Logger Trait
+// ============================================================================
+
+/// Trait for logging sync events
+pub trait SyncLogger: Send + Sync {
+    fn on_bundle_created(
+        &self,
+        bundle_num: u32,
+        hash: &str,
+        age: &str,
+        fetch_duration_ms: u64,
+        save_duration_ms: u64,
+        total_duration_ms: u64,
+        fetch_requests: usize,
+    );
+    
+    fn on_caught_up(
+        &self,
+        next_bundle: u32,
+        mempool_count: usize,
+        new_ops: usize,
+        fetch_duration_ms: u64,
+    );
+    
+    fn on_did_index_batch(&self, start_bundle: u32, end_bundle: u32);
+    
+    fn on_initial_sync_complete(&self, total_bundles: u32, mempool_count: usize, interval: Duration);
+    
+    fn on_error(&self, error: &str);
+}
+
+/// Server-style logger (detailed output with timing info)
+pub struct ServerLogger {
+    verbose: bool,
+    interval: Duration,
+}
+
+impl ServerLogger {
+    pub fn new(verbose: bool, interval: Duration) -> Self {
+        Self { verbose, interval }
+    }
+}
+
+impl SyncLogger for ServerLogger {
+    fn on_bundle_created(
+        &self,
+        bundle_num: u32,
+        hash: &str,
+        age: &str,
+        fetch_duration_ms: u64,
+        save_duration_ms: u64,
+        total_duration_ms: u64,
+        fetch_requests: usize,
+    ) {
+        let fetch_secs = fetch_duration_ms as f64 / 1000.0;
+        let total_secs = total_duration_ms as f64 / 1000.0;
+        let save_secs = save_duration_ms as f64 / 1000.0;
+        
+        eprintln!("[INFO] → Bundle {:06} | {} | fetch: {:.3}s ({} reqs) | save: {:.1}s | total: {:.3}s | {}",
+            bundle_num, hash, fetch_secs, fetch_requests, save_secs, total_secs, age);
+    }
+    
+    fn on_caught_up(
+        &self,
+        next_bundle: u32,
+        mempool_count: usize,
+        new_ops: usize,
+        fetch_duration_ms: u64,
+    ) {
+        if new_ops > 0 {
+            eprintln!("[Sync] ✓ Bundle {:06} | mempool: {} ({:+}) | time: {}ms",
+                next_bundle, mempool_count, new_ops as i32, fetch_duration_ms);
+        } else {
+            eprintln!("[Sync] ✓ Bundle {:06} | mempool: {} | time: {}ms",
+                next_bundle, mempool_count, fetch_duration_ms);
+        }
+    }
+    
+    fn on_did_index_batch(&self, start_bundle: u32, end_bundle: u32) {
+        if self.verbose {
+            eprintln!("[Sync] ✓ DID index updated for bundles {:06} to {:06}", start_bundle, end_bundle);
+        }
+    }
+    
+    fn on_initial_sync_complete(&self, total_bundles: u32, mempool_count: usize, _interval: Duration) {
+        eprintln!("[Sync] ✓ Initial sync complete ({} bundles synced)", total_bundles);
+        if mempool_count > 0 {
+            eprintln!("[Sync] ✓ Mempool: {} operations", mempool_count);
+        }
+        eprintln!("[Sync] Now monitoring for new operations (interval: {:?})...", self.interval);
+    }
+    
+    fn on_error(&self, error: &str) {
+        eprintln!("[Sync] Error during sync: {}", error);
+    }
+}
+
+/// CLI-style logger (minimal output, only shows summaries)
+pub struct CliLogger {
+    quiet: bool,
+}
+
+impl CliLogger {
+    pub fn new(quiet: bool) -> Self {
+        Self { quiet }
+    }
+}
+
+impl SyncLogger for CliLogger {
+    fn on_bundle_created(
+        &self,
+        _bundle_num: u32,
+        _hash: &str,
+        _age: &str,
+        _fetch_duration_ms: u64,
+        _save_duration_ms: u64,
+        _total_duration_ms: u64,
+        _fetch_requests: usize,
+    ) {
+        // CLI doesn't show individual bundle creation
+    }
+    
+    fn on_caught_up(
+        &self,
+        _next_bundle: u32,
+        _mempool_count: usize,
+        _new_ops: usize,
+        _fetch_duration_ms: u64,
+    ) {
+        // CLI doesn't show caught up events
+    }
+    
+    fn on_did_index_batch(&self, _start_bundle: u32, _end_bundle: u32) {
+        // CLI doesn't use DID batching
+    }
+    
+    fn on_initial_sync_complete(&self, _total_bundles: u32, _mempool_count: usize, _interval: Duration) {
+        // CLI doesn't show initial sync complete
+    }
+    
+    fn on_error(&self, error: &str) {
+        if !self.quiet {
+            eprintln!("Error: {}", error);
+        }
+    }
+}
+
+// ============================================================================
+// Sync Manager
+// ============================================================================
+
+pub struct SyncManager {
+    manager: std::sync::Arc<crate::manager::BundleManager>,
+    client: PLCClient,
+    config: SyncConfig,
+    logger: Option<Box<dyn SyncLogger>>,
+    event_callback: Option<Box<dyn Fn(&SyncEvent) + Send + Sync>>,
+}
+
+impl SyncManager {
+    pub fn new(
+        manager: std::sync::Arc<crate::manager::BundleManager>,
+        client: PLCClient,
+        config: SyncConfig,
+    ) -> Self {
+        Self {
+            manager,
+            client,
+            config,
+            logger: None,
+            event_callback: None,
+        }
+    }
+
+    /// Set a logger for sync events (replaces default formatting)
+    pub fn with_logger<L>(mut self, logger: L) -> Self
+    where
+        L: SyncLogger + 'static,
+    {
+        self.logger = Some(Box::new(logger));
+        self
+    }
+
+    /// Set a custom event callback (for advanced use cases)
+    pub fn with_callback<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(&SyncEvent) + Send + Sync + 'static,
+    {
+        self.event_callback = Some(Box::new(callback));
+        self
+    }
+
+    fn handle_event(&self, event: &SyncEvent) {
+        // First, call custom callback if provided
+        if let Some(callback) = &self.event_callback {
+            callback(event);
+        }
+        
+        // Then, call logger if provided
+        if let Some(logger) = &self.logger {
+            match event {
+                SyncEvent::BundleCreated {
+                    bundle_num,
+                    hash,
+                    age,
+                    fetch_duration_ms,
+                    save_duration_ms,
+                    total_duration_ms,
+                    fetch_requests,
+                } => {
+                    logger.on_bundle_created(
+                        *bundle_num,
+                        hash,
+                        age,
+                        *fetch_duration_ms,
+                        *save_duration_ms,
+                        *total_duration_ms,
+                        *fetch_requests,
+                    );
+                }
+                SyncEvent::CaughtUp {
+                    next_bundle,
+                    mempool_count,
+                    new_ops,
+                    fetch_duration_ms,
+                } => {
+                    logger.on_caught_up(
+                        *next_bundle,
+                        *mempool_count,
+                        *new_ops,
+                        *fetch_duration_ms,
+                    );
+                }
+                SyncEvent::DidIndexBatch {
+                    start_bundle,
+                    end_bundle,
+                } => {
+                    logger.on_did_index_batch(*start_bundle, *end_bundle);
+                }
+                SyncEvent::InitialSyncComplete {
+                    total_bundles,
+                    mempool_count,
+                } => {
+                    logger.on_initial_sync_complete(*total_bundles, *mempool_count, self.config.interval);
+                }
+                SyncEvent::Error { error } => {
+                    logger.on_error(error);
+                }
+            }
+        }
+    }
+
+    pub async fn run_once(&self, max_bundles: Option<usize>) -> Result<usize> {
+        let mut synced = 0;
+
+        loop {
+            // Check for shutdown if configured
+            if let Some(ref shutdown_rx) = self.config.shutdown_rx {
+                if *shutdown_rx.borrow() {
+                    break;
+                }
+            }
+
+            match self.manager.sync_next_bundle(&self.client, false).await {
+                Ok(crate::manager::SyncResult::BundleCreated {
+                    bundle_num,
+                    mempool_count: _,
+                    duration_ms,
+                    fetch_duration_ms,
+                    fetch_requests,
+                    hash,
+                    age,
+                }) => {
+                    synced += 1;
+                    let save_duration_ms = duration_ms.saturating_sub(fetch_duration_ms);
+
+                    self.handle_event(&SyncEvent::BundleCreated {
+                        bundle_num,
+                        hash,
+                        age,
+                        fetch_duration_ms,
+                        save_duration_ms,
+                        total_duration_ms: duration_ms,
+                        fetch_requests,
+                    });
+
+                    // Check if we've reached the limit
+                    if let Some(max) = max_bundles {
+                        if synced >= max {
+                            break;
+                        }
+                    }
+                }
+                Ok(crate::manager::SyncResult::CaughtUp {
+                    next_bundle,
+                    mempool_count,
+                    new_ops,
+                    fetch_duration_ms,
+                }) => {
+                    self.handle_event(&SyncEvent::CaughtUp {
+                        next_bundle,
+                        mempool_count,
+                        new_ops,
+                        fetch_duration_ms,
+                    });
+                    break;
+                }
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    self.handle_event(&SyncEvent::Error {
+                        error: error_msg.clone(),
+                    });
+                    return Err(e);
+                }
+            }
+
+            // Small delay between bundles
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        }
+
+        Ok(synced)
+    }
+
+    pub async fn run_continuous(&self) -> Result<()> {
+        use tokio::time::sleep;
+
+        let mut total_synced = 0u32;
+        let mut is_initial_sync = true;
+        let mut pending_did_index_start = 0u32;
+        let mut pending_did_index_count = 0u32;
+
+        if self.config.verbose {
+            eprintln!("[Sync] Starting initial sync...");
+            eprintln!("[Sync] Sync loop interval: {:?}", self.config.interval);
+        }
+
+        loop {
+            // Check for shutdown before starting sync
+            if let Some(ref shutdown_rx) = self.config.shutdown_rx {
+                if *shutdown_rx.borrow() {
+                    if self.config.verbose {
+                        eprintln!("[Sync] Shutdown requested, stopping...");
+                    }
+                    break;
+                }
+            }
+
+            // Skip DID index updates during initial sync if batching is enabled
+            let skip_did_index = is_initial_sync && self.config.enable_did_batching;
+            let sync_result = self.manager.sync_next_bundle(&self.client, skip_did_index).await;
+
+            match sync_result {
+                Ok(crate::manager::SyncResult::BundleCreated {
+                    bundle_num,
+                    mempool_count: _,
+                    duration_ms,
+                    fetch_duration_ms,
+                    fetch_requests,
+                    hash,
+                    age,
+                }) => {
+                    total_synced += 1;
+                    let save_duration_ms = duration_ms.saturating_sub(fetch_duration_ms);
+
+                    // Track bundles pending DID index update during initial sync
+                    if is_initial_sync && self.config.enable_did_batching {
+                        if pending_did_index_start == 0 {
+                            pending_did_index_start = bundle_num;
+                        }
+                        pending_did_index_count += 1;
+
+                        // Update DID index every N bundles during initial sync
+                        if pending_did_index_count >= self.config.did_batch_size {
+                            let end_bundle = bundle_num;
+                            if let Err(e) = self.manager.batch_update_did_index(pending_did_index_start, end_bundle) {
+                                self.handle_event(&SyncEvent::Error {
+                                    error: format!("Failed to batch update DID index: {}", e),
+                                });
+                            } else {
+                                self.handle_event(&SyncEvent::DidIndexBatch {
+                                    start_bundle: pending_did_index_start,
+                                    end_bundle,
+                                });
+                            }
+                            pending_did_index_start = 0;
+                            pending_did_index_count = 0;
+                        }
+                    }
+
+                    self.handle_event(&SyncEvent::BundleCreated {
+                        bundle_num,
+                        hash,
+                        age,
+                        fetch_duration_ms,
+                        save_duration_ms,
+                        total_duration_ms: duration_ms,
+                        fetch_requests,
+                    });
+
+                    // Check max bundles limit
+                    if self.config.max_bundles > 0 && total_synced as usize >= self.config.max_bundles {
+                        if self.config.verbose {
+                            eprintln!("[Sync] Reached max bundles limit ({})", self.config.max_bundles);
+                        }
+                        break;
+                    }
+
+                    // Check for shutdown before sleeping
+                    if let Some(ref shutdown_rx) = self.config.shutdown_rx {
+                        if *shutdown_rx.borrow() {
+                            if self.config.verbose {
+                                eprintln!("[Sync] Shutdown requested, stopping...");
+                            }
+                            break;
+                        }
+                    }
+
+                    // During initial sync, sleep briefly (500ms) to avoid hammering the API
+                    // After initial sync, use the full interval
+                    // Use select to allow cancellation during sleep
+                    let sleep_duration = if is_initial_sync {
+                        Duration::from_millis(500)
+                    } else {
+                        self.config.interval
+                    };
+
+                    if let Some(ref shutdown_rx) = self.config.shutdown_rx {
+                        let mut shutdown_rx = shutdown_rx.clone();
+                        tokio::select! {
+                            _ = sleep(sleep_duration) => {}
+                            _ = shutdown_rx.changed() => {
+                                if *shutdown_rx.borrow() {
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        sleep(sleep_duration).await;
+                    }
+                }
+                Ok(crate::manager::SyncResult::CaughtUp {
+                    next_bundle,
+                    mempool_count,
+                    new_ops,
+                    fetch_duration_ms,
+                }) => {
+                    // Check for shutdown
+                    if let Some(ref shutdown_rx) = self.config.shutdown_rx {
+                        if *shutdown_rx.borrow() {
+                            if self.config.verbose {
+                                eprintln!("[Sync] Shutdown requested, stopping...");
+                            }
+                            break;
+                        }
+                    }
+
+                    // Caught up - initial sync is complete
+                    if is_initial_sync {
+                        is_initial_sync = false;
+
+                        // Update any remaining pending DID index bundles
+                        if self.config.enable_did_batching && pending_did_index_count > 0 {
+                            let last_bundle = self.manager.get_last_bundle();
+                            if pending_did_index_start > 0 && last_bundle >= pending_did_index_start {
+                                if let Err(e) = self.manager.batch_update_did_index(pending_did_index_start, last_bundle) {
+                                    self.handle_event(&SyncEvent::Error {
+                                        error: format!("Failed to batch update DID index: {}", e),
+                                    });
+                                } else {
+                                    self.handle_event(&SyncEvent::DidIndexBatch {
+                                        start_bundle: pending_did_index_start,
+                                        end_bundle: last_bundle,
+                                    });
+                                }
+                            }
+                            pending_did_index_start = 0;
+                            pending_did_index_count = 0;
+                        }
+
+                        self.handle_event(&SyncEvent::InitialSyncComplete {
+                            total_bundles: total_synced,
+                            mempool_count,
+                        });
+                    }
+
+                    self.handle_event(&SyncEvent::CaughtUp {
+                        next_bundle,
+                        mempool_count,
+                        new_ops,
+                        fetch_duration_ms,
+                    });
+
+                    // Always sleep for the full interval when caught up (monitoring mode)
+                    // Use select to allow cancellation during sleep
+                    if let Some(ref shutdown_rx) = self.config.shutdown_rx {
+                        let mut shutdown_rx = shutdown_rx.clone();
+                        tokio::select! {
+                            _ = sleep(self.config.interval) => {}
+                            _ = shutdown_rx.changed() => {
+                                if *shutdown_rx.borrow() {
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        sleep(self.config.interval).await;
+                    }
+                }
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    self.handle_event(&SyncEvent::Error {
+                        error: error_msg.clone(),
+                    });
+
+                    // Check for shutdown before retrying
+                    if let Some(ref shutdown_rx) = self.config.shutdown_rx {
+                        if *shutdown_rx.borrow() {
+                            break;
+                        }
+
+                        // On error, sleep briefly before retrying (with cancellation support)
+                        let mut shutdown_rx = shutdown_rx.clone();
+                        tokio::select! {
+                            _ = sleep(Duration::from_secs(1)) => {}
+                            _ = shutdown_rx.changed() => {
+                                if *shutdown_rx.borrow() {
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        sleep(Duration::from_secs(1)).await;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 // ============================================================================

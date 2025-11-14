@@ -1,8 +1,9 @@
 use anyhow::Result;
 use clap::Args;
-use plcbundle::{BundleManager, sync::PLCClient, constants};
+use plcbundle::{BundleManager, sync::{PLCClient, SyncManager, SyncConfig, CliLogger}, constants};
 use std::path::PathBuf;
 use std::time::Duration;
+use std::sync::Arc;
 use super::utils;
 
 #[derive(Args)]
@@ -58,52 +59,75 @@ pub fn run(cmd: SyncCommand) -> Result<()> {
         }
 
         let client = PLCClient::new(&cmd.plc)?;
-        let manager = BundleManager::new(cmd.dir)?.with_verbose(cmd.verbose);
+        let manager = Arc::new(BundleManager::new(cmd.dir)?.with_verbose(cmd.verbose));
 
+        let config = SyncConfig {
+            plc_url: cmd.plc.clone(),
+            continuous: cmd.continuous,
+            interval: cmd.interval,
+            max_bundles: cmd.max_bundles,
+            verbose: cmd.verbose,
+            enable_did_batching: false,
+            did_batch_size: 100,
+            shutdown_rx: None,
+        };
+
+        let quiet = cmd.quiet;
+        
         if cmd.continuous {
-            run_continuous(&client, &manager, cmd.interval, cmd.quiet).await
+            // For continuous mode, use run_once() in a loop to match original behavior
+            // This allows us to track bundle counts per iteration
+            let mut total_synced = 0;
+            
+            loop {
+                // Create new client and manager for each iteration since SyncManager takes ownership
+                let manager_clone = Arc::clone(&manager);
+                let client = PLCClient::new(&cmd.plc)?;
+                let config = SyncConfig {
+                    plc_url: cmd.plc.clone(),
+                    continuous: false,
+                    interval: cmd.interval,
+                    max_bundles: 0,
+                    verbose: cmd.verbose,
+                    enable_did_batching: false,
+                    did_batch_size: 100,
+                    shutdown_rx: None,
+                };
+                
+                let logger = CliLogger::new(quiet);
+                let sync_manager = SyncManager::new(manager_clone, client, config)
+                    .with_logger(logger);
+                
+                let synced = sync_manager.run_once(None).await?;
+                total_synced += synced;
+
+                if !quiet && synced > 0 {
+                    eprintln!("✓ Synced {} bundles (total: {})", synced, total_synced);
+                }
+
+                if synced == 0 {
+                    // Caught up, sleep before next check
+                    tokio::time::sleep(cmd.interval).await;
+                }
+            }
         } else {
+            // For one-time sync, use run_once() with logger
+            let logger = CliLogger::new(quiet);
+            let sync_manager = SyncManager::new(manager, client, config)
+                .with_logger(logger);
+            
             let max_bundles = if cmd.max_bundles > 0 { Some(cmd.max_bundles) } else { None };
-            run_once(&client, &manager, max_bundles, cmd.quiet).await
+            let synced = sync_manager.run_once(max_bundles).await?;
+
+            if !quiet {
+                if synced == 0 {
+                    eprintln!("\n✓ Already up to date");
+                } else {
+                    eprintln!("\n✓ Sync complete: {} bundle(s) fetched", synced);
+                }
+            }
+
+            Ok(())
         }
     })
-}
-
-async fn run_once(
-    client: &PLCClient,
-    manager: &BundleManager,
-    max_bundles: Option<usize>,
-    quiet: bool,
-) -> Result<()> {
-    let synced = manager.sync_once(client, max_bundles).await?;
-
-    if !quiet {
-        if synced == 0 {
-            eprintln!("\n✓ Already up to date");
-        } else {
-            eprintln!("\n✓ Sync complete: {} bundle(s) fetched", synced);
-        }
-    }
-
-    Ok(())
-}
-
-async fn run_continuous(
-    client: &PLCClient,
-    manager: &BundleManager,
-    interval: Duration,
-    quiet: bool,
-) -> Result<()> {
-    let mut total_synced = 0;
-
-    loop {
-        let synced = manager.sync_once(client, None).await?;
-        total_synced += synced;
-
-        if !quiet && synced > 0 {
-            eprintln!("✓ Synced {} bundles (total: {})", synced, total_synced);
-        }
-
-        tokio::time::sleep(interval).await;
-    }
 }
