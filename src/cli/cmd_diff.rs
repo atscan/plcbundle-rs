@@ -252,6 +252,7 @@ struct IndexComparison {
     extra_bundles: Vec<u32>,
     hash_mismatches: Vec<HashMismatch>,
     content_mismatches: Vec<HashMismatch>,
+    cursor_mismatches: Vec<HashMismatch>,
     local_range: Option<(u32, u32)>,
     target_range: Option<(u32, u32)>,
     local_total_size: u64,
@@ -268,12 +269,15 @@ struct HashMismatch {
     target_hash: String,
     local_content_hash: String,
     target_content_hash: String,
+    local_cursor: String,
+    target_cursor: String,
 }
 
 impl IndexComparison {
     fn has_differences(&self) -> bool {
         !self.missing_bundles.is_empty() || !self.extra_bundles.is_empty() ||
-        !self.hash_mismatches.is_empty() || !self.content_mismatches.is_empty()
+        !self.hash_mismatches.is_empty() || !self.content_mismatches.is_empty() ||
+        !self.cursor_mismatches.is_empty()
     }
 }
 
@@ -337,19 +341,26 @@ fn compare_indexes(local: &Index, target: &Index, origins_match: bool) -> IndexC
             let chain_mismatch = local_meta.hash != target_meta.hash;
             let content_mismatch = local_meta.content_hash != target_meta.content_hash;
             
-            if chain_mismatch || content_mismatch {
+            let cursor_mismatch = local_meta.cursor != target_meta.cursor;
+            
+            if chain_mismatch || content_mismatch || cursor_mismatch {
                 let mismatch = HashMismatch {
                     bundle_number: *bundle_num,
                     local_hash: local_meta.hash.clone(),
                     target_hash: target_meta.hash.clone(),
                     local_content_hash: local_meta.content_hash.clone(),
                     target_content_hash: target_meta.content_hash.clone(),
+                    local_cursor: local_meta.cursor.clone(),
+                    target_cursor: target_meta.cursor.clone(),
                 };
                 
                 if chain_mismatch {
                     comparison.hash_mismatches.push(mismatch);
                 } else if content_mismatch {
                     comparison.content_mismatches.push(mismatch);
+                } else if cursor_mismatch {
+                    // Cursor-only mismatch (hashes match but cursor differs)
+                    comparison.cursor_mismatches.push(mismatch);
                 }
             }
         }
@@ -358,6 +369,7 @@ fn compare_indexes(local: &Index, target: &Index, origins_match: bool) -> IndexC
     // Sort mismatches
     comparison.hash_mismatches.sort_by_key(|m| m.bundle_number);
     comparison.content_mismatches.sort_by_key(|m| m.bundle_number);
+    comparison.cursor_mismatches.sort_by_key(|m| m.bundle_number);
     
     comparison
 }
@@ -412,6 +424,13 @@ fn display_comparison(c: &IndexComparison, verbose: bool, origins_match: bool) {
         eprintln!("  Content mismatches: {}{} ✓{}", GREEN, c.content_mismatches.len(), RESET);
     }
     
+    // Cursor mismatches - metadata issue
+    if !c.cursor_mismatches.is_empty() {
+        eprintln!("  Cursor mismatches:  ⚠️  {} (cursor should match previous bundle end_time)", c.cursor_mismatches.len());
+    } else {
+        eprintln!("  Cursor mismatches:  {}{} ✓{}", GREEN, c.cursor_mismatches.len(), RESET);
+    }
+    
     if let Some((start, end)) = c.local_range {
         eprintln!("\n  Local range:        {:06} - {:06}", start, end);
         eprintln!("  Local size:         {:.2} MB", c.local_total_size as f64 / (1024.0 * 1024.0));
@@ -427,6 +446,10 @@ fn display_comparison(c: &IndexComparison, verbose: bool, origins_match: bool) {
     // Show differences
     if !c.hash_mismatches.is_empty() {
         show_hash_mismatches(&c.hash_mismatches, verbose, origins_match);
+    }
+    
+    if !c.cursor_mismatches.is_empty() {
+        show_cursor_mismatches(&c.cursor_mismatches, verbose);
     }
     
     if !c.missing_bundles.is_empty() {
@@ -489,6 +512,37 @@ fn show_hash_mismatches(mismatches: &[HashMismatch], verbose: bool, origins_matc
             eprintln!("      Local:  {}", m.local_content_hash);
             eprintln!("      Target: {}", m.target_content_hash);
         }
+        
+        if m.local_cursor != m.target_cursor {
+            eprintln!("    Cursor (also differs):");
+            eprintln!("      Local:  {}", m.local_cursor);
+            eprintln!("      Target: {}", m.target_cursor);
+        }
+        eprintln!();
+    }
+    
+    if mismatches.len() > display_count {
+        eprintln!("  ... and {} more (use -v to show all)\n", mismatches.len() - display_count);
+    }
+}
+
+fn show_cursor_mismatches(mismatches: &[HashMismatch], verbose: bool) {
+    eprintln!("\n⚠️  CURSOR MISMATCHES");
+    eprintln!("═══════════════════════════════════════════════════\n");
+    eprintln!("  Cursor should match previous bundle's end_time per spec.\n");
+    
+    let display_count = if mismatches.len() > 10 && !verbose {
+        10
+    } else {
+        mismatches.len()
+    };
+    
+    for i in 0..display_count {
+        let m = &mismatches[i];
+        eprintln!("  Bundle {:06}:", m.bundle_number);
+        eprintln!("    Cursor:");
+        eprintln!("      Local:  {}", m.local_cursor);
+        eprintln!("      Target: {}", m.target_cursor);
         eprintln!();
     }
     
@@ -648,6 +702,18 @@ fn display_bundle_metadata_comparison_full(
     );
     eprintln!("    Local:  {}", local_meta.end_time);
     eprintln!("    Remote: {}", remote_meta.end_time);
+    
+    // Compare cursor
+    let cursor_match = local_meta.cursor == remote_meta.cursor;
+    eprintln!("  Cursor:             {}  {}",
+        if cursor_match { "identical" } else { "differs" },
+        if cursor_match { "✅" } else { "❌" }
+    );
+    eprintln!("    Local:  {}", local_meta.cursor);
+    eprintln!("    Remote: {}", remote_meta.cursor);
+    if !cursor_match {
+        eprintln!("    ⚠️  Cursor should match previous bundle's end_time per spec");
+    }
 }
 
 fn display_operation_comparison(

@@ -1272,16 +1272,25 @@ impl BundleManager {
         content_hash = {
             use sha2::{Sha256, Digest};
             let mut hasher = Sha256::new();
+            let mut missing_raw_json = 0;
 
             // Hash all operations in order (reconstructing uncompressed JSONL)
             for op in &operations {
                 let json = if let Some(raw) = &op.raw_json {
                     raw.clone()
                 } else {
+                    missing_raw_json += 1;
+                    if missing_raw_json == 1 && *self.verbose.lock().unwrap() {
+                        log::warn!("⚠️  Bundle {}: Operation missing raw_json, using re-serialized JSON (may cause hash mismatch!)", bundle_num);
+                    }
                     sonic_rs::to_string(op)?
                 };
                 hasher.update(json.as_bytes());
                 hasher.update(b"\n");
+            }
+
+            if missing_raw_json > 0 && *self.verbose.lock().unwrap() {
+                log::warn!("⚠️  Bundle {}: {} operations missing raw_json (content hash may be incorrect!)", bundle_num, missing_raw_json);
             }
 
             format!("{:x}", hasher.finalize())
@@ -1310,10 +1319,22 @@ impl BundleManager {
                 .map(|b| b.hash.clone())
                 .unwrap_or_default();
             
+            // Debug logging for hash calculation issues
+            if parent_chain_hash.is_empty() {
+                log::warn!("⚠️  Bundle {}: Parent bundle {} not found in index! Using empty parent hash.", bundle_num, bundle_num - 1);
+            } else if *self.verbose.lock().unwrap() {
+                log::debug!("Bundle {}: Parent hash from bundle {}: {}", bundle_num, bundle_num - 1, &parent_chain_hash[..16]);
+                log::debug!("Bundle {}: Content hash: {}", bundle_num, &content_hash[..16]);
+            }
+            
             let chain_input = format!("{}:{}", parent_chain_hash, content_hash);
             let mut hasher = Sha256::new();
             hasher.update(chain_input.as_bytes());
             let hash = format!("{:x}", hasher.finalize());
+            
+            if *self.verbose.lock().unwrap() {
+                log::debug!("Bundle {}: Chain hash: {}", bundle_num, &hash[..16]);
+            }
             
             (parent_chain_hash, hash)
         } else {
@@ -1327,8 +1348,43 @@ impl BundleManager {
             (String::new(), hash)
         };
 
-        // Get cursor (last operation timestamp)
-        let cursor = end_time.clone();
+        // Get cursor (end_time of previous bundle per spec)
+        // For the first bundle, cursor is empty string
+        let cursor = if bundle_num > 1 {
+            let prev_end_time = self.index
+                .read()
+                .unwrap()
+                .get_bundle(bundle_num - 1)
+                .map(|b| b.end_time.clone())
+                .unwrap_or_default();
+            
+            // Validate cursor matches previous bundle's end_time
+            if prev_end_time.is_empty() {
+                log::warn!("⚠️  Bundle {}: Previous bundle {} has empty end_time, cursor will be empty", bundle_num, bundle_num - 1);
+            }
+            
+            prev_end_time
+        } else {
+            String::new()
+        };
+        
+        // Validate cursor correctness (for non-genesis bundles)
+        if bundle_num > 1 {
+            let prev_bundle = self.index.read().unwrap().get_bundle(bundle_num - 1);
+            if let Some(prev) = prev_bundle {
+                if cursor != prev.end_time {
+                    anyhow::bail!(
+                        "Cursor validation failed for bundle {}: expected {} (previous bundle end_time), got {}",
+                        bundle_num, prev.end_time, cursor
+                    );
+                }
+            }
+        } else if !cursor.is_empty() {
+            anyhow::bail!(
+                "Cursor validation failed for bundle {} (genesis): cursor should be empty, got {}",
+                bundle_num, cursor
+            );
+        }
 
         // Prepare bundle metadata for skippable frame
         let bundle_metadata_frame = crate::bundle_format::BundleMetadata {
@@ -1539,7 +1595,44 @@ impl BundleManager {
         let chain_hash = meta.hash.clone();
         let parent = meta.parent.clone();
 
-        let cursor = end_time.clone();
+        // Get cursor (end_time of previous bundle per spec)
+        // For the first bundle, cursor is empty string
+        let cursor = if bundle_num > 1 {
+            let prev_end_time = self.index
+                .read()
+                .unwrap()
+                .get_bundle(bundle_num - 1)
+                .map(|b| b.end_time.clone())
+                .unwrap_or_default();
+            
+            // Validate cursor matches previous bundle's end_time
+            if prev_end_time.is_empty() {
+                log::warn!("⚠️  Bundle {}: Previous bundle {} has empty end_time, cursor will be empty", bundle_num, bundle_num - 1);
+            }
+            
+            prev_end_time
+        } else {
+            String::new()
+        };
+        
+        // Validate cursor correctness (for non-genesis bundles)
+        if bundle_num > 1 {
+            let prev_bundle = self.index.read().unwrap().get_bundle(bundle_num - 1);
+            if let Some(prev) = prev_bundle {
+                if cursor != prev.end_time {
+                    anyhow::bail!(
+                        "Cursor validation failed for bundle {}: expected {} (previous bundle end_time), got {}",
+                        bundle_num, prev.end_time, cursor
+                    );
+                }
+            }
+        } else if !cursor.is_empty() {
+            anyhow::bail!(
+                "Cursor validation failed for bundle {} (genesis): cursor should be empty, got {}",
+                bundle_num, cursor
+            );
+        }
+        
         let origin = self.index.read().unwrap().origin.clone();
 
         // Create bundle metadata using library function

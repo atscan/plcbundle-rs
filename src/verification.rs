@@ -319,6 +319,34 @@ pub fn verify_chain(
                     ),
                 ));
             }
+            
+            // Validate cursor matches previous bundle's end_time per spec
+            let expected_cursor = if bundle_num == 1 {
+                String::new() // First bundle has empty cursor
+            } else {
+                prev_metadata.end_time.clone()
+            };
+            
+            if metadata.cursor != expected_cursor {
+                errors.push((
+                    bundle_num,
+                    format!(
+                        "Cursor mismatch: expected {} (previous bundle end_time), got {}",
+                        expected_cursor, metadata.cursor
+                    ),
+                ));
+            }
+        } else if bundle_num == 1 {
+            // First bundle should have empty cursor
+            if !metadata.cursor.is_empty() {
+                errors.push((
+                    bundle_num,
+                    format!(
+                        "Cursor should be empty for first bundle, got: {}",
+                        metadata.cursor
+                    ),
+                ));
+            }
         }
     }
     

@@ -322,8 +322,17 @@ impl Mempool {
         let mut writer = BufWriter::new(file);
 
         // Write only new operations
+        // CRITICAL: Use raw_json if available to preserve exact byte content
+        // This is required for deterministic content_hash calculation.
+        // Re-serialization would change field order/whitespace and break hash verification.
         for op in new_ops {
-            let json = serde_json::to_string(op)?;
+            let json = if let Some(ref raw) = op.raw_json {
+                raw.clone()
+            } else {
+                // Fallback: Re-serialize if raw_json is not available
+                // WARNING: This may produce different content_hash than the original!
+                serde_json::to_string(op)?
+            };
             writeln!(writer, "{}", json)?;
         }
 
@@ -353,7 +362,12 @@ impl Mempool {
                 continue;
             }
 
-            let op: Operation = serde_json::from_str(&line)?;
+            // CRITICAL: Preserve raw JSON for content hash calculation
+            // This is required by the V1 specification (docs/specification.md § 4.2)
+            // to ensure content_hash remains reproducible.
+            // Without this, re-serialization would change the hash.
+            let mut op: Operation = serde_json::from_str(&line)?;
+            op.raw_json = Some(line);
             self.operations.push(op);
         }
 
