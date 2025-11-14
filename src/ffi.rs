@@ -112,7 +112,7 @@ pub struct CExportStats {
 // ============================================================================
 
 #[unsafe(no_mangle)]
-pub extern "C" fn bundle_manager_new(bundle_dir: *const c_char) -> *mut CBundleManager {
+pub unsafe extern "C" fn bundle_manager_new(bundle_dir: *const c_char) -> *mut CBundleManager {
     let bundle_dir = unsafe {
         if bundle_dir.is_null() {
             return std::ptr::null_mut();
@@ -132,7 +132,7 @@ pub extern "C" fn bundle_manager_new(bundle_dir: *const c_char) -> *mut CBundleM
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn bundle_manager_free(manager: *mut CBundleManager) {
+pub unsafe extern "C" fn bundle_manager_free(manager: *mut CBundleManager) {
     if !manager.is_null() {
         unsafe {
             let _ = Box::from_raw(manager);
@@ -145,7 +145,7 @@ pub extern "C" fn bundle_manager_free(manager: *mut CBundleManager) {
 // ============================================================================
 
 #[unsafe(no_mangle)]
-pub extern "C" fn bundle_manager_load_bundle(
+pub unsafe extern "C" fn bundle_manager_load_bundle(
     manager: *const CBundleManager,
     bundle_num: u32,
     options: *const CLoadOptions,
@@ -197,7 +197,7 @@ pub extern "C" fn bundle_manager_load_bundle(
 // ============================================================================
 
 #[unsafe(no_mangle)]
-pub extern "C" fn bundle_manager_get_operations_batch(
+pub unsafe extern "C" fn bundle_manager_get_operations_batch(
     manager: *const CBundleManager,
     requests: *const COperationRequest,
     count: usize,
@@ -243,7 +243,7 @@ pub extern "C" fn bundle_manager_get_operations_batch(
 // ============================================================================
 
 #[unsafe(no_mangle)]
-pub extern "C" fn bundle_manager_get_did_operations(
+pub unsafe extern "C" fn bundle_manager_get_did_operations(
     manager: *const CBundleManager,
     did: *const c_char,
     out_operations: *mut *mut COperation,
@@ -280,7 +280,7 @@ pub extern "C" fn bundle_manager_get_did_operations(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn bundle_manager_batch_resolve_dids(
+pub unsafe extern "C" fn bundle_manager_batch_resolve_dids(
     manager: *const CBundleManager,
     dids: *const *const c_char,
     did_count: usize,
@@ -330,7 +330,7 @@ pub extern "C" fn bundle_manager_batch_resolve_dids(
 // ============================================================================
 
 #[unsafe(no_mangle)]
-pub extern "C" fn bundle_manager_query(
+pub unsafe extern "C" fn bundle_manager_query(
     manager: *const CBundleManager,
     query_str: *const c_char,
     bundle_start: u32,
@@ -388,7 +388,7 @@ pub extern "C" fn bundle_manager_query(
 // ============================================================================
 
 #[unsafe(no_mangle)]
-pub extern "C" fn bundle_manager_verify_bundle(
+pub unsafe extern "C" fn bundle_manager_verify_bundle(
     manager: *const CBundleManager,
     bundle_num: u32,
     check_hash: bool,
@@ -432,7 +432,7 @@ pub extern "C" fn bundle_manager_verify_bundle(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn bundle_manager_verify_chain(
+pub unsafe extern "C" fn bundle_manager_verify_chain(
     manager: *const CBundleManager,
     start_bundle: u32,
     end_bundle: u32,
@@ -462,7 +462,7 @@ pub extern "C" fn bundle_manager_verify_chain(
 // ============================================================================
 
 #[unsafe(no_mangle)]
-pub extern "C" fn bundle_manager_get_bundle_info(
+pub unsafe extern "C" fn bundle_manager_get_bundle_info(
     manager: *const CBundleManager,
     bundle_num: u32,
     include_operations: bool,
@@ -503,7 +503,7 @@ pub extern "C" fn bundle_manager_get_bundle_info(
 // ============================================================================
 
 #[unsafe(no_mangle)]
-pub extern "C" fn bundle_manager_prefetch_bundles(
+pub unsafe extern "C" fn bundle_manager_prefetch_bundles(
     manager: *const CBundleManager,
     bundle_nums: *const u32,
     count: usize,
@@ -522,7 +522,7 @@ pub extern "C" fn bundle_manager_prefetch_bundles(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn bundle_manager_warm_up(
+pub unsafe extern "C" fn bundle_manager_warm_up(
     manager: *const CBundleManager,
     strategy: u8,
     start_bundle: u32,
@@ -552,7 +552,7 @@ pub extern "C" fn bundle_manager_warm_up(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn bundle_manager_clear_caches(manager: *const CBundleManager) -> i32 {
+pub unsafe extern "C" fn bundle_manager_clear_caches(manager: *const CBundleManager) -> i32 {
     if manager.is_null() {
         return -1;
     }
@@ -567,7 +567,7 @@ pub extern "C" fn bundle_manager_clear_caches(manager: *const CBundleManager) ->
 // ============================================================================
 
 #[unsafe(no_mangle)]
-pub extern "C" fn bundle_manager_rebuild_did_index(
+pub unsafe extern "C" fn bundle_manager_rebuild_did_index(
     manager: *const CBundleManager,
     progress_callback: Option<extern "C" fn(u32, u32)>,
     out_stats: *mut CRebuildStats,
@@ -601,7 +601,7 @@ pub extern "C" fn bundle_manager_rebuild_did_index(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn bundle_manager_get_did_index_stats(
+pub unsafe extern "C" fn bundle_manager_get_did_index_stats(
     manager: *const CBundleManager,
     out_stats: *mut CDIDIndexStats,
 ) -> i32 {
@@ -625,7 +625,7 @@ pub extern "C" fn bundle_manager_get_did_index_stats(
 // ============================================================================
 
 #[unsafe(no_mangle)]
-pub extern "C" fn bundle_manager_get_stats(
+pub unsafe extern "C" fn bundle_manager_get_stats(
     manager: *const CBundleManager,
     out_stats: *mut CManagerStats,
 ) -> i32 {
@@ -687,7 +687,7 @@ fn free_c_operation(op: COperation) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn bundle_manager_free_string(s: *mut c_char) {
+pub unsafe extern "C" fn bundle_manager_free_string(s: *mut c_char) {
     if !s.is_null() {
         unsafe {
             let _ = CString::from_raw(s);
@@ -696,7 +696,7 @@ pub extern "C" fn bundle_manager_free_string(s: *mut c_char) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn bundle_manager_free_operation(op: *mut COperation) {
+pub unsafe extern "C" fn bundle_manager_free_operation(op: *mut COperation) {
     if !op.is_null() {
         unsafe {
             let op_val = *op;
@@ -706,7 +706,7 @@ pub extern "C" fn bundle_manager_free_operation(op: *mut COperation) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn bundle_manager_free_operations(ops: *mut COperation, count: usize) {
+pub unsafe extern "C" fn bundle_manager_free_operations(ops: *mut COperation, count: usize) {
     if !ops.is_null() {
         unsafe {
             let ops_slice = std::slice::from_raw_parts(ops, count);
@@ -727,7 +727,7 @@ pub extern "C" fn bundle_manager_free_operations(ops: *mut COperation, count: us
 pub type ExportCallback = extern "C" fn(data: *const c_char, len: usize, user_data: *mut std::ffi::c_void) -> i32;
 
 #[unsafe(no_mangle)]
-pub extern "C" fn bundle_manager_export(
+pub unsafe extern "C" fn bundle_manager_export(
     manager: *const CBundleManager,
     spec: *const CExportSpec,
     callback: ExportCallback,

@@ -8,7 +8,7 @@ use crate::{cache, did_index, verification, mempool, handle_resolver};
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::io::Write;
 use chrono::{DateTime, Utc};
 
@@ -42,7 +42,7 @@ pub struct BundleManager {
     stats: Arc<RwLock<ManagerStats>>,
     mempool: Arc<RwLock<Option<mempool::Mempool>>>,
     handle_resolver: Option<Arc<handle_resolver::HandleResolver>>,
-    verbose: bool,
+    verbose: Arc<Mutex<bool>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -101,13 +101,18 @@ impl BundleManager {
             stats: Arc::new(RwLock::new(ManagerStats::default())),
             mempool: Arc::new(RwLock::new(None)),
             handle_resolver,
-            verbose: false,
+            verbose: Arc::new(Mutex::new(false)),
         })
     }
 
     pub fn with_verbose(mut self, verbose: bool) -> Self {
-        self.verbose = verbose;
+        *self.verbose.lock().unwrap() = verbose;
         self
+    }
+
+    /// Get a clone of the verbose state Arc for external access
+    pub fn verbose_handle(&self) -> Arc<Mutex<bool>> {
+        self.verbose.clone()
     }
 
     // === Smart Loading ===
@@ -603,7 +608,7 @@ impl BundleManager {
                 &self.directory,
                 target_bundle,
                 min_timestamp,
-                self.verbose,
+                *self.verbose.lock().unwrap(),
             )?;
 
             *mempool_guard = Some(mp);
@@ -823,7 +828,7 @@ impl BundleManager {
                         log::warn!("This likely indicates a previous failed sync attempt. Clearing mempool...");
                         self.clear_mempool()?;
                     } else {
-                        if self.verbose {
+                        if *self.verbose.lock().unwrap() {
                             log::debug!("Mempool appears recent, allowing resume despite close timestamp");
                         }
                     }
@@ -850,7 +855,7 @@ impl BundleManager {
             return Ok(());
         }
         
-        if self.verbose {
+        if *self.verbose.lock().unwrap() {
             log::info!("Batch updating DID index for bundles {:06} to {:06}...", start_bundle, end_bundle);
         }
         
@@ -874,7 +879,7 @@ impl BundleManager {
             self.did_index.write().unwrap().update_for_bundle(bundle_num, operations)?;
         }
         
-        if self.verbose {
+        if *self.verbose.lock().unwrap() {
             log::info!("✓ DID index updated for bundles {:06} to {:06}", start_bundle, end_bundle);
         }
         
@@ -902,7 +907,7 @@ impl BundleManager {
                 .map(|op| op.created_at.clone())
                 .unwrap_or_default();
             
-            if self.verbose {
+            if *self.verbose.lock().unwrap() {
                 log::info!("Loaded {} boundary CIDs from bundle {:06} (at {})", 
                     boundary.len(), next_bundle_num - 1, cursor);
             }
@@ -917,7 +922,7 @@ impl BundleManager {
         let mempool_stats = self.get_mempool_stats()?;
         if mempool_stats.count > 0 {
             if let Some(last_time) = mempool_stats.last_time {
-                if self.verbose {
+                if *self.verbose.lock().unwrap() {
                     log::debug!("Mempool has {} ops, resuming from {}", 
                         mempool_stats.count, last_time.format("%Y-%m-%dT%H:%M:%S"));
                 }
@@ -927,7 +932,7 @@ impl BundleManager {
                 let mempool_ops = self.get_mempool_operations()?;
                 if !mempool_ops.is_empty() {
                     prev_boundary = get_boundary_cids(&mempool_ops);
-                    if self.verbose {
+                    if *self.verbose.lock().unwrap() {
                         log::info!("Using {} boundary CIDs from mempool", prev_boundary.len());
                     }
                 }
@@ -938,7 +943,7 @@ impl BundleManager {
             next_bundle_num, mempool_stats.count);
         log::debug!("Starting cursor: {}", if after_time.is_empty() || after_time == "1970-01-01T00:00:00Z" { "" } else { &after_time });
         
-        if !prev_boundary.is_empty() && self.verbose && mempool_stats.count == 0 {
+        if !prev_boundary.is_empty() && *self.verbose.lock().unwrap() && mempool_stats.count == 0 {
             log::info!("  Starting with {} boundary CIDs from previous bundle", prev_boundary.len());
         }
 
@@ -972,7 +977,7 @@ impl BundleManager {
                 _ => 1000,
             };
 
-            if self.verbose {
+            if *self.verbose.lock().unwrap() {
                 log::info!("  Fetch #{}: requesting {} (need {} more, have {}/{})",
                     fetch_num, request_count, needed, stats.count, constants::BUNDLE_SIZE);
             }
@@ -987,7 +992,7 @@ impl BundleManager {
             
             if plc_ops.is_empty() || got_incomplete_batch {
                 caught_up = true;
-                if self.verbose && fetch_num > 0 {
+                if *self.verbose.lock().unwrap() && fetch_num > 0 {
                     log::debug!("Caught up to latest PLC data");
                 }
                 if plc_ops.is_empty() {
@@ -1006,7 +1011,7 @@ impl BundleManager {
             let boundary_removed = before_dedup - after_dedup;
             if boundary_removed > 0 {
                 total_boundary_dupes += boundary_removed;
-                if self.verbose {
+                if *self.verbose.lock().unwrap() {
                     log::info!("  Stripped {} boundary duplicates from fetch", boundary_removed);
                 }
             }
@@ -1029,7 +1034,7 @@ impl BundleManager {
                 0.0
             };
 
-            if self.verbose {
+            if *self.verbose.lock().unwrap() {
                 if boundary_removed > 0 || dupes_in_fetch > 0 {
                     log::info!("  → +{} unique ({} dupes, {} boundary) in {:.9}s • Running: {}/{} ({:.0} ops/sec)",
                         added, dupes_in_fetch, boundary_removed, fetch_duration.as_secs_f64(),
@@ -1048,7 +1053,7 @@ impl BundleManager {
             // Stop if we got an incomplete batch or made no progress
             if got_incomplete_batch || added == 0 {
                 caught_up = true;
-                if self.verbose {
+                if *self.verbose.lock().unwrap() {
                     log::debug!("Caught up to latest PLC data");
                 }
                 break;
@@ -1084,7 +1089,7 @@ impl BundleManager {
             }
         }
 
-        if self.verbose {
+        if *self.verbose.lock().unwrap() {
             log::info!("  ✓ Collected {} unique ops from {} fetches ({:.1}% dedup)",
                 final_stats.count, fetch_num, dedup_pct);
         }
@@ -1123,7 +1128,7 @@ impl BundleManager {
         let save_duration = save_start.elapsed();
         
         // Show timing breakdown in verbose mode only
-        if self.verbose {
+        if *self.verbose.lock().unwrap() {
             log::debug!("  Save timing: serialize={:.1}ms, compress={:.1}ms, hash={:.1}ms, did_index={:.1}ms, index_write={:.1}ms, total={:.1}ms",
                 serialize_time.as_millis(), compress_time.as_millis(), hash_time.as_millis(),
                 did_index_time.as_millis(), index_write_time.as_millis(), save_duration.as_millis());
@@ -1159,7 +1164,7 @@ impl BundleManager {
         let fetch_duration_ms = fetch_total_duration.as_millis() as u64;
 
         // Only log detailed info in verbose mode
-        if self.verbose {
+        if *self.verbose.lock().unwrap() {
             log::info!("→ Bundle {:06} | {} | fetch: {:.3}s ({} reqs) | {}",
                 next_bundle_num, short_hash, fetch_total_duration.as_secs_f64(),
                 fetch_num, age_str);
@@ -1212,7 +1217,7 @@ impl BundleManager {
 
     /// Save bundle to disk with compression and index updates (with timing)
     fn save_bundle_with_timing(&self, bundle_num: u32, operations: Vec<Operation>, skip_did_index: bool) -> Result<(std::time::Duration, std::time::Duration, std::time::Duration, std::time::Duration, std::time::Duration)> {
-        use std::time::{Instant, Duration};
+        use std::time::Instant;
         use anyhow::Context;
         use std::collections::HashSet;
         use std::fs::File;
@@ -1337,7 +1342,7 @@ impl BundleManager {
         file.flush()
             .with_context(|| format!("Failed to flush bundle file: {}", bundle_path.display()))?;
 
-        if self.verbose {
+        if *self.verbose.lock().unwrap() {
             log::debug!(
                 "Saved bundle {} ({} ops, {} DIDs, {} → {} bytes, {:.1}% compression)",
                 bundle_num,
@@ -1403,6 +1408,7 @@ impl BundleManager {
     }
     
     /// Save bundle to disk with compression and index updates (backwards compatibility)
+    #[allow(dead_code)]
     fn save_bundle(&self, bundle_num: u32, operations: Vec<Operation>) -> Result<()> {
         self.save_bundle_with_timing(bundle_num, operations, false)?;
         Ok(())
@@ -1679,7 +1685,7 @@ impl BundleManager {
             stats: Arc::clone(&self.stats),
             mempool: Arc::clone(&self.mempool),
             handle_resolver: self.handle_resolver.clone(),
-            verbose: self.verbose,
+            verbose: Arc::clone(&self.verbose),
         }
     }
     fn load_bundle_from_disk(&self, path: &PathBuf) -> Result<Vec<Operation>> {

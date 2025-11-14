@@ -3,7 +3,10 @@ use crate::constants;
 use crate::operations::Operation;
 use anyhow::Result;
 use serde::Deserialize;
+use std::any::Any;
 use std::collections::HashSet;
+use std::io::IsTerminal;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 // ============================================================================
@@ -333,6 +336,8 @@ pub struct SyncStats {
 
 /// Trait for logging sync events
 pub trait SyncLogger: Send + Sync {
+    fn on_sync_start(&self, interval: Duration);
+    
     fn on_bundle_created(
         &self,
         bundle_num: u32,
@@ -357,21 +362,56 @@ pub trait SyncLogger: Send + Sync {
     fn on_initial_sync_complete(&self, total_bundles: u32, mempool_count: usize, interval: Duration);
     
     fn on_error(&self, error: &str);
+
+    /// Get a reference to self as Any for downcasting
+    fn as_any(&self) -> &dyn Any;
 }
 
 /// Server-style logger (detailed output with timing info)
 pub struct ServerLogger {
-    verbose: bool,
+    verbose: Arc<Mutex<bool>>,
     interval: Duration,
 }
 
 impl ServerLogger {
     pub fn new(verbose: bool, interval: Duration) -> Self {
-        Self { verbose, interval }
+        Self {
+            verbose: Arc::new(Mutex::new(verbose)),
+            interval,
+        }
+    }
+
+    /// Get a clone of the verbose state Arc for external access
+    pub fn verbose_handle(&self) -> Arc<Mutex<bool>> {
+        self.verbose.clone()
+    }
+
+    /// Toggle verbose mode
+    pub fn toggle_verbose(&self) -> bool {
+        let mut verbose = self.verbose.lock().unwrap();
+        *verbose = !*verbose;
+        *verbose
+    }
+
+    /// Set verbose mode
+    pub fn set_verbose(&self, value: bool) {
+        let mut verbose = self.verbose.lock().unwrap();
+        *verbose = value;
     }
 }
 
 impl SyncLogger for ServerLogger {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn on_sync_start(&self, interval: Duration) {
+        eprintln!("[Sync] Starting initial sync...");
+        if *self.verbose.lock().unwrap() {
+            eprintln!("[Sync] Sync loop interval: {:?}", interval);
+        }
+    }
+    
     fn on_bundle_created(
         &self,
         bundle_num: u32,
@@ -407,7 +447,7 @@ impl SyncLogger for ServerLogger {
     }
     
     fn on_did_index_batch(&self, start_bundle: u32, end_bundle: u32) {
-        if self.verbose {
+        if *self.verbose.lock().unwrap() {
             eprintln!("[Sync] ✓ DID index updated for bundles {:06} to {:06}", start_bundle, end_bundle);
         }
     }
@@ -437,6 +477,14 @@ impl CliLogger {
 }
 
 impl SyncLogger for CliLogger {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn on_sync_start(&self, _interval: Duration) {
+        // CLI doesn't show sync start message
+    }
+    
     fn on_bundle_created(
         &self,
         _bundle_num: u32,
@@ -659,9 +707,115 @@ impl SyncManager {
         let mut pending_did_index_start = 0u32;
         let mut pending_did_index_count = 0u32;
 
-        if self.config.verbose {
-            eprintln!("[Sync] Starting initial sync...");
-            eprintln!("[Sync] Sync loop interval: {:?}", self.config.interval);
+        // Notify logger that sync is starting
+        if let Some(logger) = &self.logger {
+            logger.on_sync_start(self.config.interval);
+        }
+
+        // Start keyboard handler for verbose toggle if in interactive terminal
+        #[cfg(feature = "crossterm")]
+        {
+            let verbose_handle = if std::io::stdin().is_terminal() {
+                // Try to get verbose handle from ServerLogger and sync with BundleManager
+                if let Some(logger) = &self.logger {
+                    // Use Any to downcast to ServerLogger
+                    let logger_any = logger.as_any();
+                    if let Some(server_logger) = logger_any.downcast_ref::<ServerLogger>() {
+                        // Print initial help message
+                        eprintln!("[Sync] Press 'v' + Enter to toggle verbose mode");
+                        let verbose_handle = server_logger.verbose_handle();
+                        
+                        // Sync BundleManager's verbose state with the logger's handle
+                        // This ensures both are updated when toggling
+                        let manager_verbose = self.manager.verbose_handle();
+                        {
+                            let logger_verbose = verbose_handle.lock().unwrap();
+                            *manager_verbose.lock().unwrap() = *logger_verbose;
+                        }
+                        
+                        Some(verbose_handle)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            // Spawn keyboard handler task if we have a verbose handle
+            // Note: Reading from stdin can interfere with Ctrl+C, so we use a timeout
+            // to ensure shutdown checks happen frequently
+            if let Some(verbose_handle) = verbose_handle {
+                let shutdown_rx_keyboard = self.config.shutdown_rx.clone();
+                let verbose_handle_clone = verbose_handle.clone();
+                let manager_verbose = self.manager.verbose_handle();
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncBufReadExt, BufReader};
+                    use tokio::time::{sleep, Duration, timeout};
+
+                    let mut stdin = BufReader::new(tokio::io::stdin());
+                    let mut line = String::new();
+                    let mut last_toggle_time = std::time::Instant::now();
+                    const DEBOUNCE_MS: u64 = 500; // Prevent rapid toggles
+                    const READ_TIMEOUT: Duration = Duration::from_millis(100); // Short timeout for responsiveness
+
+                    loop {
+                        // Check for shutdown first (before any blocking operations)
+                        if let Some(ref shutdown_rx) = shutdown_rx_keyboard {
+                            if *shutdown_rx.borrow() {
+                                break;
+                            }
+                        }
+
+                        // Use timeout to ensure we check shutdown frequently
+                        // This prevents blocking on stdin from interfering with Ctrl+C
+                        match timeout(READ_TIMEOUT, stdin.read_line(&mut line)).await {
+                            Ok(Ok(0)) => {
+                                // EOF, exit
+                                break;
+                            }
+                            Ok(Ok(_)) => {
+                                // Check if line is just 'v' (trimmed)
+                                let trimmed = line.trim();
+                                if trimmed == "v" {
+                                    // Debounce: only toggle if enough time has passed
+                                    let now = std::time::Instant::now();
+                                    if now.duration_since(last_toggle_time).as_millis() >= DEBOUNCE_MS as u128 {
+                                        let new_state = {
+                                            let mut verbose = verbose_handle_clone.lock().unwrap();
+                                            *verbose = !*verbose;
+                                            let state = *verbose;
+                                            // Also update BundleManager's verbose state
+                                            *manager_verbose.lock().unwrap() = state;
+                                            state
+                                        };
+                                        eprintln!("[Sync] Verbose mode: {}", if new_state { "ON" } else { "OFF" });
+                                        last_toggle_time = now;
+                                    }
+                                }
+                                line.clear();
+                            }
+                            Ok(Err(_)) => {
+                                // Error reading, exit
+                                break;
+                            }
+                            Err(_) => {
+                                // Timeout - this is expected, check shutdown and continue
+                                // This ensures Ctrl+C can be processed
+                                if let Some(ref shutdown_rx) = shutdown_rx_keyboard {
+                                    if *shutdown_rx.borrow() {
+                                        break;
+                                    }
+                                }
+                                // Clear line buffer on timeout to prevent accumulation
+                                line.clear();
+                            }
+                        }
+                    }
+                });
+            }
         }
 
         loop {
