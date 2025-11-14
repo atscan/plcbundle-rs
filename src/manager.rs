@@ -1022,6 +1022,36 @@ impl BundleManager {
         &self.directory
     }
 
+    /// Rollback repository to a specific bundle
+    pub fn rollback_to_bundle(&mut self, target_bundle: u32) -> Result<()> {
+        use anyhow::Context;
+        
+        let mut index = self.index.write().unwrap();
+        
+        // Keep only bundles up to target
+        index.bundles.retain(|b| b.bundle_number <= target_bundle);
+        index.last_bundle = target_bundle;
+        index.updated_at = chrono::Utc::now().to_rfc3339();
+        
+        // Recalculate total sizes
+        index.total_size_bytes = index.bundles.iter().map(|b| b.compressed_size).sum();
+        index.total_uncompressed_size_bytes = index.bundles.iter().map(|b| b.uncompressed_size).sum();
+        
+        // Save updated index
+        let index_path = self.directory.join("plc_bundles.json");
+        let index_json = serde_json::to_string_pretty(&*index)?;
+        std::fs::write(&index_path, index_json)
+            .with_context(|| format!("Failed to write index to: {}", index_path.display()))?;
+        
+        Ok(())
+    }
+
+    /// Get bundle metadata
+    pub fn get_bundle_metadata(&self, bundle_num: u32) -> Result<Option<crate::index::BundleMetadata>> {
+        let index = self.index.read().unwrap();
+        Ok(index.get_bundle(bundle_num).cloned())
+    }
+
     fn clone_for_arc(&self) -> Self {
         Self {
             directory: self.directory.clone(),

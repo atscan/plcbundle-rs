@@ -271,6 +271,22 @@ enum Commands {
             plcbundle sync --max-bundles 10"
     )]
     Sync(commands::sync::SyncCommand),
+
+    /// Rollback repository to earlier state
+    #[command(
+        after_help = "Examples:\n  \
+            # Rollback TO bundle 100 (keeps 1-100, removes 101+)\n  \
+            plcbundle rollback --to 100\n\n  \
+            # Remove last 5 bundles\n  \
+            plcbundle rollback --last 5\n\n  \
+            # Rollback without confirmation\n  \
+            plcbundle rollback --to 50 --force\n\n  \
+            # Rollback and rebuild DID index\n  \
+            plcbundle rollback --to 100 --rebuild-did-index\n\n  \
+            # Rollback but keep bundle files (index-only)\n  \
+            plcbundle rollback --to 100 --keep-files"
+    )]
+    Rollback(commands::rollback::RollbackCommand),
 }
 
 #[derive(Subcommand)]
@@ -653,6 +669,10 @@ fn main() -> Result<()> {
 
         Commands::Sync(cmd) => {
             commands::sync::run(cmd)?;
+        }
+        
+        Commands::Rollback(cmd) => {
+            commands::rollback::run(cmd, cli.dir)?;
         }
     }
 

@@ -8,6 +8,7 @@ pub mod logger;
 pub mod mempool;
 pub mod op;
 pub mod query;
+pub mod rollback;
 pub mod stats;
 pub mod sync;
 pub mod utils;
