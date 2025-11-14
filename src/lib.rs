@@ -13,6 +13,7 @@ pub mod iterators;
 pub mod bundle_format;
 pub mod resolver;
 pub mod mempool;
+pub mod sync;
 
 // Re-export main types
 pub use options::{Options, OptionsBuilder, QueryMode};

@@ -8,6 +8,7 @@ pub mod mempool;
 pub mod op;
 pub mod query;
 pub mod stats;
+pub mod sync;
 pub mod utils;
 pub mod verify;
 

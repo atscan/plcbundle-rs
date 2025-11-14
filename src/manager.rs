@@ -5,7 +5,7 @@ use crate::iterators::{QueryIterator, ExportIterator, RangeIterator};
 use crate::options::QueryMode;
 use crate::{cache, did_index, verification, mempool};
 use anyhow::Result;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::io::Write;
@@ -655,6 +655,102 @@ impl BundleManager {
             // Bundle is empty (shouldn't happen), use epoch
             Ok(DateTime::from_timestamp(0, 0).unwrap())
         }
+    }
+
+    // === Sync Operations ===
+
+    /// Fetch and save next bundle from PLC directory
+    pub async fn sync_next_bundle(&mut self, client: &crate::sync::PLCClient) -> Result<u32> {
+        use crate::sync::{get_boundary_cids, strip_boundary_duplicates, BUNDLE_SIZE};
+
+        let next_bundle_num = self.get_last_bundle() + 1;
+
+        // Get boundary CIDs from last bundle to prevent duplicates
+        let prev_boundary = if next_bundle_num > 1 {
+            let last = self.load_bundle(next_bundle_num - 1, LoadOptions::default())?;
+            get_boundary_cids(&last.operations)
+        } else {
+            HashSet::new()
+        };
+
+        // Get last timestamp
+        let mut after_time = if next_bundle_num > 1 {
+            let index = self.index.read().unwrap();
+            index
+                .get_bundle(next_bundle_num - 1)
+                .map(|m| m.end_time.clone())
+                .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
+        } else {
+            "1970-01-01T00:00:00Z".to_string()
+        };
+
+        // Ensure mempool is initialized
+        self.get_mempool()?;
+
+        // Fetch until we have 10,000 operations
+        let mut attempts = 0;
+        const MAX_ATTEMPTS: usize = 20;
+
+        while attempts < MAX_ATTEMPTS {
+            let stats = self.get_mempool_stats()?;
+
+            if stats.count >= BUNDLE_SIZE {
+                break;
+            }
+
+            // Fetch operations from PLC
+            let needed = BUNDLE_SIZE - stats.count;
+            let plc_ops = client.fetch_operations(&after_time, needed).await?;
+
+            if plc_ops.is_empty() {
+                anyhow::bail!(
+                    "Caught up: only {} operations available (need {})",
+                    stats.count,
+                    BUNDLE_SIZE
+                );
+            }
+
+            // Convert and deduplicate
+            let mut ops: Vec<Operation> = plc_ops.into_iter().map(Into::into).collect();
+            ops = strip_boundary_duplicates(ops, &prev_boundary);
+
+            if ops.is_empty() {
+                anyhow::bail!("All fetched operations were duplicates");
+            }
+
+            // Add to mempool
+            self.add_to_mempool(ops)?;
+
+            // Update cursor
+            if let Some(last_time) = self.get_mempool_stats()?.last_time {
+                after_time = last_time.to_rfc3339();
+            }
+
+            attempts += 1;
+        }
+
+        // Take 10,000 operations and create bundle
+        // TODO: Implement bundle saving
+        eprintln!("TODO: Create and save bundle {}", next_bundle_num);
+
+        Ok(next_bundle_num)
+    }
+
+    /// Run single sync cycle
+    pub async fn sync_once(&mut self, client: &crate::sync::PLCClient) -> Result<usize> {
+        let mut synced = 0;
+
+        loop {
+            match self.sync_next_bundle(client).await {
+                Ok(_) => synced += 1,
+                Err(e) if e.to_string().contains("Caught up") => break,
+                Err(e) => return Err(e),
+            }
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        }
+
+        Ok(synced)
     }
 
     // === Helpers ===

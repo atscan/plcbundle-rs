@@ -242,6 +242,24 @@ enum Commands {
     )]
     Mempool(commands::mempool::MempoolCommand),
 
+    /// Fetch new bundles from PLC directory
+    ///
+    /// Download new operations from the PLC directory and create bundles.
+    /// Similar to 'git fetch' - updates your local repository with new data.
+    #[command(alias = "fetch")]
+    #[command(
+        after_help = "Examples:\n  \
+            # Fetch new bundles once\n  \
+            plcbundle sync\n\n  \
+            # Run continuously (daemon mode)\n  \
+            plcbundle sync --continuous\n\n  \
+            # Custom sync interval\n  \
+            plcbundle sync --continuous --interval 30s\n\n  \
+            # Fetch maximum 10 bundles then stop\n  \
+            plcbundle sync --max-bundles 10"
+    )]
+    Sync(commands::sync::SyncCommand),
+
     /// Interactive shell mode
     #[cfg(feature = "interactive")]
     Shell {
@@ -623,6 +641,10 @@ fn main() -> Result<()> {
 
         Commands::Mempool(cmd) => {
             commands::mempool::run(cmd)?;
+        }
+
+        Commands::Sync(cmd) => {
+            commands::sync::run(cmd)?;
         }
     }
 
