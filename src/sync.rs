@@ -126,7 +126,10 @@ impl PLCClient {
             }
             match serde_json::from_str::<PLCOperation>(line) {
                 Ok(mut op) => {
-                    // Store raw JSON to preserve field order
+                    // CRITICAL: Store raw JSON to preserve exact byte content
+                    // This is required by the V1 specification (docs/specification.md § 4.2)
+                    // to ensure content_hash is reproducible across implementations.
+                    // Re-serializing would change key order/whitespace and break hash verification.
                     op.raw_json = Some(line.to_string());
                     operations.push(op);
                 },

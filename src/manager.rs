@@ -1918,21 +1918,26 @@ impl BundleManager {
     }
     fn load_bundle_from_disk(&self, path: &PathBuf) -> Result<Vec<Operation>> {
         use std::io::BufRead;
-        
+
         let file = std::fs::File::open(path)?;
         let decoder = zstd::Decoder::new(file)?;
         let reader = std::io::BufReader::new(decoder);
-        
+
         let mut operations = Vec::new();
         for line in reader.lines() {
             let line = line?;
             if line.is_empty() {
                 continue;
             }
-            let op: Operation = serde_json::from_str(&line)?;
+            // CRITICAL: Preserve raw JSON for content hash calculation
+            // This is required by the V1 specification (docs/specification.md § 4.2)
+            // to ensure content_hash remains reproducible during migration.
+            // Without this, re-serialization would change the hash.
+            let mut op: Operation = serde_json::from_str(&line)?;
+            op.raw_json = Some(line);
             operations.push(op);
         }
-        
+
         Ok(operations)
     }
 

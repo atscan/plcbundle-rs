@@ -1,6 +1,9 @@
 // src/operations.rs
 use serde::{Deserialize, Serialize};
 
+/// PLC Operation
+///
+/// Represents a single operation from the PLC directory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Operation {
     pub did: String,
@@ -14,6 +17,22 @@ pub struct Operation {
     pub created_at: String,
     #[serde(flatten)]
     pub extra: serde_json::Value,
+
+    /// CRITICAL: Raw JSON bytes as received from source
+    ///
+    /// This field stores the exact JSON representation as received from the PLC directory
+    /// or loaded from disk. It is required by the V1 specification (docs/specification.md § 4.2)
+    /// to ensure content_hash is reproducible across implementations.
+    ///
+    /// **IMPORTANT**: All code that creates or loads operations MUST populate this field
+    /// with the original JSON string. Re-serializing the struct will produce different
+    /// byte output (different field order, whitespace) which breaks hash verification.
+    ///
+    /// This field is:
+    /// - Set when fetching from PLC directory (src/sync.rs)
+    /// - Set when loading from bundle files (src/manager.rs)
+    /// - Used when serializing to bundles (src/bundle_format.rs)
+    /// - Skipped during JSON serialization (#[serde(skip)])
     #[serde(skip)]
     pub raw_json: Option<String>,
 }

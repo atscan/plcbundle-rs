@@ -251,12 +251,21 @@ pub fn compress_operations_to_frames(operations: &[crate::operations::Operation]
 }
 
 /// Serialize operations to JSONL (uncompressed)
+///
+/// CRITICAL: This function implements the V1 specification requirement (docs/specification.md § 4.2)
+/// for deterministic content hash calculation. It MUST use the raw JSON bytes when available
+/// to preserve exact byte content, including field order and whitespace.
 pub fn serialize_operations_to_jsonl(operations: &[crate::operations::Operation]) -> anyhow::Result<Vec<u8>> {
     let mut data = Vec::new();
     for op in operations {
+        // CRITICAL: Use raw_json if available to preserve exact byte content
+        // This is required for deterministic content_hash calculation.
+        // Re-serialization would change field order/whitespace and break hash verification.
         let json = if let Some(raw) = &op.raw_json {
             raw.clone()
         } else {
+            // Fallback: Re-serialize if raw_json is not available
+            // WARNING: This may produce different content_hash than the original!
             sonic_rs::to_string(op)?
         };
         data.extend_from_slice(json.as_bytes());
