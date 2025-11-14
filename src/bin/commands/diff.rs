@@ -7,6 +7,10 @@ use std::path::PathBuf;
 use std::collections::HashMap;
 use tokio::runtime::Runtime;
 
+// ANSI color codes for terminal output
+const GREEN: &str = "\x1b[38;5;154m";  // Light yellow-green
+const RESET: &str = "\x1b[0m";
+
 #[derive(Args)]
 #[command(
     about = "Compare repositories",
@@ -70,9 +74,23 @@ pub fn run(cmd: DiffCommand, dir: PathBuf) -> Result<()> {
 }
 
 async fn diff_indexes(manager: &BundleManager, dir: &PathBuf, target: &str, verbose: bool) -> Result<()> {
+    // Resolve "." to actual path (rule: always resolve dot to full path)
+    let local_path = if dir.as_os_str() == "." {
+        std::fs::canonicalize(".").unwrap_or_else(|_| dir.clone())
+    } else {
+        std::fs::canonicalize(dir).unwrap_or_else(|_| dir.clone())
+    };
+    
+    // Resolve target "." as well (if it's a local path, not URL)
+    let target_display = if target == "." && !target.starts_with("http://") && !target.starts_with("https://") {
+        std::fs::canonicalize(".").unwrap_or_else(|_| PathBuf::from(target)).display().to_string()
+    } else {
+        target.to_string()
+    };
+    
     eprintln!("\n🔍 Comparing repositories");
-    eprintln!("   Local:  {}", dir.display());
-    eprintln!("   Target: {}\n", target);
+    eprintln!("   Local:  {}", local_path.display());
+    eprintln!("   Target: {}\n", target_display);
     
     // Load local index
     let local_index = manager.get_index();
@@ -300,30 +318,30 @@ fn display_comparison(c: &IndexComparison, verbose: bool) {
     
     // Missing bundles - informational, not critical
     if !c.missing_bundles.is_empty() {
-        eprintln!("  Missing bundles:    ℹ️  {} (in target, not in local)", format_count(c.missing_bundles.len()));
+        eprintln!("  Missing bundles:    ℹ️  {} (in target, not in local)", c.missing_bundles.len());
     } else {
-        eprintln!("  Missing bundles:    {}", format_count(c.missing_bundles.len()));
+        eprintln!("  Missing bundles:    {}{} ✓{}", GREEN, c.missing_bundles.len(), RESET);
     }
     
     // Extra bundles - informational
     if !c.extra_bundles.is_empty() {
-        eprintln!("  Extra bundles:      ℹ️  {} (in local, not in target)", format_count(c.extra_bundles.len()));
+        eprintln!("  Extra bundles:      ℹ️  {} (in local, not in target)", c.extra_bundles.len());
     } else {
-        eprintln!("  Extra bundles:      {}", format_count(c.extra_bundles.len()));
+        eprintln!("  Extra bundles:      {}{} ✓{}", GREEN, c.extra_bundles.len(), RESET);
     }
     
     // Hash mismatches - CRITICAL
     if !c.hash_mismatches.is_empty() {
-        eprintln!("  Hash mismatches:    ⚠️  {} (CRITICAL - different content)", format_count_critical(c.hash_mismatches.len()));
+        eprintln!("  Hash mismatches:    ⚠️  {} (CRITICAL - different content)", c.hash_mismatches.len());
     } else {
-        eprintln!("  Hash mismatches:    {}", format_count_critical(c.hash_mismatches.len()));
+        eprintln!("  Hash mismatches:    {}{} ✓{}", GREEN, c.hash_mismatches.len(), RESET);
     }
     
     // Content mismatches - less critical than chain hash
     if !c.content_mismatches.is_empty() {
-        eprintln!("  Content mismatches: ⚠️  {} (different content hash)", format_count(c.content_mismatches.len()));
+        eprintln!("  Content mismatches: ⚠️  {} (different content hash)", c.content_mismatches.len());
     } else {
-        eprintln!("  Content mismatches: {}", format_count(c.content_mismatches.len()));
+        eprintln!("  Content mismatches: {}{} ✓{}", GREEN, c.content_mismatches.len(), RESET);
     }
     
     if let Some((start, end)) = c.local_range {
@@ -731,20 +749,5 @@ fn display_hash_analysis_full(
     }
 }
 
-// Helper functions
-fn format_count(n: usize) -> String {
-    if n == 0 {
-        "0".to_string()
-    } else {
-        format!("{}", n)
-    }
-}
-
-fn format_count_critical(n: usize) -> String {
-    if n == 0 {
-        "0".to_string()
-    } else {
-        format!("{} ⚠️", n)
-    }
-}
+// Helper functions removed - using direct formatting with colors inline
 

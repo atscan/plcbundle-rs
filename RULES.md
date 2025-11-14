@@ -133,6 +133,27 @@ pub fn cmd_new_feature(dir: PathBuf, param: Param) -> Result<()> {
 }
 ```
 
+## Path Resolution
+
+### Always Resolve "." to Full Path
+- ❌ **NEVER** display "." in user-facing output
+- ✅ **ALWAYS** resolve "." to canonical/absolute path using `std::fs::canonicalize`
+- This applies to all CLI commands that display paths to users
+
+**Example:**
+```rust
+// ❌ WRONG - shows "." to user
+eprintln!("Working in: {}", dir.display());
+
+// ✅ CORRECT - resolve "." to actual path
+let display_path = if dir.as_os_str() == "." {
+    std::fs::canonicalize(".").unwrap_or_else(|_| dir.clone())
+} else {
+    std::fs::canonicalize(dir).unwrap_or_else(|_| dir.clone())
+};
+eprintln!("Working in: {}", display_path.display());
+```
+
 ## Common Mistakes to Avoid
 
 ### ❌ Don't Do This

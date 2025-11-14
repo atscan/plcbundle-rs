@@ -309,6 +309,7 @@ enum Commands {
     Rollback(commands::rollback::RollbackCommand),
 
     /// Compare repositories
+    #[command(alias = "compare")]
     Diff(commands::diff::DiffCommand),
 }
 
