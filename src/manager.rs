@@ -1478,7 +1478,7 @@ impl BundleManager {
 
         // Calculate hashes using library functions
         let content_hash = crate::bundle_format::calculate_content_hash(&operations)?;
-        
+
         // Combine all compressed frames for hash calculation
         let mut all_compressed_data = Vec::new();
         for frame in &frame_result.compressed_frames {
@@ -1486,8 +1486,8 @@ impl BundleManager {
         }
         let compressed_hash = crate::bundle_format::calculate_compressed_hash(&all_compressed_data);
 
-        // Calculate chain hash
-        let (parent, chain_hash) = if bundle_num > 1 {
+        // Recalculate chain hash to verify correctness
+        let (expected_parent, recalculated_chain_hash) = if bundle_num > 1 {
             use sha2::{Sha256, Digest};
             let parent_chain_hash = self.index
                 .read()
@@ -1495,12 +1495,12 @@ impl BundleManager {
                 .get_bundle(bundle_num - 1)
                 .map(|b| b.hash.clone())
                 .unwrap_or_default();
-            
+
             let chain_input = format!("{}:{}", parent_chain_hash, content_hash);
             let mut hasher = Sha256::new();
             hasher.update(chain_input.as_bytes());
             let hash = format!("{:x}", hasher.finalize());
-            
+
             (parent_chain_hash, hash)
         } else {
             use sha2::{Sha256, Digest};
@@ -1508,9 +1508,31 @@ impl BundleManager {
             let mut hasher = Sha256::new();
             hasher.update(chain_input.as_bytes());
             let hash = format!("{:x}", hasher.finalize());
-            
+
             (String::new(), hash)
         };
+
+        // Verify chain hash matches original
+        if recalculated_chain_hash != meta.hash {
+            anyhow::bail!(
+                "Chain hash mismatch in bundle {}: original={}, recalculated={}\n\
+                This indicates the original bundle content may be corrupted or the chain was broken.",
+                bundle_num, meta.hash, recalculated_chain_hash
+            );
+        }
+
+        // Verify parent hash matches
+        if expected_parent != meta.parent {
+            anyhow::bail!(
+                "Parent hash mismatch in bundle {}: original={}, expected={}\n\
+                This indicates the chain linkage is broken.",
+                bundle_num, meta.parent, expected_parent
+            );
+        }
+
+        // Use verified hashes from original bundle
+        let chain_hash = meta.hash.clone();
+        let parent = meta.parent.clone();
 
         let cursor = end_time.clone();
         let origin = self.index.read().unwrap().origin.clone();

@@ -243,9 +243,15 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
             }
             Err(e) => {
                 failed += 1;
-                if cmd.verbose {
+                let err_msg = e.to_string();
+
+                // Always print chain hash errors (even in non-verbose mode)
+                if err_msg.contains("Chain hash mismatch") || err_msg.contains("Parent hash mismatch") {
+                    eprintln!("\n❌ Bundle {:06}: {}", info.bundle_number, err_msg);
+                } else if cmd.verbose {
                     eprintln!("✗ Bundle {:06} failed: {}", info.bundle_number, e);
                 }
+
                 if first_error.is_none() {
                     first_error = Some(e);
                 }
@@ -338,8 +344,29 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
         }
     } else {
         eprintln!("⚠️  Failed: {} bundles", failed);
-        if let Some(err) = first_error {
-            eprintln!("  Error: {}", err);
+        if let Some(ref err) = first_error {
+            let err_msg = err.to_string();
+            eprintln!("  First error: {}", err);
+
+            // Provide helpful guidance for chain hash errors
+            if err_msg.contains("Chain hash mismatch") {
+                eprintln!("\n💡 Chain hash errors indicate:");
+                eprintln!("   • The bundle content doesn't match the expected chain hash");
+                eprintln!("   • This could mean the original bundle was corrupted or modified");
+                eprintln!("   • The chain integrity check is working correctly");
+                eprintln!("\n   To diagnose:");
+                eprintln!("   1. Run 'plcbundle verify' to check all bundles");
+                eprintln!("   2. Check if the bundle file was manually modified");
+                eprintln!("   3. Re-sync affected bundles from the PLC directory");
+            } else if err_msg.contains("Parent hash mismatch") {
+                eprintln!("\n💡 Parent hash errors indicate:");
+                eprintln!("   • The chain linkage is broken between bundles");
+                eprintln!("   • Bundles may have been migrated out of order");
+                eprintln!("   • The index metadata may be inconsistent");
+                eprintln!("\n   To fix:");
+                eprintln!("   1. Run 'plcbundle verify' to identify all broken links");
+                eprintln!("   2. Ensure bundles are migrated in sequential order (1, 2, 3, ...)");
+            }
         }
         bail!("migration failed for {} bundles", failed);
     }
