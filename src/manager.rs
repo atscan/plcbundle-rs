@@ -1236,43 +1236,59 @@ impl BundleManager {
         let unique_dids: HashSet<String> = operations.iter().map(|op| op.did.clone()).collect();
         let did_count = unique_dids.len() as u32;
 
-        // Serialize to JSONL
+        // Use multi-frame compression for better performance on large bundles
         let serialize_start = Instant::now();
-        let mut uncompressed_data = Vec::new();
-        for op in &operations {
-            // Use raw JSON if available to preserve field order, otherwise serialize
-            let json = if let Some(raw) = &op.raw_json {
-                raw.clone()
-            } else {
-                sonic_rs::to_string(op)?
-            };
-            uncompressed_data.extend_from_slice(json.as_bytes());
-            uncompressed_data.push(b'\n');
-        }
-        let uncompressed_size = uncompressed_data.len() as u64;
-        let serialize_time = serialize_start.elapsed();
+        let serialize_time;
+        let compress_time;
+        let uncompressed_size;
+        let compressed_size;
+        let frame_count;
+        let frame_offsets;
+        let compressed_frames;
+        let content_hash;
 
-        // Hash and compress
+        // Compress operations to frames
+        let compress_result = {
+            let compress_start = Instant::now();
+            let result = crate::bundle_format::compress_operations_to_frames(&operations)?;
+            serialize_time = compress_start.elapsed();
+            compress_time = serialize_time; // Compression is done inside compress_operations_to_frames
+            result
+        };
+
+        uncompressed_size = compress_result.uncompressed_size;
+        compressed_size = compress_result.compressed_size;
+        frame_count = compress_result.compressed_frames.len();
+        frame_offsets = compress_result.frame_offsets;
+        compressed_frames = compress_result.compressed_frames;
+
+        // Calculate content hash from uncompressed data
         let hash_start = Instant::now();
-        // Calculate content hash (uncompressed) using SHA-256 per spec
-        let content_hash = {
+        content_hash = {
             use sha2::{Sha256, Digest};
             let mut hasher = Sha256::new();
-            hasher.update(&uncompressed_data);
+
+            // Hash all operations in order (reconstructing uncompressed JSONL)
+            for op in &operations {
+                let json = if let Some(raw) = &op.raw_json {
+                    raw.clone()
+                } else {
+                    sonic_rs::to_string(op)?
+                };
+                hasher.update(json.as_bytes());
+                hasher.update(b"\n");
+            }
+
             format!("{:x}", hasher.finalize())
         };
 
-        // Compress
-        let compress_start = Instant::now();
-        let compressed_data = zstd::encode_all(uncompressed_data.as_slice(), constants::ZSTD_COMPRESSION_LEVEL)?;
-        let compressed_size = compressed_data.len() as u64;
-        let compress_time = compress_start.elapsed();
-
-        // Calculate compressed hash using SHA-256 per spec
+        // Calculate compressed hash using SHA-256 per spec (hash all frames concatenated)
         let compressed_hash = {
             use sha2::{Sha256, Digest};
             let mut hasher = Sha256::new();
-            hasher.update(&compressed_data);
+            for frame in &compressed_frames {
+                hasher.update(frame);
+            }
             format!("{:x}", hasher.finalize())
         };
         let hash_time = hash_start.elapsed();
@@ -1322,9 +1338,9 @@ impl BundleManager {
             end_time: end_time.clone(),
             created_at: chrono::Utc::now().to_rfc3339(),
             created_by: constants::created_by(),
-            frame_count: 0,  // Will be updated if we implement multi-frame compression
-            frame_size: 0,
-            frame_offsets: vec![],
+            frame_count,
+            frame_size: constants::FRAME_SIZE,
+            frame_offsets: frame_offsets.clone(),
         };
 
         // Write to disk with metadata skippable frame
@@ -1335,10 +1351,12 @@ impl BundleManager {
         // Write metadata as skippable frame first
         crate::bundle_format::write_metadata_frame(&mut file, &bundle_metadata_frame)
             .with_context(|| format!("Failed to write metadata frame to: {}", bundle_path.display()))?;
-        
-        // Write compressed data
-        file.write_all(&compressed_data)
-            .with_context(|| format!("Failed to write bundle data to: {}", bundle_path.display()))?;
+
+        // Write all compressed frames
+        for frame in &compressed_frames {
+            file.write_all(frame)
+                .with_context(|| format!("Failed to write compressed frame to: {}", bundle_path.display()))?;
+        }
         file.flush()
             .with_context(|| format!("Failed to flush bundle file: {}", bundle_path.display()))?;
 
@@ -1554,13 +1572,7 @@ impl BundleManager {
             anyhow::bail!("Content hash mismatch after migration");
         }
 
-        // Remove backup on success
-        if backup_path.exists() {
-            std::fs::remove_file(&backup_path)
-                .with_context(|| format!("Failed to remove backup: {}", backup_path.display()))?;
-        }
-
-        // Update index
+        // Update index BEFORE removing backup (so if interrupted, index is consistent with file)
         let bundle_metadata = crate::index::BundleMetadata {
             bundle_number: bundle_num,
             start_time,
@@ -1585,7 +1597,7 @@ impl BundleManager {
             } else {
                 index.bundles.push(bundle_metadata.clone());
             }
-            
+
             // Recalculate totals
             index.total_size_bytes = index.bundles.iter().map(|b| b.compressed_size).sum();
             index.total_uncompressed_size_bytes = index.bundles.iter().map(|b| b.uncompressed_size).sum();
@@ -1596,6 +1608,12 @@ impl BundleManager {
             let index_json = serde_json::to_string_pretty(&*index)?;
             std::fs::write(&index_path, index_json)
                 .with_context(|| format!("Failed to write index to: {}", index_path.display()))?;
+        }
+
+        // Remove backup only after index is successfully updated
+        if backup_path.exists() {
+            std::fs::remove_file(&backup_path)
+                .with_context(|| format!("Failed to remove backup: {}", backup_path.display()))?;
         }
 
         let size_diff = compressed_size as i64 - old_size as i64;

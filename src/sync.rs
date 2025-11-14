@@ -843,8 +843,11 @@ impl SyncManager {
                         }
                     }
 
-                    // Caught up - initial sync is complete
-                    if is_initial_sync {
+                    // Caught up to the end of the chain
+                    // Mark initial sync as complete ONLY if we actually synced at least one bundle.
+                    // This prevents premature "initial sync complete" when we just have a full
+                    // mempool from a previous run but still have thousands of bundles to sync.
+                    if is_initial_sync && total_synced > 0 {
                         is_initial_sync = false;
 
                         // Update any remaining pending DID index bundles

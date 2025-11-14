@@ -125,6 +125,9 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
         return Ok(());
     }
 
+    // Sort bundles by number to ensure chain integrity (migrate in order: 1, 2, 3, ...)
+    needs_migration.sort_by_key(|info| info.bundle_number);
+
     // Show migration plan
     eprintln!("Migration Plan");
     eprintln!("══════════════\n");
