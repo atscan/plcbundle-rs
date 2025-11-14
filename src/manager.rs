@@ -1244,6 +1244,35 @@ impl BundleManager {
         &self.directory
     }
 
+    /// Get a copy of the current index
+    pub fn get_index(&self) -> Index {
+        self.index.read().unwrap().clone()
+    }
+
+    // === Remote Access ===
+    
+    /// Fetch index from remote URL or local file path
+    /// 
+    /// This is an async method that requires a tokio runtime.
+    /// For synchronous usage, use the remote module functions directly.
+    pub async fn fetch_remote_index(&self, target: &str) -> Result<Index> {
+        crate::remote::fetch_index(target).await
+    }
+    
+    /// Fetch bundle operations from remote URL
+    /// 
+    /// This is an async method that requires a tokio runtime.
+    pub async fn fetch_remote_bundle(&self, base_url: &str, bundle_num: u32) -> Result<Vec<Operation>> {
+        crate::remote::fetch_bundle_operations(base_url, bundle_num).await
+    }
+    
+    /// Fetch a single operation from remote URL
+    /// 
+    /// This is an async method that requires a tokio runtime.
+    pub async fn fetch_remote_operation(&self, base_url: &str, bundle_num: u32, position: usize) -> Result<String> {
+        crate::remote::fetch_operation(base_url, bundle_num, position).await
+    }
+
     /// Rollback repository to a specific bundle
     pub fn rollback_to_bundle(&mut self, target_bundle: u32) -> Result<()> {
         use anyhow::Context;

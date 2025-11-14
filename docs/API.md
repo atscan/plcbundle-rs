@@ -63,6 +63,11 @@ get_did_index_stats() -> DIDIndexStats
 sync_next_bundle(client: &PLCClient) -> Result<u32>
 sync_once(client: &PLCClient) -> Result<usize>
 
+// === Remote Access (Async) ===
+fetch_remote_index(target: &str) -> Result<Index>
+fetch_remote_bundle(base_url: &str, bundle_num: u32) -> Result<Vec<Operation>>
+fetch_remote_operation(base_url: &str, bundle_num: u32, position: usize) -> Result<String>
+
 // === Mempool Operations ===
 get_mempool_stats() -> Result<MempoolStats>
 get_mempool_operations() -> Result<Vec<Operation>>

@@ -307,6 +307,9 @@ enum Commands {
             plcbundle rollback --to 100 --keep-files"
     )]
     Rollback(commands::rollback::RollbackCommand),
+
+    /// Compare repositories
+    Diff(commands::diff::DiffCommand),
 }
 
 #[derive(Subcommand)]
@@ -695,6 +698,10 @@ fn main() -> Result<()> {
         
         Commands::Rollback(cmd) => {
             commands::rollback::run(cmd, cli.dir)?;
+        }
+
+        Commands::Diff(cmd) => {
+            commands::diff::run(cmd, cli.dir)?;
         }
     }
 

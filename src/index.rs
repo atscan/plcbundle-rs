@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};  // Add Serialize here
 use std::fs::File;
 use std::path::Path;
 
-#[derive(Debug, Deserialize, Serialize)]  // Add Serialize here
+#[derive(Debug, Deserialize, Serialize, Clone)]  // Add Clone here
 pub struct Index {
     pub version: String,
     pub origin: String,

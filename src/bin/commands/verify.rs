@@ -387,7 +387,7 @@ fn verify_chain(manager: &BundleManager, verbose: bool, full: bool, fast: bool, 
         eprintln!("  Total size:     {} (compressed)", format_bytes(total_size));
         eprintln!("  Total ops:      {}", format_number(total_ops));
         eprintln!("  Total DIDs:     {}", format_number(total_dids));
-        eprintln!("  Avg ops/bundle: {}", format_number((total_ops / bundles.len() as u64)));
+        eprintln!("  Avg ops/bundle: {}", format_number(total_ops / bundles.len() as u64));
         eprintln!("  Avg size/bundle: {}", format_bytes(total_size / bundles.len() as u64));
 
         // Timing information
