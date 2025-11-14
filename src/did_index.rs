@@ -730,6 +730,11 @@ impl Manager {
     }
 
     fn write_shard(&self, shard_num: u8, builder: &ShardBuilder) -> Result<()> {
+        // Ensure shard directory exists
+        if !self.shard_dir.exists() {
+            fs::create_dir_all(&self.shard_dir)?;
+        }
+        
         let shard_path = self.shard_dir.join(format!("{:02x}.idx", shard_num));
         
         if builder.entries.is_empty() {

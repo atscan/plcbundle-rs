@@ -685,9 +685,9 @@ impl BundleManager {
             ("1970-01-01T00:00:00Z".to_string(), HashSet::new())
         };
 
-        log::debug!("[DEBUG] Preparing bundle {:06} (mempool: {} ops)...",
+        log::debug!("Preparing bundle {:06} (mempool: {} ops)...",
             next_bundle_num, self.get_mempool_stats().map(|s| s.count).unwrap_or(0));
-        log::debug!("[DEBUG] Starting cursor: {}", if after_time.is_empty() || after_time == "1970-01-01T00:00:00Z" { "(none)" } else { &after_time });
+        log::debug!("Starting cursor: {}", if after_time.is_empty() || after_time == "1970-01-01T00:00:00Z" { "" } else { &after_time });
         
         if !prev_boundary.is_empty() && self.verbose {
             log::info!("  Starting with {} boundary CIDs from previous bundle", prev_boundary.len());
@@ -789,35 +789,58 @@ impl BundleManager {
             0.0
         };
 
-        if self.verbose {
-            let stats = self.get_mempool_stats()?;
+        let final_stats = self.get_mempool_stats()?;
+        
+        // Check if we have enough operations (allow slightly less than 10000 if we hit max attempts)
+        if final_stats.count < BUNDLE_SIZE && fetch_num >= MAX_ATTEMPTS {
+            if final_stats.count >= (BUNDLE_SIZE * 9 / 10) {  // At least 90% of target
+                if self.verbose {
+                    log::info!("  ✓ Collected {} unique ops from {} fetches ({:.1}% dedup)",
+                        final_stats.count, fetch_num, dedup_pct);
+                    log::info!("  ⚠ Saving bundle with {} ops (couldn't reach {} after {} attempts)",
+                        final_stats.count, BUNDLE_SIZE, MAX_ATTEMPTS);
+                }
+            } else {
+                anyhow::bail!(
+                    "Caught up: only {} operations available (need at least {})",
+                    final_stats.count,
+                    BUNDLE_SIZE * 9 / 10
+                );
+            }
+        } else if self.verbose {
             log::info!("  ✓ Collected {} unique ops from {} fetches ({:.1}% dedup)",
-                stats.count, fetch_num, dedup_pct);
+                final_stats.count, fetch_num, dedup_pct);
         }
 
-        // Take 10,000 operations and create bundle
-        log::debug!("DEBUG: Calling operations.SaveBundle with bundle={}", next_bundle_num);
+        // Take operations and create bundle
+        log::debug!("Calling operations.SaveBundle with bundle={}", next_bundle_num);
         
         let operations = {
             let mut mempool = self.mempool.write().unwrap();
             let mem = mempool.as_mut().ok_or_else(|| anyhow::anyhow!("Mempool not initialized"))?;
-            mem.take(crate::sync::BUNDLE_SIZE)?
+            // Take up to BUNDLE_SIZE operations (or all if less)
+            let count = mem.count().min(BUNDLE_SIZE);
+            mem.take(count)?
         };
 
         if operations.is_empty() {
             anyhow::bail!("No operations to create bundle");
         }
+        
+        if operations.len() < BUNDLE_SIZE && self.verbose {
+            log::debug!("Creating partial bundle with {} operations", operations.len());
+        }
 
-        log::debug!("DEBUG: SaveBundle SUCCESS, setting bundle fields");
+        log::debug!("SaveBundle SUCCESS, setting bundle fields");
 
         // Save bundle to disk
         let save_start = Instant::now();
         self.save_bundle(next_bundle_num, operations)?;
         let save_duration = save_start.elapsed();
 
-        log::debug!("DEBUG: Adding bundle {} to index", next_bundle_num);
-        log::debug!("DEBUG: Index now has {} bundles", next_bundle_num);
-        log::debug!("DEBUG: Index saved, last bundle = {}", next_bundle_num);
+        log::debug!("Adding bundle {} to index", next_bundle_num);
+        log::debug!("Index now has {} bundles", next_bundle_num);
+        log::debug!("Index saved, last bundle = {}", next_bundle_num);
 
         // Get bundle info for display
         let (short_hash, age_str) = {
@@ -840,7 +863,7 @@ impl BundleManager {
             next_bundle_num, short_hash, fetch_total_duration.as_secs_f64(),
             fetch_num, age_str);
 
-        log::debug!("DEBUG: Bundle done = {}, finish duration = {}ms",
+        log::debug!("Bundle done = {}, finish duration = {}ms",
             next_bundle_num, save_duration.as_millis());
 
         Ok(next_bundle_num)
@@ -865,6 +888,7 @@ impl BundleManager {
 
     /// Save bundle to disk with compression and index updates
     fn save_bundle(&mut self, bundle_num: u32, operations: Vec<Operation>) -> Result<()> {
+        use anyhow::Context;
         use std::collections::HashSet;
         use std::fs::File;
         use std::io::Write;
@@ -924,11 +948,14 @@ impl BundleManager {
         // Get cursor (last operation timestamp)
         let cursor = end_time.clone();
 
-        // Write to disk
-        let bundle_path = self.directory.join(format!("{:06}.jsonl.zst", bundle_num));
-        let mut file = File::create(&bundle_path)?;
-        file.write_all(&compressed_data)?;
-        file.flush()?;
+            // Write to disk
+            let bundle_path = self.directory.join(format!("{:06}.jsonl.zst", bundle_num));
+            let mut file = File::create(&bundle_path)
+                .with_context(|| format!("Failed to create bundle file: {}", bundle_path.display()))?;
+            file.write_all(&compressed_data)
+                .with_context(|| format!("Failed to write bundle data to: {}", bundle_path.display()))?;
+            file.flush()
+                .with_context(|| format!("Failed to flush bundle file: {}", bundle_path.display()))?;
 
         if self.verbose {
             log::debug!(
@@ -976,10 +1003,11 @@ impl BundleManager {
             index.total_size_bytes += compressed_size;
             index.total_uncompressed_size_bytes += uncompressed_size;
 
-            // Save index to disk
-            let index_path = self.directory.join("plc_bundles.json");
-            let index_json = serde_json::to_string_pretty(&*index)?;
-            std::fs::write(index_path, index_json)?;
+                // Save index to disk
+                let index_path = self.directory.join("plc_bundles.json");
+                let index_json = serde_json::to_string_pretty(&*index)?;
+                std::fs::write(&index_path, index_json)
+                    .with_context(|| format!("Failed to write index to: {}", index_path.display()))?;
         }
 
         Ok(())

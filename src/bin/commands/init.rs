@@ -34,6 +34,12 @@ pub fn run(cmd: InitCommand) -> Result<()> {
         println!("Created directory: {}", dir.display());
     }
 
+    // Create .plcbundle directory for DID index
+    let plcbundle_dir = dir.join(".plcbundle");
+    if !plcbundle_dir.exists() {
+        std::fs::create_dir_all(&plcbundle_dir)?;
+    }
+
     // Create empty index
     let index = serde_json::json!({
         "version": "1.0",
