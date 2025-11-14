@@ -623,6 +623,17 @@ impl BundleManager {
             mp.clear();
             mp.save()?;
         }
+        
+        // Also delete all mempool files to prevent stale data from previous bundles
+        if let Ok(entries) = std::fs::read_dir(&self.directory) {
+            for entry in entries.flatten() {
+                if let Some(name) = entry.file_name().to_str() {
+                    if name.starts_with("plc_mempool_") && name.ends_with(".jsonl") {
+                        let _ = std::fs::remove_file(entry.path());
+                    }
+                }
+            }
+        }
 
         Ok(())
     }
