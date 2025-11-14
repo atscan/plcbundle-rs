@@ -1,7 +1,7 @@
 // Diff command - compare repositories
 use anyhow::{Result, bail, Context};
 use clap::Args;
-use plcbundle::{BundleManager, remote};
+use plcbundle::{BundleManager, remote, constants};
 use plcbundle::index::Index;
 use std::path::PathBuf;
 use std::collections::HashMap;
@@ -28,15 +28,15 @@ const RESET: &str = "\x1b[0m";
                     • Local file path (e.g., /path/to/plc_bundles.json)",
     after_help = "Examples:\n  \
         # High-level comparison\n  \
-        plcbundle diff https://plc.example.com\n\n  \
+        plcbundle-rs diff https://plc.example.com\n\n  \
         # Show all differences (verbose)\n  \
-        plcbundle diff https://plc.example.com -v\n\n  \
+        plcbundle-rs diff https://plc.example.com -v\n\n  \
         # Deep dive into specific bundle\n  \
-        plcbundle diff https://plc.example.com --bundle 23\n\n  \
+        plcbundle-rs diff https://plc.example.com --bundle 23\n\n  \
         # Compare bundle with operation samples\n  \
-        plcbundle diff https://plc.example.com --bundle 23 --show-operations\n\n  \
+        plcbundle-rs diff https://plc.example.com --bundle 23 --show-operations\n\n  \
         # Show first 50 operations\n  \
-        plcbundle diff https://plc.example.com --bundle 23 --sample 50"
+        plcbundle-rs diff https://plc.example.com --bundle 23 --sample 50"
 )]
 pub struct DiffCommand {
     /// Target to compare against (URL or local path)
@@ -69,11 +69,11 @@ pub fn run(cmd: DiffCommand, dir: PathBuf) -> Result<()> {
         rt.block_on(diff_specific_bundle(&manager, &cmd.target, bundle_num, cmd.show_operations, cmd.sample))
     } else {
         // Otherwise, do high-level index comparison
-        rt.block_on(diff_indexes(&manager, &dir, &cmd.target, cmd.verbose))
+        rt.block_on(diff_indexes(&manager, &dir, &cmd.target, cmd.verbose, constants::BINARY_NAME))
     }
 }
 
-async fn diff_indexes(manager: &BundleManager, dir: &PathBuf, target: &str, verbose: bool) -> Result<()> {
+async fn diff_indexes(manager: &BundleManager, dir: &PathBuf, target: &str, verbose: bool, binary_name: &str) -> Result<()> {
     // Resolve "." to actual path (rule: always resolve dot to full path)
     let local_path = if dir.as_os_str() == "." {
         std::fs::canonicalize(".").unwrap_or_else(|_| dir.clone())
@@ -134,8 +134,8 @@ async fn diff_indexes(manager: &BundleManager, dir: &PathBuf, target: &str, verb
     // If there are hash mismatches, suggest deep dive
     if !comparison.hash_mismatches.is_empty() {
         eprintln!("\n💡 Tip: Investigate specific mismatches with:");
-        eprintln!("   plcbundle diff {} --bundle {} --show-operations",
-            target, comparison.hash_mismatches[0].bundle_number);
+        eprintln!("   {} diff {} --bundle {} --show-operations",
+            binary_name, target, comparison.hash_mismatches[0].bundle_number);
     }
     
     // Only fail if there are critical hash mismatches AND origins match
@@ -155,6 +155,7 @@ async fn diff_specific_bundle(
     show_ops: bool,
     sample_size: usize,
 ) -> Result<()> {
+    // Store bundle_num for use in hints
     eprintln!("\n🔬 Deep Diff: Bundle {:06}", bundle_num);
     eprintln!("═══════════════════════════════════════════════════════════════\n");
     
@@ -232,7 +233,7 @@ async fn diff_specific_bundle(
     // Compare operations
     if show_ops {
         eprintln!();
-        display_operation_comparison(&local_ops, &remote_ops, sample_size, origins_match);
+        display_operation_comparison(&local_ops, &remote_ops, sample_size, origins_match, bundle_num, target);
     }
     
     // Compare hashes in detail
@@ -799,6 +800,8 @@ fn display_operation_comparison(
     remote_ops: &[plcbundle::Operation],
     sample_size: usize,
     origins_match: bool,
+    bundle_num: u32,
+    target: &str,
 ) {
     eprintln!("🔍 Operation Comparison");
     eprintln!("════════════════════════\n");
@@ -868,10 +871,37 @@ fn display_operation_comparison(
         let display_count = sample_size.min(missing_in_local.len());
         for i in 0..display_count {
             let (cid, pos) = &missing_in_local[i];
-            eprintln!("    - [{:04}] {}", pos, cid);
+            // Find the operation in remote_ops to get details
+            if let Some(remote_op) = remote_ops.get(*pos) {
+                eprintln!("    - [{:04}] {}", pos, cid);
+                eprintln!("       DID:     {}", remote_op.did);
+                eprintln!("       Time:     {}", remote_op.created_at);
+                eprintln!("       Nullified: {}", remote_op.nullified);
+                if let Some(op_type) = remote_op.operation.get("type").and_then(|v| v.as_str()) {
+                    eprintln!("       Type:     {}", op_type);
+                }
+            } else {
+                eprintln!("    - [{:04}] {}", pos, cid);
+            }
         }
         if missing_in_local.len() > display_count {
             eprintln!("    ... and {} more", missing_in_local.len() - display_count);
+        }
+        
+        // Add hints for exploring missing operations
+        if let Some((first_cid, first_pos)) = missing_in_local.first() {
+            if target.starts_with("http") {
+                let base_url = if target.ends_with('/') { 
+                    &target[..target.len()-1] 
+                } else { 
+                    target 
+                };
+                let global_pos = (bundle_num as u64 - 1) * constants::BUNDLE_SIZE as u64 + *first_pos as u64;
+                eprintln!("  💡 To explore missing operations:");
+                eprintln!("     • Global position: {} (bundle {} position {})", global_pos, bundle_num, first_pos);
+                eprintln!("     • View in remote: curl '{}/op/{}' | grep '{}' | jq .", 
+                    base_url, global_pos, first_cid);
+            }
         }
         eprintln!();
     }
@@ -881,10 +911,30 @@ fn display_operation_comparison(
         let display_count = sample_size.min(missing_in_remote.len());
         for i in 0..display_count {
             let (cid, pos) = &missing_in_remote[i];
-            eprintln!("    + [{:04}] {}", pos, cid);
+            // Find the operation in local_ops to get details
+            if let Some(local_op) = local_ops.get(*pos) {
+                eprintln!("    + [{:04}] {}", pos, cid);
+                eprintln!("       DID:     {}", local_op.did);
+                eprintln!("       Time:     {}", local_op.created_at);
+                eprintln!("       Nullified: {}", local_op.nullified);
+                if let Some(op_type) = local_op.operation.get("type").and_then(|v| v.as_str()) {
+                    eprintln!("       Type:     {}", op_type);
+                }
+            } else {
+                eprintln!("    + [{:04}] {}", pos, cid);
+            }
         }
         if missing_in_remote.len() > display_count {
             eprintln!("    ... and {} more", missing_in_remote.len() - display_count);
+        }
+        
+        // Add hints for exploring missing operations
+        if let Some((_first_cid, first_pos)) = missing_in_remote.first() {
+            let global_pos = (bundle_num as u64 - 1) * constants::BUNDLE_SIZE as u64 + *first_pos as u64;
+            eprintln!("  💡 To explore missing operations:");
+            eprintln!("     • Global position: {} (bundle {} position {})", global_pos, bundle_num, first_pos);
+            eprintln!("     • View in local bundle: {} op get {} {}", 
+                constants::BINARY_NAME, bundle_num, first_pos);
         }
         eprintln!();
     }

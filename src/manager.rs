@@ -1131,7 +1131,7 @@ impl BundleManager {
         // During initial sync, skip DID index updates (will be done in batches every 100 bundles)
         let save_start = Instant::now();
         let (serialize_time, compress_time, hash_time, did_index_time, index_write_time) =
-            self.save_bundle_with_timing(next_bundle_num, operations, skip_did_index)?;
+            self.save_bundle_with_timing(next_bundle_num, operations, skip_did_index).await?;
         let save_duration = save_start.elapsed();
 
         // Show timing breakdown in verbose mode only
@@ -1221,7 +1221,7 @@ impl BundleManager {
     }
 
     /// Save bundle to disk with compression and index updates (with timing)
-    fn save_bundle_with_timing(&self, bundle_num: u32, operations: Vec<Operation>, skip_did_index: bool) -> Result<(std::time::Duration, std::time::Duration, std::time::Duration, std::time::Duration, std::time::Duration)> {
+    async fn save_bundle_with_timing(&self, bundle_num: u32, operations: Vec<Operation>, skip_did_index: bool) -> Result<(std::time::Duration, std::time::Duration, std::time::Duration, std::time::Duration, std::time::Duration)> {
         use std::time::Instant;
         use anyhow::Context;
         use std::collections::HashSet;
@@ -1242,7 +1242,6 @@ impl BundleManager {
         let did_count = unique_dids.len() as u32;
 
         // Use multi-frame compression for better performance on large bundles
-        let serialize_start = Instant::now();
         let serialize_time;
         let compress_time;
         let uncompressed_size;
@@ -1296,15 +1295,9 @@ impl BundleManager {
             format!("{:x}", hasher.finalize())
         };
 
-        // Calculate compressed hash using SHA-256 per spec (hash all frames concatenated)
-        let compressed_hash = {
-            use sha2::{Sha256, Digest};
-            let mut hasher = Sha256::new();
-            for frame in &compressed_frames {
-                hasher.update(frame);
-            }
-            format!("{:x}", hasher.finalize())
-        };
+        // Calculate compressed hash - will be calculated after writing the file
+        // because it needs to include the metadata frame (verification hashes entire file)
+        // We'll calculate it after the file is written
         let hash_time = hash_start.elapsed();
 
         // Calculate chain hash per spec (Section 6.3)
@@ -1407,22 +1400,56 @@ impl BundleManager {
             frame_offsets: frame_offsets.clone(),
         };
 
-        // Write to disk with metadata skippable frame
+        // Write to disk with metadata skippable frame (move to blocking task to avoid blocking async runtime)
+        // CRITICAL: We need to calculate compressed_hash from the entire file (including metadata frame)
+        // because verification hashes the entire file. So we write the file first, then read it back to calculate the hash.
         let bundle_path = self.directory.join(format!("{:06}.jsonl.zst", bundle_num));
-        let mut file = File::create(&bundle_path)
-            .with_context(|| format!("Failed to create bundle file: {}", bundle_path.display()))?;
+        let bundle_path_clone = bundle_path.clone();
+        let bundle_metadata_frame_clone = bundle_metadata_frame.clone();
+        let compressed_frames_clone = compressed_frames.clone();
         
-        // Write metadata as skippable frame first
-        crate::bundle_format::write_metadata_frame(&mut file, &bundle_metadata_frame)
-            .with_context(|| format!("Failed to write metadata frame to: {}", bundle_path.display()))?;
+        // Write file first (metadata frame doesn't contain compressed_hash, so we can write it)
+        tokio::task::spawn_blocking({
+            let bundle_path_clone = bundle_path_clone.clone();
+            let bundle_metadata_frame_clone = bundle_metadata_frame_clone.clone();
+            let compressed_frames_clone = compressed_frames_clone.clone();
+            move || {
+                let mut file = File::create(&bundle_path_clone)
+                    .with_context(|| format!("Failed to create bundle file: {}", bundle_path_clone.display()))?;
+                
+                // Write metadata as skippable frame first
+                crate::bundle_format::write_metadata_frame(&mut file, &bundle_metadata_frame_clone)
+                    .with_context(|| format!("Failed to write metadata frame to: {}", bundle_path_clone.display()))?;
 
-        // Write all compressed frames
-        for frame in &compressed_frames {
-            file.write_all(frame)
-                .with_context(|| format!("Failed to write compressed frame to: {}", bundle_path.display()))?;
-        }
-        file.flush()
-            .with_context(|| format!("Failed to flush bundle file: {}", bundle_path.display()))?;
+                // Write all compressed frames
+                for frame in &compressed_frames_clone {
+                    file.write_all(frame)
+                        .with_context(|| format!("Failed to write compressed frame to: {}", bundle_path_clone.display()))?;
+                }
+                file.flush()
+                    .with_context(|| format!("Failed to flush bundle file: {}", bundle_path_clone.display()))?;
+                
+                Ok::<(), anyhow::Error>(())
+            }
+        })
+        .await
+        .context("Bundle file write task failed")??;
+
+        // Now calculate compressed_hash from the entire file (as verification does)
+        let compressed_hash = tokio::task::spawn_blocking({
+            let bundle_path_clone = bundle_path_clone.clone();
+            move || {
+                use sha2::{Sha256, Digest};
+                let file_data = std::fs::read(&bundle_path_clone)
+                    .with_context(|| format!("Failed to read bundle file for hash: {}", bundle_path_clone.display()))?;
+                
+                let mut hasher = Sha256::new();
+                hasher.update(&file_data);
+                Ok::<String, anyhow::Error>(format!("{:x}", hasher.finalize()))
+            }
+        })
+        .await
+        .context("Compressed hash calculation task failed")??;
 
         if *self.verbose.lock().unwrap() {
             log::debug!(
@@ -1470,7 +1497,10 @@ impl BundleManager {
         };
 
         // Add to index
-        {
+        // CRITICAL: Clone index data while holding lock briefly, then release lock
+        // before doing expensive serialization and file I/O in spawn_blocking
+        let index_path = self.directory.join("plc_bundles.json");
+        let index_json = {
             let mut index = self.index.write().unwrap();
             index.bundles.push(bundle_metadata);
             index.last_bundle = bundle_num;
@@ -1478,12 +1508,21 @@ impl BundleManager {
             index.total_size_bytes += compressed_size;
             index.total_uncompressed_size_bytes += uncompressed_size;
 
-                // Save index to disk
-                let index_path = self.directory.join("plc_bundles.json");
-                let index_json = serde_json::to_string_pretty(&*index)?;
-                std::fs::write(&index_path, index_json)
-                    .with_context(|| format!("Failed to write index to: {}", index_path.display()))?;
-        }
+            // Clone the index for serialization outside the lock
+            // This prevents blocking the async runtime while holding the lock
+            index.clone()
+        };
+        
+        // Serialize and write index in blocking task to avoid blocking async runtime
+        let index_path_clone = index_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let index_json = serde_json::to_string_pretty(&index_json)?;
+            std::fs::write(&index_path_clone, index_json)
+                .with_context(|| format!("Failed to write index to: {}", index_path_clone.display()))?;
+            Ok::<(), anyhow::Error>(())
+        })
+        .await
+        .context("Index write task failed")??;
         let index_write_time = index_write_start.elapsed();
 
         Ok((serialize_time, compress_time, hash_time, did_index_time, index_write_time))
@@ -1491,8 +1530,8 @@ impl BundleManager {
     
     /// Save bundle to disk with compression and index updates (backwards compatibility)
     #[allow(dead_code)]
-    fn save_bundle(&self, bundle_num: u32, operations: Vec<Operation>) -> Result<()> {
-        self.save_bundle_with_timing(bundle_num, operations, false)?;
+    async fn save_bundle(&self, bundle_num: u32, operations: Vec<Operation>) -> Result<()> {
+        self.save_bundle_with_timing(bundle_num, operations, false).await?;
         Ok(())
     }
 
@@ -1543,12 +1582,8 @@ impl BundleManager {
         // Calculate hashes using library functions
         let content_hash = crate::bundle_format::calculate_content_hash(&operations)?;
 
-        // Combine all compressed frames for hash calculation
-        let mut all_compressed_data = Vec::new();
-        for frame in &frame_result.compressed_frames {
-            all_compressed_data.extend_from_slice(frame);
-        }
-        let compressed_hash = crate::bundle_format::calculate_compressed_hash(&all_compressed_data);
+        // Compressed hash will be calculated after writing the file
+        // because it needs to include the metadata frame (verification hashes entire file)
 
         // Recalculate chain hash to verify correctness
         let (expected_parent, recalculated_chain_hash) = if bundle_num > 1 {
@@ -1697,6 +1732,16 @@ impl BundleManager {
             }
             anyhow::bail!("Content hash mismatch after migration");
         }
+
+        // Calculate compressed_hash from the entire file (as verification does)
+        // This must be done AFTER writing the file because it includes the metadata frame
+        use sha2::{Sha256, Digest};
+        let file_data = std::fs::read(&bundle_path)
+            .with_context(|| format!("Failed to read bundle file for hash: {}", bundle_path.display()))?;
+        
+        let mut hasher = Sha256::new();
+        hasher.update(&file_data);
+        let compressed_hash = format!("{:x}", hasher.finalize());
 
         // Update index BEFORE removing backup (so if interrupted, index is consistent with file)
         let bundle_metadata = crate::index::BundleMetadata {

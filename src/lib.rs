@@ -2,7 +2,6 @@
 pub mod constants;
 pub mod options;
 pub mod processor;
-pub mod query;
 pub mod index;
 pub mod ffi;
 pub mod manager;
@@ -22,8 +21,7 @@ pub mod server;
 
 // Re-export main types
 pub use options::{Options, OptionsBuilder, QueryMode};
-pub use processor::{Processor, Stats, OutputHandler, parse_bundle_range};
-pub use query::QueryEngine;
+pub use processor::{Processor, Stats, OutputHandler, QueryEngine, parse_bundle_range};
 pub use index::{Index, BundleMetadata};
 pub use manager::{BundleManager, LoadOptions, LoadResult, OperationResult, QuerySpec, ExportSpec,
                   BundleRange, ExportFormat, CompressionType,
