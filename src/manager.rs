@@ -672,10 +672,9 @@ impl BundleManager {
         use std::time::Instant;
 
         let next_bundle_num = self.get_last_bundle() + 1;
-        let bundle_start = Instant::now();
 
-        // Get boundary CIDs from last bundle to prevent duplicates
-        let (mut after_time, prev_boundary) = if next_bundle_num > 1 {
+        // ALWAYS get boundaries from last bundle initially
+        let (mut after_time, mut prev_boundary) = if next_bundle_num > 1 {
             let last = self.load_bundle(next_bundle_num - 1, LoadOptions::default())?;
             let boundary = get_boundary_cids(&last.operations);
             let cursor = last.operations.last()
@@ -692,11 +691,33 @@ impl BundleManager {
             ("1970-01-01T00:00:00Z".to_string(), HashSet::new())
         };
 
+        // If mempool has operations, update cursor AND boundaries from mempool
+        // (mempool operations already had boundary dedup applied when they were added)
+        let mempool_stats = self.get_mempool_stats()?;
+        if mempool_stats.count > 0 {
+            if let Some(last_time) = mempool_stats.last_time {
+                if self.verbose {
+                    log::debug!("Mempool has {} ops, resuming from {}", 
+                        mempool_stats.count, last_time.format("%Y-%m-%dT%H:%M:%S"));
+                }
+                after_time = last_time.to_rfc3339();
+                
+                // Calculate boundaries from MEMPOOL for next fetch
+                let mempool_ops = self.get_mempool_operations()?;
+                if !mempool_ops.is_empty() {
+                    prev_boundary = get_boundary_cids(&mempool_ops);
+                    if self.verbose {
+                        log::info!("Using {} boundary CIDs from mempool", prev_boundary.len());
+                    }
+                }
+            }
+        }
+
         log::debug!("Preparing bundle {:06} (mempool: {} ops)...",
-            next_bundle_num, self.get_mempool_stats().map(|s| s.count).unwrap_or(0));
+            next_bundle_num, mempool_stats.count);
         log::debug!("Starting cursor: {}", if after_time.is_empty() || after_time == "1970-01-01T00:00:00Z" { "" } else { &after_time });
         
-        if !prev_boundary.is_empty() && self.verbose {
+        if !prev_boundary.is_empty() && self.verbose && mempool_stats.count == 0 {
             log::info!("  Starting with {} boundary CIDs from previous bundle", prev_boundary.len());
         }
 
@@ -709,7 +730,8 @@ impl BundleManager {
         let mut total_dupes = 0;
         let mut total_boundary_dupes = 0;
         let fetch_start = Instant::now();
-        const MAX_ATTEMPTS: usize = 20;
+        let mut caught_up = false;
+        const MAX_ATTEMPTS: usize = 50;
 
         while fetch_num < MAX_ATTEMPTS {
             let stats = self.get_mempool_stats()?;
@@ -730,15 +752,21 @@ impl BundleManager {
             let fetch_op_start = Instant::now();
             let plc_ops = client.fetch_operations(&after_time, request_count).await?;
 
-            if plc_ops.is_empty() {
-                anyhow::bail!(
-                    "Caught up: only {} operations available (need {})",
-                    stats.count,
-                    BUNDLE_SIZE
-                );
+            let fetched_count = plc_ops.len();
+            
+            // Check for incomplete batch (indicates caught up)
+            let got_incomplete_batch = fetched_count > 0 && fetched_count < request_count;
+            
+            if plc_ops.is_empty() || got_incomplete_batch {
+                caught_up = true;
+                if self.verbose && fetch_num > 0 {
+                    log::debug!("Caught up to latest PLC data");
+                }
+                if plc_ops.is_empty() {
+                    break;
+                }
             }
 
-            let fetched_count = plc_ops.len();
             total_fetched += fetched_count;
 
             // Convert and deduplicate
@@ -755,12 +783,13 @@ impl BundleManager {
                 }
             }
 
-            if ops.is_empty() {
-                anyhow::bail!("All fetched operations were duplicates");
-            }
-
             // Add to mempool
-            let added = self.add_to_mempool(ops)?;
+            let added = if !ops.is_empty() {
+                self.add_to_mempool(ops)?
+            } else {
+                0
+            };
+            
             let dupes_in_fetch = after_dedup - added;
             total_dupes += dupes_in_fetch;
 
@@ -787,6 +816,15 @@ impl BundleManager {
             if let Some(last_time) = new_stats.last_time {
                 after_time = last_time.to_rfc3339();
             }
+            
+            // Stop if we got an incomplete batch or made no progress
+            if got_incomplete_batch || added == 0 {
+                caught_up = true;
+                if self.verbose {
+                    log::debug!("Caught up to latest PLC data");
+                }
+                break;
+            }
         }
 
         let fetch_total_duration = fetch_start.elapsed();
@@ -798,23 +836,24 @@ impl BundleManager {
 
         let final_stats = self.get_mempool_stats()?;
         
-        // Check if we have enough operations (allow slightly less than 10000 if we hit max attempts)
-        if final_stats.count < BUNDLE_SIZE && fetch_num >= MAX_ATTEMPTS {
-            if final_stats.count >= (BUNDLE_SIZE * 9 / 10) {  // At least 90% of target
-                if self.verbose {
-                    log::info!("  ✓ Collected {} unique ops from {} fetches ({:.1}% dedup)",
-                        final_stats.count, fetch_num, dedup_pct);
-                    log::info!("  ⚠ Saving bundle with {} ops (couldn't reach {} after {} attempts)",
-                        final_stats.count, BUNDLE_SIZE, MAX_ATTEMPTS);
-                }
+        // Check if we have enough operations
+        if final_stats.count < BUNDLE_SIZE {
+            if caught_up {
+                anyhow::bail!(
+                    "Insufficient operations: have {}, need {} (caught up to latest PLC data)",
+                    final_stats.count,
+                    BUNDLE_SIZE
+                );
             } else {
                 anyhow::bail!(
-                    "Caught up: only {} operations available (need at least {})",
+                    "Insufficient operations: have {}, need {} (max attempts reached)",
                     final_stats.count,
-                    BUNDLE_SIZE * 9 / 10
+                    BUNDLE_SIZE
                 );
             }
-        } else if self.verbose {
+        }
+        
+        if self.verbose {
             log::info!("  ✓ Collected {} unique ops from {} fetches ({:.1}% dedup)",
                 final_stats.count, fetch_num, dedup_pct);
         }
