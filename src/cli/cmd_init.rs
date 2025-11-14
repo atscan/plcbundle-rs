@@ -9,9 +9,13 @@ pub struct InitCommand {
     #[arg(default_value = ".")]
     pub dir: PathBuf,
 
-    /// Origin identifier for this repository
-    #[arg(long, default_value = constants::DEFAULT_ORIGIN)]
-    pub origin: String,
+    /// PLC Directory URL (if not provided, will prompt interactively)
+    #[arg(long)]
+    pub plc: Option<String>,
+
+    /// Origin identifier for this repository (deprecated: use --plc instead)
+    #[arg(long, hide = true)]
+    pub origin: Option<String>,
 
     /// Force initialization even if directory already exists
     #[arg(short, long)]
@@ -29,6 +33,18 @@ pub fn run(cmd: InitCommand) -> Result<()> {
         return Ok(());
     }
 
+    // Determine PLC Directory URL
+    let plc_url = if let Some(plc) = cmd.plc {
+        // Use provided --plc flag
+        plc
+    } else if let Some(origin) = cmd.origin {
+        // Backward compatibility: use --origin if provided
+        origin
+    } else {
+        // Interactive prompt
+        prompt_plc_directory_url()?
+    };
+
     // Create directory if it doesn't exist
     if !dir.exists() {
         std::fs::create_dir_all(&dir)?;
@@ -44,7 +60,7 @@ pub fn run(cmd: InitCommand) -> Result<()> {
     // Create empty index
     let index = serde_json::json!({
         "version": "1.0",
-        "origin": cmd.origin,
+        "origin": plc_url,
         "last_bundle": 0,
         "updated_at": chrono::Utc::now().to_rfc3339(),
         "total_size_bytes": 0,
@@ -58,7 +74,7 @@ pub fn run(cmd: InitCommand) -> Result<()> {
 
     println!("\n✓ Initialized PLC bundle repository");
     println!("  Location: {}", dir.display());
-    println!("  Origin:   {}", cmd.origin);
+    println!("  Origin:   {}", plc_url);
     println!("  Index:    plc_bundles.json");
     println!("\nNext steps:");
     println!("  plcbundle-rs sync           # Fetch bundles from PLC directory");
@@ -66,6 +82,54 @@ pub fn run(cmd: InitCommand) -> Result<()> {
     println!("  plcbundle-rs mempool status # Check mempool status");
 
     Ok(())
+}
+
+fn prompt_plc_directory_url() -> Result<String> {
+    use dialoguer::{theme::ColorfulTheme, Select};
+
+    println!("\n┌  Welcome to plcbundle-rs!");
+    println!("│");
+    println!("◆  Which PLC Directory would you like to use?");
+    println!("│");
+
+    let options = vec![
+        format!("plc.directory ({})", constants::DEFAULT_PLC_DIRECTORY_URL),
+        "local (for local development/testing)".to_string(),
+        "Custom (enter your own URL)".to_string(),
+    ];
+
+    let selection = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("")
+        .default(0)
+        .items(&options)
+        .interact()
+        .map_err(|e| anyhow::anyhow!("Failed to read user input: {}", e))?;
+
+    let url = match selection {
+        0 => constants::DEFAULT_PLC_DIRECTORY_URL.to_string(),
+        1 => constants::DEFAULT_ORIGIN.to_string(),
+        2 => {
+            use dialoguer::Input;
+            Input::with_theme(&ColorfulTheme::default())
+                .with_prompt("Enter PLC Directory URL")
+                .validate_with(|input: &String| -> Result<(), &str> {
+                    if input.trim().is_empty() {
+                        Err("URL cannot be empty")
+                    } else if !input.starts_with("http://") && !input.starts_with("https://") {
+                        Err("URL must start with http:// or https://")
+                    } else {
+                        Ok(())
+                    }
+                })
+                .interact_text()
+                .map_err(|e| anyhow::anyhow!("Failed to read user input: {}", e))?
+        }
+        _ => unreachable!(),
+    };
+
+    println!("└");
+
+    Ok(url)
 }
 
 #[cfg(test)]
@@ -78,7 +142,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let cmd = InitCommand {
             dir: temp.path().to_path_buf(),
-            origin: "test".to_string(),
+            plc: Some("test".to_string()),
+            origin: None,
             force: false,
         };
 
@@ -99,7 +164,8 @@ mod tests {
         // First init
         let cmd = InitCommand {
             dir: temp.path().to_path_buf(),
-            origin: "first".to_string(),
+            plc: Some("first".to_string()),
+            origin: None,
             force: false,
         };
         run(cmd).unwrap();
@@ -107,7 +173,8 @@ mod tests {
         // Second init without force
         let cmd = InitCommand {
             dir: temp.path().to_path_buf(),
-            origin: "second".to_string(),
+            plc: Some("second".to_string()),
+            origin: None,
             force: false,
         };
         run(cmd).unwrap(); // Should succeed but not overwrite
@@ -124,7 +191,8 @@ mod tests {
         // First init
         let cmd = InitCommand {
             dir: temp.path().to_path_buf(),
-            origin: "first".to_string(),
+            plc: Some("first".to_string()),
+            origin: None,
             force: false,
         };
         run(cmd).unwrap();
@@ -132,7 +200,8 @@ mod tests {
         // Second init with force
         let cmd = InitCommand {
             dir: temp.path().to_path_buf(),
-            origin: "second".to_string(),
+            plc: Some("second".to_string()),
+            origin: None,
             force: true,
         };
         run(cmd).unwrap();

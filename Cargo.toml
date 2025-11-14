@@ -37,6 +37,7 @@ clap = { version = "4.5", features = ["derive"], optional = true }
 indicatif = { version = "0.18", optional = true }
 log = { version = "0.4", optional = true }
 env_logger = { version = "0.11", optional = true }
+dialoguer = { version = "0.11", optional = true }
 sha2 = "0.10.9"
 regex = "1.11"
 
@@ -53,5 +54,5 @@ tempfile = "3.8"
 
 [features]
 default = ["cli"]
-cli = ["clap", "indicatif", "log", "env_logger"]
+cli = ["clap", "indicatif", "log", "env_logger", "dialoguer"]
 server = ["axum", "tower", "tower-http", "tokio-tungstenite", "tokio-util", "futures-util"]
