@@ -41,6 +41,7 @@ pub fn create_router(
         .route("/op/{pointer}", get(handle_operation))
         .route("/status", get(handle_status))
         .route("/mempool", get(handle_mempool))
+        .route("/privacy", get(handle_privacy))
         .route("/debug/memory", get(handle_debug_memory))
         .route("/debug/didindex", get(handle_debug_didindex))
         .route("/debug/resolver", get(handle_debug_resolver));
@@ -212,6 +213,7 @@ async fn handle_root(
     response.push_str("  GET  /op/:pointer         Get single operation\n");
     response.push_str("  GET  /status              Server status\n");
     response.push_str("  GET  /mempool             Mempool operations (JSONL)\n");
+    response.push_str("  GET  /privacy             GDPR privacy notice\n");
 
     if state.config.enable_websocket {
         response.push_str("\nWebSocket Endpoints\n");
@@ -411,8 +413,14 @@ async fn handle_operation(
     let total_start = Instant::now();
     let load_start = Instant::now();
 
-    match state.manager.get_operation_raw(bundle_num, position) {
-        Ok(json) => {
+    // get_operation_raw performs blocking file I/O, so we need to use spawn_blocking
+    let json_result = tokio::task::spawn_blocking({
+        let manager = Arc::clone(&state.manager);
+        move || manager.get_operation_raw(bundle_num, position)
+    }).await;
+
+    match json_result {
+        Ok(Ok(json)) => {
             let load_duration = load_start.elapsed();
             let total_duration = total_start.elapsed();
 
@@ -430,7 +438,7 @@ async fn handle_operation(
 
             (StatusCode::OK, headers, json).into_response()
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             if e.to_string().contains("not in index") || e.to_string().contains("not found") {
                 (
                     StatusCode::NOT_FOUND,
@@ -444,6 +452,13 @@ async fn handle_operation(
                 )
                     .into_response()
             }
+        }
+        Err(e) => {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(json!({"error": format!("Task join error: {}", e)})),
+            )
+                .into_response()
         }
     }
 }
@@ -513,9 +528,14 @@ async fn handle_status(
         }
     }
 
-    // DID Index stats
-    let did_index = state.manager.get_did_index();
-    let did_stats = did_index.read().unwrap().get_stats();
+    // DID Index stats (get_stats is fast, but we should still avoid holding lock in async context)
+    let did_stats = tokio::task::spawn_blocking({
+        let manager = Arc::clone(&state.manager);
+        move || {
+            let did_index = manager.get_did_index();
+            did_index.read().unwrap().get_stats()
+        }
+    }).await.unwrap_or_default();
     if did_stats.get("exists").and_then(|v| v.as_bool()).unwrap_or(false) {
         let did_index_status = json!({
             "enabled": state.config.enable_resolver,
@@ -577,12 +597,133 @@ async fn handle_mempool(
     }
 }
 
+async fn handle_privacy(
+    State(state): State<ServerState>,
+) -> impl IntoResponse {
+    let origin_url = state.manager.get_plc_origin();
+    
+    // Extract domain from origin URL
+    let origin_domain = if let Some(url) = origin_url.strip_prefix("https://") {
+        url.trim_end_matches('/')
+    } else if let Some(url) = origin_url.strip_prefix("http://") {
+        url.trim_end_matches('/')
+    } else {
+        origin_url.trim_end_matches('/')
+    };
+    
+    // Generate operator contact placeholder
+    let operator_contact = format!("admin@{}", origin_domain);
+    
+    // Get current date in YYYY-MM-DD format
+    let current_date = chrono::Utc::now().format("%Y-%m-%d");
+    
+    let privacy_notice = format!(
+r#"Privacy Notice - plcbundle Instance
+
+Last Updated: {}
+
+================================================================================
+SUMMARY
+
+This instance archives public DID operations from plc.directory. All data is 
+already publicly available. This notice explains your GDPR rights.
+
+================================================================================
+DATA CONTROLLER
+
+Instance operator: {}
+Data source: {}
+For data removal, contact {} as the primary source.
+
+================================================================================
+WHAT WE DO
+
+We mirror and archive operations from https://plc.directory (AT Protocol's 
+public DID registry) into cryptographically-chained bundles for preservation,
+redundancy, verification, and research purposes.
+
+================================================================================
+PERSONAL DATA PROCESSED
+
+- Decentralized Identifiers (DIDs)
+- Handles (usernames)
+- Service endpoints (PDS URLs)
+- Public cryptographic keys
+- Timestamps and operation metadata
+
+We do NOT process: posts, private keys, passwords, or detailed access logs.
+
+================================================================================
+DATA SOURCE
+
+All data obtained from plc.directory (already public). We do not collect 
+data directly from you.
+
+================================================================================
+LEGAL BASIS
+
+Legitimate Interest (GDPR Art. 6(1)(f)) - preserving public records of 
+decentralized identity operations. Your rights are not overridden because 
+all data is already public and operations are designed to be public by 
+protocol specification.
+
+================================================================================
+RECIPIENTS
+
+- Public: All operations accessible via HTTP API
+- Infrastructure: Hosting provider
+- No third-party marketing sharing
+
+================================================================================
+RETENTION
+
+Indefinite - required for cryptographic chain integrity and archival purpose.
+
+================================================================================
+YOUR RIGHTS
+
+Access: GET /did/[YOUR-DID] or contact operator
+Rectification: Update at plc.directory source (we sync changes)
+Erasure: Contact plc.directory (https://plc.directory) as primary source
+Object: Contact operator to object to processing
+Portability: JSON format via API
+Complaint: Lodge with your supervisory authority (edpb.europa.eu)
+
+Contact operator with your DID and request. Response within 1 month.
+
+================================================================================
+AUTOMATED DECISIONS
+
+None. No profiling or automated decision-making with legal effects.
+
+================================================================================
+SECURITY
+
+SHA-256 integrity verification, secure server configuration, access controls.
+
+================================================================================
+About plcbundle: https://tangled.org/@atscan.net/plcbundle
+
+================================================================================
+Configuration: Replace placeholder with actual contact (email, handle)
+"#, current_date, operator_contact, origin_domain, origin_domain);
+    
+    let mut headers = HeaderMap::new();
+    headers.insert("Content-Type", HeaderValue::from_static("text/plain; charset=utf-8"));
+    (StatusCode::OK, headers, privacy_notice)
+}
+
 async fn handle_debug_memory(
     State(state): State<ServerState>,
 ) -> impl IntoResponse {
-    // Get DID index stats for memory info
-    let did_index = state.manager.get_did_index();
-    let did_stats = did_index.read().unwrap().get_stats();
+    // Get DID index stats for memory info (avoid holding lock in async context)
+    let did_stats = tokio::task::spawn_blocking({
+        let manager = Arc::clone(&state.manager);
+        move || {
+            let did_index = manager.get_did_index();
+            did_index.read().unwrap().get_stats()
+        }
+    }).await.unwrap_or_default();
     
     let cached_shards = did_stats.get("cached_shards").and_then(|v| v.as_i64()).unwrap_or(0);
     let cache_limit = did_stats.get("cache_limit").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -599,8 +740,14 @@ async fn handle_debug_memory(
 async fn handle_debug_didindex(
     State(state): State<ServerState>,
 ) -> impl IntoResponse {
-    let did_index = state.manager.get_did_index();
-    let stats = did_index.read().unwrap().get_stats();
+    // Avoid holding lock in async context
+    let stats = tokio::task::spawn_blocking({
+        let manager = Arc::clone(&state.manager);
+        move || {
+            let did_index = manager.get_did_index();
+            did_index.read().unwrap().get_stats()
+        }
+    }).await.unwrap_or_default();
     (StatusCode::OK, axum::Json(json!(stats))).into_response()
 }
 
@@ -695,11 +842,14 @@ async fn handle_did_document(
     let resolved_handle = if handle_resolve_time > 0 { Some(input.to_string()) } else { None };
 
     // Resolve DID
-    // Note: resolve_did_with_stats is fast (uses mmap'd DID index) so we call it directly
-    // rather than using spawn_blocking which adds ~100ms overhead
-    let result = match state.manager.resolve_did_with_stats(&did) {
-        Ok(r) => r,
-        Err(e) => {
+    // Note: resolve_did_with_stats performs file I/O (get_operation), so we need spawn_blocking
+    let result = match tokio::task::spawn_blocking({
+        let manager = Arc::clone(&state.manager);
+        let did = did.clone();
+        move || manager.resolve_did_with_stats(&did)
+    }).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
             if e.to_string().contains("deactivated") {
                 return (
                     StatusCode::GONE,
@@ -719,6 +869,13 @@ async fn handle_did_document(
                 )
                     .into_response();
             }
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(json!({"error": format!("Task join error: {}", e)})),
+            )
+                .into_response();
         }
     };
 
@@ -760,13 +917,26 @@ async fn handle_did_data(
         }
     };
 
-    // Get DID operations
-    let operations = match state.manager.get_did_operations(&did) {
-        Ok(ops) => ops,
-        Err(e) => {
+    // Get DID operations (loads bundles which does file I/O, so use spawn_blocking)
+    let operations_result = tokio::task::spawn_blocking({
+        let manager = Arc::clone(&state.manager);
+        let did = did.clone();
+        move || manager.get_did_operations(&did)
+    }).await;
+
+    let operations = match operations_result {
+        Ok(Ok(ops)) => ops,
+        Ok(Err(e)) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 axum::Json(json!({"error": e.to_string()})),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(json!({"error": format!("Task join error: {}", e)})),
             )
                 .into_response();
         }
