@@ -78,6 +78,47 @@ impl HandleResolver {
 
         Ok(result.did)
     }
+
+    /// Ping the resolver to keep the connection alive
+    ///
+    /// This performs a lightweight health check on the resolver service.
+    /// It resolves a well-known handle (bsky.app) to keep HTTP/2 connections alive.
+    pub async fn ping(&self) -> Result<()> {
+        // Use a well-known handle that should always resolve
+        let test_handle = "bsky.app";
+
+        // Build XRPC URL
+        let endpoint = format!("{}/xrpc/com.atproto.identity.resolveHandle", self.base_url);
+        let url = reqwest::Url::parse_with_params(&endpoint, &[("handle", test_handle)])?;
+
+        log::trace!("[HandleResolver] Sending ping to {}", url);
+
+        // Execute request with shorter timeout for pings
+        let response = self
+            .client
+            .get(url)
+            .header("User-Agent", "plcbundle-rs/0.1.0")
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await
+            .map_err(|e| {
+                log::trace!("[HandleResolver] Ping request failed: {}", e);
+                e
+            })?;
+
+        let status = response.status();
+        log::trace!("[HandleResolver] Ping response status: {}", status);
+
+        if !status.is_success() {
+            anyhow::bail!("Resolver ping failed with status {}", status);
+        }
+
+        // Consume the response to complete the request
+        let bytes = response.bytes().await?;
+        log::trace!("[HandleResolver] Ping response: {} bytes", bytes.len());
+
+        Ok(())
+    }
 }
 
 /// Validate AT Protocol handle format

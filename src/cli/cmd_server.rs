@@ -300,6 +300,16 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
         });
     }
 
+    // Start handle resolver keep-alive ping task if resolver is enabled
+    if cmd.resolver {
+        if let Some(resolver) = manager.get_handle_resolver() {
+            let verbose = cmd.verbose;
+            tokio::spawn(async move {
+                run_resolver_ping_loop(resolver, verbose).await;
+            });
+        }
+    }
+
     eprintln!("\nPress Ctrl+C to stop\n");
 
     // Run server
@@ -406,6 +416,79 @@ async fn run_server_sync_loop(
 }
 
 #[cfg(feature = "server")]
+async fn run_resolver_ping_loop(
+    resolver: Arc<plcbundle::handle_resolver::HandleResolver>,
+    verbose: bool,
+) {
+    use tokio::time::{sleep, Duration, Instant};
+
+    // Ping every 2 minutes to keep HTTP/2 connections alive
+    let ping_interval = Duration::from_secs(120);
+
+    if verbose {
+        log::debug!("[Resolver] Starting keep-alive ping loop (interval: {:?})", ping_interval);
+        log::debug!("[Resolver] Resolver URL: {}", resolver.get_base_url());
+    }
+
+    // Initial delay before first ping
+    if verbose {
+        log::debug!("[Resolver] Waiting 30s before first ping...");
+    }
+    sleep(Duration::from_secs(30)).await;
+
+    let mut ping_count = 0u64;
+    let mut success_count = 0u64;
+    let mut failure_count = 0u64;
+
+    loop {
+        ping_count += 1;
+        let start = Instant::now();
+
+        if verbose {
+            log::debug!("[Resolver] Ping #{}: sending keep-alive request...", ping_count);
+        }
+
+        match resolver.ping().await {
+            Ok(_) => {
+                success_count += 1;
+                let duration = start.elapsed();
+                if verbose {
+                    log::info!(
+                        "[Resolver] Ping #{} successful in {:.3}s (success: {}/{}, failures: {})",
+                        ping_count,
+                        duration.as_secs_f64(),
+                        success_count,
+                        ping_count,
+                        failure_count
+                    );
+                }
+            }
+            Err(e) => {
+                failure_count += 1;
+                let duration = start.elapsed();
+                if verbose {
+                    log::warn!(
+                        "[Resolver] Ping #{} failed after {:.3}s: {} (success: {}/{}, failures: {})",
+                        ping_count,
+                        duration.as_secs_f64(),
+                        e,
+                        success_count,
+                        ping_count,
+                        failure_count
+                    );
+                }
+                // Continue anyway - the connection will be re-established on next actual request
+            }
+        }
+
+        if verbose {
+            log::debug!("[Resolver] Next ping in {:?}...", ping_interval);
+        }
+        sleep(ping_interval).await;
+    }
+}
+
+#[cfg(feature = "server")]
 fn display_server_info(manager: &BundleManager, addr: &str, cmd: &ServerCommand) {
     eprintln!("Starting plcbundle HTTP server...");
     eprintln!("  Directory: {}", utils::display_path(manager.directory()).display());
@@ -431,6 +514,9 @@ fn display_server_info(manager: &BundleManager, addr: &str, cmd: &ServerCommand)
 
     if cmd.resolver {
         eprintln!("  Resolver: ENABLED (/:did endpoints)");
+        if manager.get_handle_resolver_base_url().is_some() {
+            eprintln!("    Keep-alive ping: every 2 minutes");
+        }
     } else {
         eprintln!("  Resolver: disabled");
     }

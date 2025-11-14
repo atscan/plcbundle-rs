@@ -1500,6 +1500,12 @@ impl BundleManager {
         self.handle_resolver.as_ref().map(|r| r.get_base_url().to_string())
     }
 
+    /// Get a reference to the handle resolver
+    /// Returns None if handle resolver is not configured
+    pub fn get_handle_resolver(&self) -> Option<Arc<handle_resolver::HandleResolver>> {
+        self.handle_resolver.clone()
+    }
+
     pub fn clone_for_arc(&self) -> Self {
         Self {
             directory: self.directory.clone(),
