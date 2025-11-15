@@ -1,9 +1,9 @@
 // Simplified DID Index implementation matching Go version
 use crate::constants;
 use anyhow::{Result, Context};
-use memmap2::{Mmap, MmapOptions};
+use memmap2::{Mmap, MmapMut, MmapOptions};
 use std::collections::HashMap;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
@@ -1641,53 +1641,104 @@ impl Manager {
         }
         let offset_duration = offset_start.elapsed();
 
-        // Build buffer
-        let buffer_start = Instant::now();
-        let mut buf = Vec::with_capacity(current_offset);
+        // Prepare temp file + mmap for zero-copy writes
+        let total_size = current_offset;
+        let temp_path = target
+            .file_name()
+            .map(|name| {
+                target
+                    .with_file_name(format!("{}.tmp", name.to_string_lossy()))
+            })
+            .unwrap_or_else(|| target.with_extension("tmp"));
 
-        // Header (32 bytes)
-        buf.extend_from_slice(DIDINDEX_MAGIC);
-        buf.extend_from_slice(&DIDINDEX_VERSION.to_le_bytes());
-        buf.push(shard_num);
-        buf.extend_from_slice(&(identifiers.len() as u32).to_le_bytes());
-        buf.resize(32, 0);
-
-        // Prefix index (1024 bytes)
-        for idx in prefix_index.iter() {
-            buf.extend_from_slice(&idx.to_le_bytes());
+        if temp_path.exists() {
+            fs::remove_file(&temp_path).ok();
         }
 
-        // Offset table
-        for offset in offsets {
-            buf.extend_from_slice(&(offset as u32).to_le_bytes());
-        }
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&temp_path)
+            .with_context(|| format!("Failed to create shard temp file {}", temp_path.display()))?;
+        file.set_len(total_size as u64)
+            .with_context(|| format!("Failed to resize shard temp file {}", temp_path.display()))?;
 
-        // Entries
-        for id in identifiers {
-            let locations = &builder.entries[id];
-            buf.extend_from_slice(id.as_bytes());
-            buf.extend_from_slice(&(locations.len() as u16).to_le_bytes());
-            for loc in locations {
-                buf.extend_from_slice(&loc.as_u32().to_le_bytes());
+        let mut mmap = unsafe {
+            MmapMut::map_mut(&file)
+                .with_context(|| format!("Failed to mmap shard temp file {}", temp_path.display()))?
+        };
+
+        // Header (32 bytes) + prefix + offsets + entries
+        {
+            let buf = &mut mmap[..];
+
+            // Header
+            buf[0..4].copy_from_slice(DIDINDEX_MAGIC);
+            buf[4..8].copy_from_slice(&DIDINDEX_VERSION.to_le_bytes());
+            buf[8] = shard_num;
+            buf[9..13].copy_from_slice(&(identifiers.len() as u32).to_le_bytes());
+            // Remaining header bytes already zeroed by truncate/set_len
+
+            let mut cursor = 32;
+
+            // Prefix index (1024 bytes)
+            for idx in prefix_index.iter() {
+                buf[cursor..cursor + 4].copy_from_slice(&idx.to_le_bytes());
+                cursor += 4;
             }
-        }
-        let buffer_duration = buffer_start.elapsed();
 
-        // Write to disk
-        let write_start = Instant::now();
-        fs::write(target, &buf)?;
-        let write_duration = write_start.elapsed();
+            // Offset table
+            for offset in &offsets {
+                buf[cursor..cursor + 4].copy_from_slice(&(*offset as u32).to_le_bytes());
+                cursor += 4;
+            }
+
+            // Entries
+            for id in identifiers {
+                let id_bytes = id.as_bytes();
+                debug_assert_eq!(
+                    id_bytes.len(),
+                    DID_IDENTIFIER_LEN,
+                    "Unexpected DID identifier length"
+                );
+                buf[cursor..cursor + DID_IDENTIFIER_LEN].copy_from_slice(id_bytes);
+                cursor += DID_IDENTIFIER_LEN;
+
+                let locations = &builder.entries[id];
+                let loc_count = locations.len();
+                buf[cursor..cursor + 2].copy_from_slice(&(loc_count as u16).to_le_bytes());
+                cursor += 2;
+
+                for loc in locations {
+                    buf[cursor..cursor + 4].copy_from_slice(&loc.as_u32().to_le_bytes());
+                    cursor += 4;
+                }
+            }
+
+            debug_assert_eq!(cursor, total_size, "Shard serialization math mismatch");
+        }
+
+        // Explicitly flush to ensure OS sees the writes before the mmap is dropped
+        mmap.flush().with_context(|| format!("Failed to flush shard temp file {}", temp_path.display()))?;
+        drop(mmap);
+        drop(file);
+
+        fs::rename(&temp_path, target)
+            .with_context(|| format!("Failed to replace shard file {}", target.display()))?;
 
         let total_duration = start.elapsed();
+        let write_duration = total_duration
+            .saturating_sub(sort_duration + prefix_duration + offset_duration);
 
         log::debug!(
-            "[DID Index] Write {label} shard {:02x}: {} DIDs, {} locations, {} bytes in {:.3}ms (sort={:.1}ms, prefix={:.1}ms, offsets={:.1}ms, buffer={:.1}ms, disk={:.1}ms)",
-            shard_num, builder.entries.len(), total_locations, buf.len(),
+            "[DID Index] Write {label} shard {:02x}: {} DIDs, {} locations, {} bytes in {:.3}ms (sort={:.1}ms, prefix={:.1}ms, offsets={:.1}ms, mmap+disk={:.1}ms)",
+            shard_num, builder.entries.len(), total_locations, total_size,
             total_duration.as_secs_f64() * 1000.0,
             sort_duration.as_secs_f64() * 1000.0,
             prefix_duration.as_secs_f64() * 1000.0,
             offset_duration.as_secs_f64() * 1000.0,
-            buffer_duration.as_secs_f64() * 1000.0,
             write_duration.as_secs_f64() * 1000.0
         );
 
