@@ -4,9 +4,9 @@ use crate::operations::Operation;
 use anyhow::Result;
 use serde::Deserialize;
 use std::any::Any;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 // ============================================================================
 // PLC Client
@@ -17,18 +17,52 @@ pub struct PLCClient {
     base_url: String,
     rate_limiter: RateLimiter,
     last_retry_after: std::sync::Arc<tokio::sync::Mutex<Option<Duration>>>,
+    request_timestamps: Arc<std::sync::Mutex<VecDeque<Instant>>>,
+    rate_limit_period: Duration,
 }
 
 impl PLCClient {
     pub fn new(base_url: impl Into<String>) -> Result<Self> {
+        let rate_limit_period = Duration::from_secs(constants::HTTP_TIMEOUT_SECS);
         Ok(Self {
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(constants::HTTP_TIMEOUT_SECS))
                 .build()?,
             base_url: base_url.into(),
-            rate_limiter: RateLimiter::new(constants::DEFAULT_RATE_LIMIT, Duration::from_secs(constants::HTTP_TIMEOUT_SECS)),
+            rate_limiter: RateLimiter::new(constants::DEFAULT_RATE_LIMIT, rate_limit_period),
             last_retry_after: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
+            request_timestamps: Arc::new(std::sync::Mutex::new(VecDeque::new())),
+            rate_limit_period,
         })
+    }
+
+    /// Record a request timestamp and clean up old entries
+    fn record_request(&self) {
+        let now = Instant::now();
+        let mut timestamps = self.request_timestamps.lock().unwrap();
+        
+        // Remove timestamps older than the rate limit period
+        // If checked_sub fails (shouldn't happen in practice), use now as cutoff (counts all)
+        let cutoff = now.checked_sub(self.rate_limit_period).unwrap_or(now);
+        while let Some(&oldest) = timestamps.front() {
+            if oldest < cutoff {
+                timestamps.pop_front();
+            } else {
+                break;
+            }
+        }
+        
+        timestamps.push_back(now);
+    }
+
+    /// Count requests made in the rate limit period
+    fn count_requests_in_period(&self) -> usize {
+        let now = Instant::now();
+        let timestamps = self.request_timestamps.lock().unwrap();
+        
+        // If checked_sub fails (shouldn't happen in practice), use now as cutoff (counts all)
+        let cutoff = now.checked_sub(self.rate_limit_period).unwrap_or(now);
+        timestamps.iter().filter(|&&ts| ts >= cutoff).count()
     }
 
     pub async fn fetch_operations(
@@ -55,6 +89,9 @@ impl PLCClient {
             // Clear previous retry_after
             *self.last_retry_after.lock().await = None;
 
+            // Record this request attempt
+            self.record_request();
+
             match self.do_fetch_operations(after, count).await {
                 Ok(operations) => return Ok(operations),
                 Err(e) => {
@@ -63,9 +100,11 @@ impl PLCClient {
                     // Check if it's a rate limit error (429)
                     let retry_after = self.last_retry_after.lock().await.take();
                     if let Some(retry_after) = retry_after {
+                        let requests_in_period = self.count_requests_in_period();
+                        let rate_limit = constants::DEFAULT_RATE_LIMIT;
                         eprintln!(
-                            "[Sync] Rate limited by PLC directory, waiting {:?} before retry {}/{}",
-                            retry_after, attempt, max_retries
+                            "[Sync] Rate limited by PLC directory ({} requests in last {:?}, limit: {}), waiting {:?} before retry {}/{}",
+                            requests_in_period, self.rate_limit_period, rate_limit, retry_after, attempt, max_retries
                         );
                         tokio::time::sleep(retry_after).await;
                         continue;
