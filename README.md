@@ -6,4 +6,4 @@ Main purpose of this package is to provide universal and simple interface, as Ru
 
 **Please read [`RULES.md`](RULES.md) before contributing or generating code.**
 
-Key principle: **CLI commands NEVER open bundle files directly** - all operations go through the `BundleManager` API.
+Key principle: **CLI commands and server code NEVER open bundle files directly** - all operations go through the `BundleManager` API.

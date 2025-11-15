@@ -4,13 +4,17 @@
 
 ## 🚨 Critical Rules
 
-### 1. NO DIRECT FILE ACCESS FROM CLI
+### 1. NO DIRECT FILE ACCESS FROM CLI OR SERVER
 
 **CLI commands NEVER open bundle files directly**
 
 **CLI commands NEVER access core components (Index, bundle_format, etc.) directly**
 
-All CLI operations MUST go through `BundleManager` public API methods.
+**Server code NEVER opens bundle files directly**
+
+**Server code NEVER accesses core components (Index, bundle_format, etc.) directly**
+
+All CLI and server operations MUST go through `BundleManager` public API methods.
 
 ### 2. FOLLOW THE SPECIFICATION
 
@@ -31,12 +35,12 @@ Critical requirements from spec:
 ### Rule 1 Details: NO DIRECT FILE ACCESS OR CORE COMPONENT ACCESS
 
 ```rust
-// ❌ WRONG - Direct file access
+// ❌ WRONG - Direct file access (from CLI or server)
 let file = File::open(bundle_path)?;
 let data = std::fs::read(path)?;
 std::fs::remove_file(path)?;
 
-// ❌ WRONG - Direct core component access from CLI
+// ❌ WRONG - Direct core component access from CLI or server
 use plcbundle::Index;
 let index = Index::load(&dir)?;
 Index::init(&dir, origin, force)?;
@@ -63,7 +67,7 @@ All operations flow through `BundleManager`:
      Only                Public API               Only                     Only Here
 ```
 
-**Key principle:** CLI commands should ONLY interact with `BundleManager`, never with:
+**Key principle:** CLI commands and server code should ONLY interact with `BundleManager`, never with:
 - `Index` directly
 - `bundle_format` functions directly
 - Direct file I/O (`std::fs`, `File::open`, etc.)
@@ -124,7 +128,7 @@ src/
 2. **Document it** in `docs/API.md`
 3. **Implement in appropriate module** (or create new module)
 4. **Export types** in `src/lib.rs` if public
-5. **Use from CLI** through the public API
+5. **Use from CLI or server** through the public API
 
 ### Example: Adding a New Feature
 
@@ -142,7 +146,7 @@ pub(crate) fn do_the_work(manager: &BundleManager, param: Param) -> Result<Outpu
     // Complex logic here
 }
 
-// 3. Use from CLI
+// 3. Use from CLI or server
 pub fn cmd_new_feature(dir: PathBuf, param: Param) -> Result<()> {
     let manager = BundleManager::new(dir)?;
     let result = manager.new_feature(param)?;  // ✅ Via API
@@ -177,17 +181,17 @@ eprintln!("Working in: {}", display_path.display());
 ### ❌ Don't Do This
 
 ```rust
-// CLI command opening files directly
+// CLI command or server code opening files directly
 let bundle_path = dir.join(format!("{:06}.jsonl.zst", num));
 let file = File::open(bundle_path)?;
 let decoder = zstd::Decoder::new(file)?;
 
-// CLI command accessing Index directly
+// CLI command or server code accessing Index directly
 use plcbundle::Index;
 let index = Index::rebuild_from_bundles(&dir, origin, callback)?;
 index.save(&dir)?;
 
-// CLI command accessing bundle_format directly
+// CLI command or server code accessing bundle_format directly
 use plcbundle::bundle_format;
 let ops = bundle_format::load_bundle_as_json_strings(&path)?;
 ```
@@ -195,7 +199,7 @@ let ops = bundle_format::load_bundle_as_json_strings(&path)?;
 ### ✅ Do This Instead
 
 ```rust
-// CLI command using BundleManager API only
+// CLI command or server code using BundleManager API only
 let manager = BundleManager::new(dir)?;
 
 // Loading bundles
@@ -258,9 +262,9 @@ When adding/changing APIs:
 2. If not, add it to `BundleManager` first ✅
 3. Implement in appropriate module ✅
 4. Update `docs/API.md` ✅
-5. Use from CLI ✅
+5. Use from CLI or server ✅
 
-**Remember**: The CLI is just a thin wrapper around `BundleManager`!
+**Remember**: The CLI and server are just thin wrappers around `BundleManager`!
 
 ---
 
