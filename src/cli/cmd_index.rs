@@ -194,44 +194,188 @@ pub fn cmd_index_stats(dir: PathBuf, json: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_index_verify(dir: PathBuf, _verbose: bool) -> Result<()> {
+pub fn cmd_index_verify(dir: PathBuf, verbose: bool) -> Result<()> {
     let manager = BundleManager::new(dir.clone())?;
-    
+
     let did_index = manager.get_did_index();
     let stats_map = did_index.read().unwrap().get_stats();
-    
+
     if !stats_map.get("exists")
         .and_then(|v| v.as_bool())
-        .unwrap_or(false) 
+        .unwrap_or(false)
     {
         log::error!("DID index does not exist");
         log::info!("Run: plcbundle-rs index build");
         return Ok(());
     }
-    
+
     log::info!("Verifying DID index...\n");
-    
+
     let total_dids = stats_map.get("total_dids")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
     let last_bundle = stats_map.get("last_bundle")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
-    
-    // Basic verification - check if last bundle matches
+
+    let mut errors = 0;
+    let mut warnings = 0;
+
+    // Check 1: Last bundle consistency
+    log::info!("Checking bundle consistency...");
     let manager_last = manager.get_last_bundle();
-    
+
     if last_bundle < manager_last as i64 {
-        log::warn!("⚠️  Warning: Index is behind (has bundle {}, repo has {})", 
+        log::warn!("  ⚠️  Index is behind (has bundle {}, repo has {})",
             last_bundle, manager_last);
-        log::info!("    Run: plcbundle-rs index repair");
-        return Ok(());
+        log::info!("      Run: plcbundle-rs index repair");
+        warnings += 1;
+    } else if verbose {
+        log::info!("  ✓ Last bundle matches: {:06}", last_bundle);
     }
-    
-    log::info!("✓ DID index is valid");
-    log::info!("  Total DIDs:  {}", total_dids);
-    log::info!("  Last bundle: {:06}", last_bundle);
-    
+
+    // Check 2: Verify shard files exist and are readable
+    log::info!("Checking shard files...");
+    let shard_details = did_index.read().unwrap().get_shard_details(None)?;
+
+    let mut missing_base_shards = 0;
+    let mut missing_delta_segments = 0;
+    let mut shards_checked = 0;
+    let mut segments_checked = 0;
+
+    for detail in &shard_details {
+        let shard_hex = detail.get("shard_hex")
+            .and_then(|v| v.as_str())
+            .unwrap_or("??");
+
+        let base_exists = detail.get("base_exists")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let did_count = detail.get("did_count")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        // Only check shards that should have data
+        if did_count > 0 {
+            shards_checked += 1;
+
+            if !base_exists {
+                if verbose {
+                    log::error!("  ✗ Missing base shard: {}", shard_hex);
+                }
+                missing_base_shards += 1;
+                errors += 1;
+            } else if verbose {
+                log::info!("  ✓ Shard {}: {} DIDs", shard_hex, utils::format_number(did_count));
+            }
+        }
+
+        // Check delta segments
+        if let Some(segments) = detail.get("segments").and_then(|v| v.as_array()) {
+            for seg in segments {
+                let exists = seg.get("exists")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let file_name = seg.get("file_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?");
+
+                segments_checked += 1;
+
+                if !exists {
+                    if verbose {
+                        log::error!("  ✗ Missing delta segment: {} (shard {})", file_name, shard_hex);
+                    }
+                    missing_delta_segments += 1;
+                    errors += 1;
+                }
+            }
+        }
+    }
+
+    if !verbose {
+        if missing_base_shards > 0 {
+            log::error!("  ✗ Missing {} base shard(s)", missing_base_shards);
+        }
+        if missing_delta_segments > 0 {
+            log::error!("  ✗ Missing {} delta segment(s)", missing_delta_segments);
+        }
+        if missing_base_shards == 0 && missing_delta_segments == 0 {
+            log::info!("  ✓ All shard files exist ({} shards, {} segments)",
+                shards_checked, segments_checked);
+        }
+    }
+
+    // Check 3: Verify index configuration
+    log::info!("Checking index configuration...");
+    let shard_count = stats_map.get("shard_count")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+
+    if shard_count != 256 {
+        log::warn!("  ⚠️  Unexpected shard count: {} (expected 256)", shard_count);
+        warnings += 1;
+    } else if verbose {
+        log::info!("  ✓ Shard count: {}", shard_count);
+    }
+
+    // Check 4: Check delta segment accumulation
+    log::info!("Checking delta segments...");
+    let delta_segments = stats_map.get("delta_segments")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let max_segments_per_shard = stats_map.get("max_segments_per_shard")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let compaction_strategy = stats_map.get("compaction_strategy")
+        .and_then(|v| v.as_str())
+        .unwrap_or("manual");
+
+    // Warn if too many delta segments (potential performance issue)
+    const SEGMENT_WARNING_THRESHOLD: u64 = 50;
+    const SEGMENT_ERROR_THRESHOLD: u64 = 100;
+
+    if delta_segments >= SEGMENT_ERROR_THRESHOLD {
+        log::error!("  ✗ Too many delta segments: {} (performance will degrade)", delta_segments);
+        log::info!("      Run: plcbundle-rs index compact");
+        errors += 1;
+    } else if delta_segments >= SEGMENT_WARNING_THRESHOLD {
+        log::warn!("  ⚠️  Many delta segments: {} (consider compacting)", delta_segments);
+        log::info!("      Run: plcbundle-rs index compact");
+        warnings += 1;
+    } else if verbose {
+        log::info!("  ✓ Delta segments: {} (max per shard: {})", delta_segments, max_segments_per_shard);
+    }
+
+    if verbose && compaction_strategy != "manual" {
+        log::info!("  ✓ Compaction strategy: {}", compaction_strategy);
+    }
+
+    // Summary
+    println!();
+    if errors > 0 {
+        log::error!("✗ Index verification failed");
+        log::error!("  Errors:   {}", errors);
+        log::error!("  Warnings: {}", warnings);
+        log::info!("\n  Run: plcbundle-rs index repair");
+        std::process::exit(1);
+    } else if warnings > 0 {
+        log::warn!("⚠️  Index verification passed with warnings");
+        log::info!("  Warnings: {}", warnings);
+        log::info!("  Total DIDs:  {}", total_dids);
+        log::info!("  Last bundle: {:06}", last_bundle);
+    } else {
+        log::info!("✓ DID index is valid");
+        log::info!("  Total DIDs:    {}", total_dids);
+        log::info!("  Last bundle:   {:06}", last_bundle);
+        log::info!("  Shards:        {}", shards_checked);
+        log::info!("  Delta segments: {}", delta_segments);
+        if delta_segments > 0 && delta_segments < SEGMENT_WARNING_THRESHOLD {
+            log::info!("  (compaction not needed)");
+        }
+    }
+
     Ok(())
 }
 
