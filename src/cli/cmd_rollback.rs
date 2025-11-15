@@ -145,7 +145,7 @@ fn calculate_rollback_plan(manager: &BundleManager, cmd: &RollbackCommand) -> Re
     let has_mempool = mempool_stats.count > 0;
     
     let did_stats = manager.get_did_index_stats();
-    let has_did_index = did_stats.total_dids > 0;
+    let has_did_index = did_stats.get("total_dids").and_then(|v| v.as_i64()).unwrap_or(0) > 0;
 
     Ok(RollbackPlan {
         target_bundle,
@@ -328,7 +328,7 @@ fn handle_did_index(
     } else {
         let did_stats = manager.get_did_index_stats();
         println!("      ⚠️  DID index is out of date");
-        if did_stats.total_entries > 0 {
+        if did_stats.get("total_entries").and_then(|v| v.as_i64()).unwrap_or(0) > 0 {
             println!("         Run: plcbundle-rs index rebuild");
         }
     }

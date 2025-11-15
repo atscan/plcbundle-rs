@@ -310,3 +310,34 @@ pub fn validate_did_format(did: &str) -> Result<()> {
     Ok(())
 }
 
+// ============================================================================
+// Audit Log Formatting
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditLogEntry {
+    pub did: String,
+    pub operation: serde_json::Value,
+    pub cid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nullified: Option<bool>,
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+}
+
+/// Format operations as an audit log
+pub fn format_audit_log(operations: &[Operation]) -> Vec<AuditLogEntry> {
+    operations
+        .iter()
+        .map(|op| {
+            AuditLogEntry {
+                did: op.did.clone(),
+                operation: op.operation.clone(),
+                cid: op.cid.clone(),
+                nullified: if op.nullified { Some(true) } else { None },
+                created_at: op.created_at.clone(),
+            }
+        })
+        .collect()
+}
+

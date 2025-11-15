@@ -191,12 +191,14 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
         }
         
         let did_index_stats = manager.get_did_index_stats();
+        let total_dids = did_index_stats.get("total_dids").and_then(|v| v.as_i64()).unwrap_or(0);
+        let total_entries = did_index_stats.get("total_entries").and_then(|v| v.as_i64()).unwrap_or(0);
         if cmd.verbose {
             log::debug!("[Resolver] DID index stats: total_dids={}, total_entries={}", 
-                did_index_stats.total_dids, did_index_stats.total_entries);
+                total_dids, total_entries);
         }
         
-        if did_index_stats.total_dids == 0 {
+        if total_dids == 0 {
             if cmd.verbose {
                 log::debug!("[Resolver] DID index is empty or missing");
             }
@@ -236,18 +238,20 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
                 eprintln!();
                 
                 let stats = manager.get_did_index_stats();
+                let final_total_dids = stats.get("total_dids").and_then(|v| v.as_i64()).unwrap_or(0);
+                let final_total_entries = stats.get("total_entries").and_then(|v| v.as_i64()).unwrap_or(0);
                 eprintln!("✓ DID index built");
-                eprintln!("  Total DIDs: {}\n", stats.total_dids);
+                eprintln!("  Total DIDs: {}\n", final_total_dids);
                 
                 if cmd.verbose {
                     log::debug!("[Resolver] Index build completed in {:?}", elapsed);
                     log::debug!("[Resolver] Final stats: total_dids={}, total_entries={}", 
-                        stats.total_dids, stats.total_entries);
+                        final_total_dids, final_total_entries);
                 }
             }
         } else {
             if cmd.verbose {
-                log::debug!("[Resolver] DID index already exists with {} DIDs", did_index_stats.total_dids);
+                log::debug!("[Resolver] DID index already exists with {} DIDs", total_dids);
             }
         }
     } else {

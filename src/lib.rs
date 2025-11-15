@@ -30,9 +30,9 @@ pub use manager::{BundleManager, LoadOptions, LoadResult, OperationResult, Query
                   WarmUpSpec, WarmUpStrategy, RebuildStats, DIDIndexStats, ManagerStats, ResolveResult,
                   RollbackFileStats};
 pub use did_index::DIDLookupStats;
-pub use operations::{Operation, OperationFilter, OperationRequest};
+pub use operations::{Operation, OperationFilter, OperationRequest, OperationWithLocation};
 pub use iterators::{QueryIterator, ExportIterator, RangeIterator};
-pub use resolver::{DIDDocument, DIDState, resolve_did_document, build_did_state, validate_did_format};
+pub use resolver::{DIDDocument, DIDState, resolve_did_document, build_did_state, validate_did_format, format_audit_log, AuditLogEntry};
 pub use handle_resolver::{HandleResolver, validate_handle_format, is_handle, normalize_handle};
 pub use mempool::{Mempool, MempoolStats};
 pub use remote::{fetch_index, fetch_bundle_operations, fetch_operation};

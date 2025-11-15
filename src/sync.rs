@@ -447,7 +447,7 @@ impl SyncLogger for ServerLogger {
         index_ms: u64,
         _total_duration_ms: u64,
         fetch_requests: usize,
-        did_index_compacted: bool,
+        _did_index_compacted: bool,
         unique_dids: u32,
         size_bytes: u64,
     ) {

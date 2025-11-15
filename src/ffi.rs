@@ -613,8 +613,8 @@ pub unsafe extern "C" fn bundle_manager_get_did_index_stats(
 
     let stats = manager.manager.get_did_index_stats();
     unsafe {
-        (*out_stats).total_dids = stats.total_dids;
-        (*out_stats).total_operations = stats.total_entries;
+        (*out_stats).total_dids = stats.get("total_dids").and_then(|v| v.as_i64()).unwrap_or(0) as usize;
+        (*out_stats).total_operations = stats.get("total_entries").and_then(|v| v.as_i64()).unwrap_or(0) as usize;
         (*out_stats).index_size_bytes = 0; // TODO: track actual index size
     }
     0

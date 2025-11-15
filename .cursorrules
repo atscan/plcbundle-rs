@@ -89,7 +89,15 @@ manager.delete_bundle_files(&[bundle_num])?;
 
 ## Testing
 
+**IMPORTANT**: Always test compilation with all features enabled.
+
 When implementing features:
+- **Always run**: `cargo check --all-features` or `cargo build --all-features` before considering work complete
+- This ensures code compiles with both `cli` and `server` features enabled
+- It's very common that code compiles with default features but fails with all features
+- Fix any compilation errors that appear with all features enabled
+
+If writing actual tests:
 - Test through the public API
 - Don't test internal implementation details
 - CLI tests should use actual `BundleManager` instances

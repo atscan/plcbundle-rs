@@ -2,7 +2,7 @@
 
 use crate::constants;
 use crate::manager::BundleManager;
-use crate::resolver::build_did_state;
+use crate::resolver::{build_did_state, format_audit_log};
 use crate::server::config::ServerConfig;
 use anyhow::Result;
 use axum::{
@@ -987,8 +987,8 @@ async fn handle_did_audit_log(
         }
     };
 
-    // Get DID operations
-    let operations = match state.manager.get_did_operations(&did) {
+    // Get DID operations (both bundled and mempool)
+    let mut operations = match state.manager.get_did_operations(&did) {
         Ok(ops) => ops,
         Err(e) => {
             return (
@@ -999,6 +999,11 @@ async fn handle_did_audit_log(
         }
     };
 
+    // Add mempool operations
+    if let Ok(mempool_ops) = state.manager.get_did_operations_from_mempool(&did) {
+        operations.extend(mempool_ops);
+    }
+
     if operations.is_empty() {
         return (
             StatusCode::NOT_FOUND,
@@ -1007,8 +1012,9 @@ async fn handle_did_audit_log(
             .into_response();
     }
 
-    // Format audit log (just return operations for now)
-    (StatusCode::OK, axum::Json(operations)).into_response()
+    // Format audit log
+    let audit_log = format_audit_log(&operations);
+    (StatusCode::OK, axum::Json(audit_log)).into_response()
 }
 
 fn is_common_browser_file(path: &str) -> bool {

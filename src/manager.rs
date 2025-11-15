@@ -1,7 +1,7 @@
 // src/manager.rs
 use crate::constants;
 use crate::index::{Index, BundleMetadata};
-use crate::operations::{Operation, OperationFilter, OperationRequest};
+use crate::operations::{Operation, OperationFilter, OperationRequest, OperationWithLocation};
 use crate::iterators::{QueryIterator, ExportIterator, RangeIterator};
 use crate::options::QueryMode;
 use crate::{cache, did_index, verification, mempool, handle_resolver};
@@ -312,6 +312,48 @@ impl BundleManager {
         Ok(operations)
     }
 
+    /// Get DID operations with location information (bundle number and position)
+    pub fn get_did_operations_with_locations(&self, did: &str) -> Result<Vec<OperationWithLocation>> {
+        let did_index = self.did_index.read().unwrap();
+        let locations = did_index.get_did_locations(did)?;
+        
+        let mut ops_with_loc = Vec::new();
+        for loc in locations {
+            let bundle_num = loc.bundle() as u32;
+            let position = loc.position() as usize;
+            
+            match self.get_operation(bundle_num, position) {
+                Ok(op) => {
+                    ops_with_loc.push(OperationWithLocation {
+                        operation: op,
+                        bundle: bundle_num,
+                        position,
+                        nullified: loc.nullified(),
+                    });
+                }
+                Err(e) => {
+                    log::warn!("Failed to load operation at bundle {} position {}: {}", bundle_num, position, e);
+                }
+            }
+        }
+        
+        // Sort by global position (bundle * BUNDLE_SIZE + position)
+        ops_with_loc.sort_by_key(|owl| {
+            (owl.bundle as u64) * constants::BUNDLE_SIZE as u64 + owl.position as u64
+        });
+        
+        Ok(ops_with_loc)
+    }
+
+    /// Get DID operations from mempool
+    pub fn get_did_operations_from_mempool(&self, did: &str) -> Result<Vec<Operation>> {
+        let mempool_guard = self.mempool.read().unwrap();
+        match mempool_guard.as_ref() {
+            Some(mp) => Ok(mp.find_did_operations(did)),
+            None => Ok(Vec::new()),
+        }
+    }
+
     /// Resolve DID to current W3C DID Document
     pub fn resolve_did(&self, did: &str) -> Result<crate::resolver::DIDDocument> {
         let result = self.resolve_did_with_stats(did)?;
@@ -570,8 +612,13 @@ impl BundleManager {
         Ok(stats)
     }
 
-    pub fn get_did_index_stats(&self) -> DIDIndexStats {
-        let stats_map = self.did_index.read().unwrap().get_stats();
+    pub fn get_did_index_stats(&self) -> HashMap<String, serde_json::Value> {
+        self.did_index.read().unwrap().get_stats()
+    }
+    
+    /// Get DID index stats as struct (legacy format)
+    pub fn get_did_index_stats_struct(&self) -> DIDIndexStats {
+        let stats_map = self.get_did_index_stats();
         
         // Convert to old format
         DIDIndexStats {

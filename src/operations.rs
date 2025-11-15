@@ -51,3 +51,12 @@ pub struct OperationRequest {
     pub index: Option<usize>,
     pub filter: Option<OperationFilter>,
 }
+
+/// Operation with location information (bundle number and position)
+#[derive(Debug, Clone)]
+pub struct OperationWithLocation {
+    pub operation: Operation,
+    pub bundle: u32,
+    pub position: usize,
+    pub nullified: bool,
+}

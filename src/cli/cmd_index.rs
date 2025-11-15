@@ -10,9 +10,10 @@ pub fn cmd_index_build(dir: PathBuf, force: bool) -> Result<()> {
     
     // Check if index exists
     let did_index = manager.get_did_index_stats();
-    if did_index.total_dids > 0 && !force {
+    let total_dids = did_index.get("total_dids").and_then(|v| v.as_i64()).unwrap_or(0);
+    if total_dids > 0 && !force {
         log::info!("DID index already exists (use --force to rebuild)");
-        log::info!("Total DIDs: {}", did_index.total_dids);
+        log::info!("Total DIDs: {}", total_dids);
         return Ok(());
     }
     
@@ -40,7 +41,8 @@ pub fn cmd_index_build(dir: PathBuf, force: bool) -> Result<()> {
     let stats = manager.get_did_index_stats();
 
     log::info!("\n✓ DID index built in {:?}", elapsed);
-    log::info!("  Total DIDs: {}", stats.total_dids);
+    let total_dids = stats.get("total_dids").and_then(|v| v.as_i64()).unwrap_or(0);
+    log::info!("  Total DIDs: {}", total_dids);
     log::info!("  Location: {}/{}/", utils::display_path(&dir).display(), constants::DID_INDEX_DIR);
     
     Ok(())
@@ -86,7 +88,8 @@ pub fn cmd_index_repair(dir: PathBuf) -> Result<()> {
     let stats = manager.get_did_index_stats();
     
     log::info!("\n✓ DID index repaired in {:?}", elapsed);
-    log::info!("  Total DIDs: {}", stats.total_dids);
+    let total_dids = stats.get("total_dids").and_then(|v| v.as_i64()).unwrap_or(0);
+    log::info!("  Total DIDs: {}", total_dids);
     
     Ok(())
 }
