@@ -294,7 +294,7 @@ pub enum SyncEvent {
 // Sync Configuration
 // ============================================================================
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SyncConfig {
     pub plc_url: String,
     pub continuous: bool,
@@ -302,6 +302,7 @@ pub struct SyncConfig {
     pub max_bundles: usize,
     pub verbose: bool,
     pub shutdown_rx: Option<tokio::sync::watch::Receiver<bool>>,
+    pub shutdown_tx: Option<tokio::sync::watch::Sender<bool>>,
 }
 
 impl Default for SyncConfig {
@@ -313,6 +314,7 @@ impl Default for SyncConfig {
             max_bundles: 0,
             verbose: false,
             shutdown_rx: None,
+            shutdown_tx: None,
         }
     }
 }
@@ -664,6 +666,13 @@ impl SyncManager {
                     self.handle_event(&SyncEvent::Error {
                         error: error_msg.clone(),
                     });
+
+                    // Trigger shutdown on error if configured
+                    // This ensures the application terminates on persistent errors
+                    if let Some(ref shutdown_tx) = self.config.shutdown_tx {
+                        let _ = shutdown_tx.send(true);
+                    }
+
                     return Err(e);
                 }
             }
@@ -833,25 +842,14 @@ impl SyncManager {
                         error: error_msg.clone(),
                     });
 
-                    // Check for shutdown before retrying
-                    if let Some(ref shutdown_rx) = self.config.shutdown_rx {
-                        if *shutdown_rx.borrow() {
-                            break;
-                        }
-
-                        // On error, sleep briefly before retrying (with cancellation support)
-                        let mut shutdown_rx = shutdown_rx.clone();
-                        tokio::select! {
-                            _ = sleep(Duration::from_secs(1)) => {}
-                            _ = shutdown_rx.changed() => {
-                                if *shutdown_rx.borrow() {
-                                    break;
-                                }
-                            }
-                        }
-                    } else {
-                        sleep(Duration::from_secs(1)).await;
+                    // Trigger shutdown on error to terminate the application
+                    // This prevents the app from hanging when there's a persistent error
+                    // (e.g., corrupted DID index config, disk full, etc.)
+                    if let Some(ref shutdown_tx) = self.config.shutdown_tx {
+                        let _ = shutdown_tx.send(true);
                     }
+
+                    return Err(e);
                 }
             }
         }

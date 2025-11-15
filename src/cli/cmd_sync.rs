@@ -68,6 +68,7 @@ pub fn run(cmd: SyncCommand) -> Result<()> {
             max_bundles: cmd.max_bundles,
             verbose: cmd.verbose,
             shutdown_rx: None,
+            shutdown_tx: None,
         };
 
         let quiet = cmd.quiet;
@@ -81,6 +82,7 @@ pub fn run(cmd: SyncCommand) -> Result<()> {
                 max_bundles: 0,
                 verbose: cmd.verbose,
                 shutdown_rx: None,
+                shutdown_tx: None,
             };
             
             let logger = ServerLogger::new(cmd.verbose, cmd.interval);

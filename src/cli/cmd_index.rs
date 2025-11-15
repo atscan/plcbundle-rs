@@ -49,10 +49,23 @@ pub fn cmd_index_build(dir: PathBuf, force: bool) -> Result<()> {
 pub fn cmd_index_repair(dir: PathBuf) -> Result<()> {
     let manager = BundleManager::new(dir.clone())?;
     
-    let did_index = manager.get_did_index_stats();
-    if did_index.total_dids == 0 {
+    // Check if index config exists (even if corrupted)
+    let did_index = manager.get_did_index();
+    let stats_map = did_index.read().unwrap().get_stats();
+    let index_exists = stats_map.get("exists")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    
+    if !index_exists {
         log::error!("DID index does not exist");
         log::info!("Use: plcbundle-rs index build");
+        return Ok(());
+    }
+    
+    // Check if there are bundles to index
+    let last_bundle = manager.get_last_bundle();
+    if last_bundle == 0 {
+        log::info!("No bundles to index");
         return Ok(());
     }
     

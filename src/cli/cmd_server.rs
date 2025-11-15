@@ -300,6 +300,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
         let max_bundles = cmd.max_bundles;
         let verbose = cmd.verbose;
         let shutdown_rx_sync = shutdown_rx.clone();
+        let shutdown_tx_sync = shutdown_tx.clone();
 
         tokio::spawn(async move {
             use plcbundle::sync::{PLCClient, SyncManager, SyncConfig};
@@ -320,6 +321,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
                 max_bundles: max_bundles as usize,
                 verbose,
                 shutdown_rx: Some(shutdown_rx_sync),
+                shutdown_tx: Some(shutdown_tx_sync),
             };
 
             use plcbundle::sync::ServerLogger;

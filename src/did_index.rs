@@ -84,8 +84,8 @@ fn default_compaction_strategy() -> String {
 }
 
 fn default_shard_meta_vec() -> Vec<ShardMeta> {
-    (0..DID_SHARD_COUNT as u8)
-        .map(ShardMeta::new)
+    (0..DID_SHARD_COUNT)
+        .map(|i| ShardMeta::new(i as u8))
         .collect()
 }
 
@@ -322,13 +322,45 @@ impl Manager {
 
         let mut config = if config_path.exists() {
             let data = fs::read_to_string(&config_path)?;
-            serde_json::from_str(&data)?
+            match serde_json::from_str::<Config>(&data) {
+                Ok(mut loaded_config) => {
+                    // Log if config needs repair
+                    if loaded_config.shards.len() != DID_SHARD_COUNT {
+                        log::warn!(
+                            "[DID Index] Config corrupted: shards.len() = {} (expected {}). Auto-repairing...",
+                            loaded_config.shards.len(),
+                            DID_SHARD_COUNT
+                        );
+                        // Force create new shards array (discard corrupted one)
+                        loaded_config.shards = default_shard_meta_vec();
+                    }
+                    loaded_config
+                }
+                Err(e) => {
+                    log::warn!("[DID Index] Config parse error: {}. Creating new config.", e);
+                    Config::new()
+                }
+            }
         } else {
             Config::new()
         };
+        
+        // CRITICAL: Normalize config to ensure all 256 shards exist
         config.normalize();
+        
+        // Verify we have exactly 256 shards (should always pass now)
+        if config.shards.len() != DID_SHARD_COUNT {
+            // This should never happen, but if it does, recreate from scratch
+            log::error!(
+                "[DID Index] Config normalization failed: shards.len() = {} (expected {}). Recreating config.",
+                config.shards.len(),
+                DID_SHARD_COUNT
+            );
+            config = Config::new();
+            config.normalize();
+        }
 
-        Ok(Manager {
+        let manager = Manager {
             _base_dir: base_dir,
             index_dir,
             shard_dir,
@@ -337,11 +369,19 @@ impl Manager {
             shard_cache: Arc::new(RwLock::new(HashMap::new())),
             max_cache: 5,
             max_segments_per_shard: 8,
-            config: Arc::new(RwLock::new(config)),
+            config: Arc::new(RwLock::new(config.clone())),
             cache_hits: AtomicI64::new(0),
             cache_misses: AtomicI64::new(0),
             total_lookups: AtomicI64::new(0),
-        })
+        };
+
+        // ALWAYS persist normalized config to fix corruption from old versions
+        // This ensures the shards array is properly saved to disk
+        manager.persist_config(&config)?;
+        
+        log::debug!("[DID Index] Config loaded and normalized ({} shards)", config.shards.len());
+
+        Ok(manager)
     }
 
     pub fn exists(&self) -> bool {
@@ -1282,11 +1322,41 @@ impl Manager {
         }
 
         let (segment_id, file_name) = {
+            // Ensure config is normalized before accessing shards
             let mut config = self.config.write().unwrap();
-            if config.shards.len() <= shard_num as usize {
-                config.shards = default_shard_meta_vec();
+            config.normalize();
+            
+            // Verify normalization succeeded - this should never fail, but defensive check
+            if config.shards.len() != DID_SHARD_COUNT {
+                log::error!(
+                    "[DID Index] Config normalization failed in write_delta_segment: shards.len() = {} (expected {}). Recreating.",
+                    config.shards.len(),
+                    DID_SHARD_COUNT
+                );
+                *config = Config::new();
+                config.normalize();
+                
+                // Verify the new config is valid before proceeding
+                if config.shards.len() != DID_SHARD_COUNT {
+                    anyhow::bail!(
+                        "Failed to create valid config: shards.len() = {} (expected {})",
+                        config.shards.len(),
+                        DID_SHARD_COUNT
+                    );
+                }
+                
+                // Persist the fixed config immediately
+                let config_snapshot = config.clone();
+                drop(config); // Release lock before persisting
+                self.persist_config(&config_snapshot)?;
+                
+                // Re-acquire lock for segment ID
+                config = self.config.write().unwrap();
             }
-            let shard_meta = config.shards.get_mut(shard_num as usize).unwrap();
+            
+            // Ensure shard_num is within valid range (should always be 0-255 after normalize)
+            let shard_meta = config.shards.get_mut(shard_num as usize)
+                .ok_or_else(|| anyhow::anyhow!("Invalid shard number: {} (expected 0-{})", shard_num, DID_SHARD_COUNT - 1))?;
             let id = shard_meta.next_segment_id;
             shard_meta.next_segment_id += 1;
             (id, format!("seg_{id:016x}.idx"))
@@ -1310,6 +1380,8 @@ impl Manager {
         };
 
         self.modify_config(|cfg| {
+            // Ensure config is normalized before accessing shards
+            cfg.normalize();
             if let Some(shard_meta) = cfg.shards.get_mut(shard_num as usize) {
                 shard_meta.segments.push(meta.clone());
             }
