@@ -94,11 +94,11 @@ pub struct CExportSpec {
     pub bundle_start: u32,
     pub bundle_end: u32,
     pub export_all: bool,
-    pub format: u8, // 0=jsonl, 1=json, 2=csv
-    pub count_limit: u64, // 0 = no limit
+    pub format: u8,                     // 0=jsonl, 1=json, 2=csv
+    pub count_limit: u64,               // 0 = no limit
     pub after_timestamp: *const c_char, // NULL = no filter
-    pub did_filter: *const c_char, // NULL = no filter
-    pub op_type_filter: *const c_char, // NULL = no filter
+    pub did_filter: *const c_char,      // NULL = no filter
+    pub op_type_filter: *const c_char,  // NULL = no filter
 }
 
 #[repr(C)]
@@ -226,7 +226,7 @@ pub unsafe extern "C" fn bundle_manager_get_operations_batch(
             for op in operations {
                 c_ops.push(operation_to_c(op));
             }
-            
+
             unsafe {
                 *out_count = c_ops.len();
                 *out_operations = c_ops.as_mut_ptr();
@@ -267,7 +267,7 @@ pub unsafe extern "C" fn bundle_manager_get_did_operations(
             for op in operations {
                 c_ops.push(operation_to_c(op));
             }
-            
+
             unsafe {
                 *out_count = c_ops.len();
                 *out_operations = c_ops.as_mut_ptr();
@@ -292,7 +292,7 @@ pub unsafe extern "C" fn bundle_manager_batch_resolve_dids(
 
     let manager = unsafe { &*manager };
     let dids_slice = unsafe { std::slice::from_raw_parts(dids, did_count) };
-    
+
     let mut did_strings = Vec::new();
     for did_ptr in dids_slice {
         let did = unsafe {
@@ -308,10 +308,7 @@ pub unsafe extern "C" fn bundle_manager_batch_resolve_dids(
         Ok(results) => {
             for (did, operations) in results {
                 let c_did = CString::new(did).unwrap();
-                let c_ops: Vec<COperation> = operations
-                    .into_iter()
-                    .map(operation_to_c)
-                    .collect();
+                let c_ops: Vec<COperation> = operations.into_iter().map(operation_to_c).collect();
 
                 callback(c_did.as_ptr(), c_ops.as_ptr(), c_ops.len());
 
@@ -363,7 +360,9 @@ pub unsafe extern "C" fn bundle_manager_query(
     // Simple query: search through operations for matching fields
     let mut c_ops = Vec::new();
     for bundle_num in start..=end {
-        let result = manager.manager.load_bundle(bundle_num, LoadOptions::default());
+        let result = manager
+            .manager
+            .load_bundle(bundle_num, LoadOptions::default());
         if let Ok(load_result) = result {
             for op in load_result.operations {
                 // Simple string matching in operation JSON
@@ -451,7 +450,11 @@ pub unsafe extern "C" fn bundle_manager_verify_chain(
 
     match manager.manager.verify_chain(spec) {
         Ok(result) => {
-            if result.valid { 0 } else { -1 }
+            if result.valid {
+                0
+            } else {
+                -1
+            }
         }
         Err(_) => -1,
     }
@@ -577,7 +580,7 @@ pub unsafe extern "C" fn bundle_manager_rebuild_did_index(
     }
 
     let manager = unsafe { &*manager };
-    
+
     let callback = progress_callback.map(|cb| {
         Box::new(move |bundle: u32, ops: u32| {
             cb(bundle, ops);
@@ -613,8 +616,14 @@ pub unsafe extern "C" fn bundle_manager_get_did_index_stats(
 
     let stats = manager.manager.get_did_index_stats();
     unsafe {
-        (*out_stats).total_dids = stats.get("total_dids").and_then(|v| v.as_i64()).unwrap_or(0) as usize;
-        (*out_stats).total_operations = stats.get("total_entries").and_then(|v| v.as_i64()).unwrap_or(0) as usize;
+        (*out_stats).total_dids = stats
+            .get("total_dids")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as usize;
+        (*out_stats).total_operations = stats
+            .get("total_entries")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as usize;
         (*out_stats).index_size_bytes = 0; // TODO: track actual index size
     }
     0
@@ -651,7 +660,9 @@ pub unsafe extern "C" fn bundle_manager_get_stats(
 
 fn operation_to_c(op: Operation) -> COperation {
     // Extract operation type from the operation object
-    let op_type = op.operation.get("type")
+    let op_type = op
+        .operation
+        .get("type")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string();
@@ -659,7 +670,10 @@ fn operation_to_c(op: Operation) -> COperation {
     COperation {
         did: CString::new(op.did).unwrap().into_raw(),
         op_type: CString::new(op_type).unwrap().into_raw(),
-        cid: op.cid.map(|s| CString::new(s).unwrap().into_raw()).unwrap_or(std::ptr::null_mut()),
+        cid: op
+            .cid
+            .map(|s| CString::new(s).unwrap().into_raw())
+            .unwrap_or(std::ptr::null_mut()),
         nullified: op.nullified,
         created_at: CString::new(op.created_at).unwrap().into_raw(),
         json: CString::new(op.operation.to_string()).unwrap().into_raw(),
@@ -724,7 +738,8 @@ pub unsafe extern "C" fn bundle_manager_free_operations(ops: *mut COperation, co
 
 /// Callback type for streaming export
 /// Returns 0 to continue, non-zero to stop
-pub type ExportCallback = extern "C" fn(data: *const c_char, len: usize, user_data: *mut std::ffi::c_void) -> i32;
+pub type ExportCallback =
+    extern "C" fn(data: *const c_char, len: usize, user_data: *mut std::ffi::c_void) -> i32;
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bundle_manager_export(
@@ -741,9 +756,9 @@ pub unsafe extern "C" fn bundle_manager_export(
     let manager = unsafe { &*manager };
     let spec = unsafe { &*spec };
 
-    use std::io::BufRead;
-    use std::fs::File;
     use crate::index::Index;
+    use std::fs::File;
+    use std::io::BufRead;
 
     // Get directory path
     let dir_path = manager.manager.directory().clone();
@@ -770,7 +785,8 @@ pub unsafe extern "C" fn bundle_manager_export(
                 Err(_) => return -1,
             }
         };
-        bundle_numbers.into_iter()
+        bundle_numbers
+            .into_iter()
             .filter_map(|num| {
                 if let Some(meta) = index.get_bundle(num) {
                     if meta.end_time >= after_ts {
@@ -792,10 +808,11 @@ pub unsafe extern "C" fn bundle_manager_export(
     let mut output_buffer = Vec::with_capacity(1024 * 1024);
 
     // Determine if we need parsing
-    let needs_parsing = !spec.after_timestamp.is_null() || 
-                       !spec.did_filter.is_null() || 
-                       !spec.op_type_filter.is_null() ||
-                       spec.format == 1 || spec.format == 2; // JSON or CSV
+    let needs_parsing = !spec.after_timestamp.is_null()
+        || !spec.did_filter.is_null()
+        || !spec.op_type_filter.is_null()
+        || spec.format == 1
+        || spec.format == 2; // JSON or CSV
 
     // Process bundles
     for bundle_num in bundle_numbers {
@@ -843,7 +860,11 @@ pub unsafe extern "C" fn bundle_manager_export(
 
                 // Flush buffer when large
                 if output_buffer.len() >= 1024 * 1024 {
-                    let result = callback(output_buffer.as_ptr() as *const c_char, output_buffer.len(), user_data);
+                    let result = callback(
+                        output_buffer.as_ptr() as *const c_char,
+                        output_buffer.len(),
+                        user_data,
+                    );
                     if result != 0 {
                         break;
                     }
@@ -856,7 +877,10 @@ pub unsafe extern "C" fn bundle_manager_export(
 
             let after_ts = if !spec.after_timestamp.is_null() {
                 Some(unsafe {
-                    CStr::from_ptr(spec.after_timestamp).to_str().unwrap().to_string()
+                    CStr::from_ptr(spec.after_timestamp)
+                        .to_str()
+                        .unwrap()
+                        .to_string()
                 })
             } else {
                 None
@@ -864,7 +888,10 @@ pub unsafe extern "C" fn bundle_manager_export(
 
             let did_filter = if !spec.did_filter.is_null() {
                 Some(unsafe {
-                    CStr::from_ptr(spec.did_filter).to_str().unwrap().to_string()
+                    CStr::from_ptr(spec.did_filter)
+                        .to_str()
+                        .unwrap()
+                        .to_string()
                 })
             } else {
                 None
@@ -872,7 +899,10 @@ pub unsafe extern "C" fn bundle_manager_export(
 
             let op_type_filter = if !spec.op_type_filter.is_null() {
                 Some(unsafe {
-                    CStr::from_ptr(spec.op_type_filter).to_str().unwrap().to_string()
+                    CStr::from_ptr(spec.op_type_filter)
+                        .to_str()
+                        .unwrap()
+                        .to_string()
                 })
             } else {
                 None
@@ -900,7 +930,9 @@ pub unsafe extern "C" fn bundle_manager_export(
 
                 // Apply filters
                 if let Some(ref after_ts) = after_ts {
-                    if let Some(created_at) = data.get("createdAt").or_else(|| data.get("created_at")) {
+                    if let Some(created_at) =
+                        data.get("createdAt").or_else(|| data.get("created_at"))
+                    {
                         if let Some(ts_str) = created_at.as_str() {
                             if ts_str < after_ts.as_str() {
                                 continue;
@@ -950,14 +982,23 @@ pub unsafe extern "C" fn bundle_manager_export(
 
                 // Format
                 let formatted = match spec.format {
-                    0 => line, // JSONL - use original
+                    0 => line,                                                  // JSONL - use original
                     1 => sonic_rs::to_string_pretty(&data).unwrap_or_default(), // JSON
                     2 => {
                         let did = data.get("did").and_then(|v| v.as_str()).unwrap_or("");
-                        let op = data.get("operation").map(|v| sonic_rs::to_string(v).unwrap_or_default()).unwrap_or_default();
-                        let created_at = data.get("createdAt").or_else(|| data.get("created_at"))
-                            .and_then(|v| v.as_str()).unwrap_or("");
-                        let nullified = data.get("nullified").and_then(|v| v.as_bool()).unwrap_or(false);
+                        let op = data
+                            .get("operation")
+                            .map(|v| sonic_rs::to_string(v).unwrap_or_default())
+                            .unwrap_or_default();
+                        let created_at = data
+                            .get("createdAt")
+                            .or_else(|| data.get("created_at"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let nullified = data
+                            .get("nullified")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
                         format!("{},{},{},{}", did, op, created_at, nullified)
                     }
                     _ => line,
@@ -970,7 +1011,11 @@ pub unsafe extern "C" fn bundle_manager_export(
 
                 // Flush buffer when large
                 if output_buffer.len() >= 1024 * 1024 {
-                    let result = callback(output_buffer.as_ptr() as *const c_char, output_buffer.len(), user_data);
+                    let result = callback(
+                        output_buffer.as_ptr() as *const c_char,
+                        output_buffer.len(),
+                        user_data,
+                    );
                     if result != 0 {
                         break;
                     }
@@ -982,7 +1027,11 @@ pub unsafe extern "C" fn bundle_manager_export(
 
     // Flush remaining buffer
     if !output_buffer.is_empty() {
-        callback(output_buffer.as_ptr() as *const c_char, output_buffer.len(), user_data);
+        callback(
+            output_buffer.as_ptr() as *const c_char,
+            output_buffer.len(),
+            user_data,
+        );
     }
 
     if !out_stats.is_null() {

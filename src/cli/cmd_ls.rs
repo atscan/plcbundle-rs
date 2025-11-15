@@ -28,7 +28,7 @@ pub struct LsCommand {
 
 pub fn run(cmd: LsCommand, dir: PathBuf) -> Result<()> {
     let manager = BundleManager::new(dir)?;
-    
+
     // Get all bundle metadata from the index
     let last_bundle = manager.get_last_bundle();
     let mut bundles = Vec::new();
@@ -116,11 +116,7 @@ fn get_field_header(field: &str) -> String {
     .to_string()
 }
 
-fn print_bundle_fields(
-    meta: &plcbundle::index::BundleMetadata,
-    fields: &[String],
-    sep: &str,
-) {
+fn print_bundle_fields(meta: &plcbundle::index::BundleMetadata, fields: &[String], sep: &str) {
     let values: Vec<String> = fields.iter().map(|f| get_field_value(meta, f)).collect();
     println!("{}", values.join(sep));
 }
@@ -128,7 +124,7 @@ fn print_bundle_fields(
 fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str) -> String {
     match field {
         "bundle" => format!("{:06}", meta.bundle_number),
-        
+
         "hash" => meta.hash.clone(),
         "hash_short" => {
             if meta.hash.len() >= 12 {
@@ -137,7 +133,7 @@ fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str) -> Stri
                 meta.hash.clone()
             }
         }
-        
+
         "content" => meta.content_hash.clone(),
         "content_short" => {
             if meta.content_hash.len() >= 12 {
@@ -146,7 +142,7 @@ fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str) -> Stri
                 meta.content_hash.clone()
             }
         }
-        
+
         "parent" => meta.parent.clone(),
         "parent_short" => {
             if meta.parent.len() >= 12 {
@@ -155,7 +151,7 @@ fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str) -> Stri
                 meta.parent.clone()
             }
         }
-        
+
         "date" | "time" => {
             if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&meta.end_time) {
                 dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()
@@ -163,7 +159,7 @@ fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str) -> Stri
                 meta.end_time.clone()
             }
         }
-        
+
         "date_short" => {
             if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&meta.end_time) {
                 dt.format("%Y-%m-%d").to_string()
@@ -171,7 +167,7 @@ fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str) -> Stri
                 meta.end_time.clone()
             }
         }
-        
+
         "timestamp" | "unix" => {
             if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&meta.end_time) {
                 format!("{}", dt.timestamp())
@@ -179,7 +175,7 @@ fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str) -> Stri
                 "0".to_string()
             }
         }
-        
+
         "age" => {
             if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&meta.end_time) {
                 let age = chrono::Utc::now().signed_duration_since(dt);
@@ -188,7 +184,7 @@ fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str) -> Stri
                 "unknown".to_string()
             }
         }
-        
+
         "age_seconds" => {
             if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&meta.end_time) {
                 let age = chrono::Utc::now().signed_duration_since(dt);
@@ -197,16 +193,16 @@ fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str) -> Stri
                 "0".to_string()
             }
         }
-        
+
         "ops" | "operations" => format!("{}", meta.operation_count),
         "dids" => format!("{}", meta.did_count),
-        
+
         "size" | "compressed" => format!("{}", meta.compressed_size),
         "size_mb" => format!("{:.2}", meta.compressed_size as f64 / (1024.0 * 1024.0)),
-        
+
         "uncompressed" => format!("{}", meta.uncompressed_size),
         "uncompressed_mb" => format!("{:.2}", meta.uncompressed_size as f64 / (1024.0 * 1024.0)),
-        
+
         "ratio" => {
             if meta.compressed_size > 0 {
                 let ratio = meta.uncompressed_size as f64 / meta.compressed_size as f64;
@@ -215,7 +211,7 @@ fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str) -> Stri
                 "0".to_string()
             }
         }
-        
+
         "timespan" | "duration" => {
             if let (Ok(start), Ok(end)) = (
                 chrono::DateTime::parse_from_rfc3339(&meta.start_time),
@@ -227,7 +223,7 @@ fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str) -> Stri
                 "unknown".to_string()
             }
         }
-        
+
         "timespan_seconds" => {
             if let (Ok(start), Ok(end)) = (
                 chrono::DateTime::parse_from_rfc3339(&meta.start_time),
@@ -239,7 +235,7 @@ fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str) -> Stri
                 "0".to_string()
             }
         }
-        
+
         "start" => {
             if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&meta.start_time) {
                 dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()
@@ -247,7 +243,7 @@ fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str) -> Stri
                 meta.start_time.clone()
             }
         }
-        
+
         "end" => {
             if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&meta.end_time) {
                 dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()
@@ -255,7 +251,7 @@ fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str) -> Stri
                 meta.end_time.clone()
             }
         }
-        
+
         "created" => {
             if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&meta.created_at) {
                 dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()
@@ -263,14 +259,14 @@ fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str) -> Stri
                 meta.created_at.clone()
             }
         }
-        
+
         _ => String::new(),
     }
 }
 
 fn format_duration_short(duration: chrono::Duration) -> String {
     let seconds = duration.num_seconds().abs();
-    
+
     if seconds < 60 {
         format!("{}s", seconds)
     } else if seconds < 3600 {
@@ -283,4 +279,3 @@ fn format_duration_short(duration: chrono::Duration) -> String {
         format!("{}y", seconds / 31536000)
     }
 }
-

@@ -1,8 +1,8 @@
 // src/iterators.rs
-use crate::manager::{BundleManager, LoadOptions, QuerySpec, ExportSpec};
+use crate::manager::{BundleManager, ExportSpec, LoadOptions, QuerySpec};
 use crate::operations::{Operation, OperationFilter};
-use std::sync::Arc;
 use anyhow::Result;
+use std::sync::Arc;
 
 pub struct RangeIterator {
     manager: Arc<BundleManager>,
@@ -75,7 +75,10 @@ pub struct QueryIterator {
 
 impl QueryIterator {
     pub fn new(manager: Arc<BundleManager>, spec: QuerySpec) -> Self {
-        Self { _manager: manager, _spec: spec }
+        Self {
+            _manager: manager,
+            _spec: spec,
+        }
     }
 }
 
@@ -123,17 +126,12 @@ impl ExportIterator {
 
     fn format_operation(&self, op: &Operation) -> Result<String> {
         match self.spec.format {
-            crate::manager::ExportFormat::JsonLines => {
-                Ok(serde_json::to_string(op)?)
-            }
+            crate::manager::ExportFormat::JsonLines => Ok(serde_json::to_string(op)?),
             crate::manager::ExportFormat::Csv => {
                 // Simple CSV format - could be enhanced
                 Ok(format!(
                     "{},{},{},{}",
-                    op.did,
-                    op.operation,
-                    op.created_at,
-                    op.nullified
+                    op.did, op.operation, op.created_at, op.nullified
                 ))
             }
             crate::manager::ExportFormat::Parquet => {

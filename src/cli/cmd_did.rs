@@ -7,82 +7,122 @@ use std::path::PathBuf;
 // DID RESOLVE - Convert DID to W3C DID Document
 // ============================================================================
 
-pub fn cmd_did_resolve(dir: PathBuf, input: String, handle_resolver_url: Option<String>, verbose: bool) -> Result<()> {
+pub fn cmd_did_resolve(
+    dir: PathBuf,
+    input: String,
+    handle_resolver_url: Option<String>,
+    verbose: bool,
+) -> Result<()> {
     use plcbundle::constants;
-    
+
     // Use default resolver if none provided
-    let resolver_url = handle_resolver_url.or_else(|| {
-        Some(constants::DEFAULT_HANDLE_RESOLVER_URL.to_string())
-    });
-    
+    let resolver_url =
+        handle_resolver_url.or_else(|| Some(constants::DEFAULT_HANDLE_RESOLVER_URL.to_string()));
+
     // Initialize manager with handle resolver (default or provided)
     let manager = BundleManager::with_handle_resolver(dir, resolver_url)?;
-    
+
     // Resolve handle to DID if needed
     let (did, handle_resolve_time) = manager.resolve_handle_or_did(&input)?;
-    
+
     if handle_resolve_time > 0 {
-        log::info!("Resolved handle: {} → {} (in {}ms)", input, did, handle_resolve_time);
+        log::info!(
+            "Resolved handle: {} → {} (in {}ms)",
+            input,
+            did,
+            handle_resolve_time
+        );
     } else {
         log::info!("Resolving DID: {}", did);
     }
-    
+
     // Get resolve result with stats
     let result = manager.resolve_did_with_stats(&did)?;
-    
+
     // Get DID index for shard calculation (only for PLC DIDs)
     if did.starts_with("did:plc:") {
         let identifier = &did[8..]; // Strip "did:plc:" prefix
         let shard_num = calculate_shard_for_display(identifier);
-        log::debug!("DID {} -> identifier '{}' -> shard {:02x}", did, identifier, shard_num);
+        log::debug!(
+            "DID {} -> identifier '{}' -> shard {:02x}",
+            did,
+            identifier,
+            shard_num
+        );
     }
-    
+
     if let Some(stats) = &result.shard_stats {
-        log::debug!("Shard {:02x} loaded, size: {} bytes", result.shard_num, stats.shard_size);
-        
+        log::debug!(
+            "Shard {:02x} loaded, size: {} bytes",
+            result.shard_num,
+            stats.shard_size
+        );
+
         let reduction = if stats.total_entries > 0 {
-            ((stats.total_entries - stats.prefix_narrowed_to) as f64 / stats.total_entries as f64) * 100.0
+            ((stats.total_entries - stats.prefix_narrowed_to) as f64 / stats.total_entries as f64)
+                * 100.0
         } else {
             0.0
         };
-        
-        log::debug!("Prefix index narrowed search: {} entries → {} entries ({:.1}% reduction)",
-            stats.total_entries, stats.prefix_narrowed_to, reduction);
-        log::debug!("Binary search found {} locations after {} attempts",
-            stats.locations_found, stats.binary_search_attempts);
+
+        log::debug!(
+            "Prefix index narrowed search: {} entries → {} entries ({:.1}% reduction)",
+            stats.total_entries,
+            stats.prefix_narrowed_to,
+            reduction
+        );
+        log::debug!(
+            "Binary search found {} locations after {} attempts",
+            stats.locations_found,
+            stats.binary_search_attempts
+        );
     }
-    
+
     if verbose {
         // Convert handle resolution time to Duration
         let handle_resolve_duration = std::time::Duration::from_millis(handle_resolve_time);
-        
+
         if handle_resolve_time > 0 {
             log::info!("Handle resolution: {:?}", handle_resolve_duration);
         }
-        
+
         // Show detailed index lookup timings if available
         if let Some(ref timings) = result.lookup_timings {
             log::info!("Index Lookup Breakdown:");
             log::info!("  Extract ID:    {:?}", timings.extract_identifier);
             log::info!("  Calc shard:    {:?}", timings.calculate_shard);
-            log::info!("  Load shard:    {:?} ({})", 
+            log::info!(
+                "  Load shard:    {:?} ({})",
                 timings.load_shard,
-                if timings.cache_hit { "cache hit" } else { "cache miss" });
-            
+                if timings.cache_hit {
+                    "cache hit"
+                } else {
+                    "cache miss"
+                }
+            );
+
             // Search breakdown
             log::info!("  Search:");
             if let Some(ref base_time) = timings.base_search_time {
                 log::info!("    Base shard:  {:?}", base_time);
             }
             if !timings.delta_segment_times.is_empty() {
-                let total_delta_time: std::time::Duration = timings.delta_segment_times.iter()
+                let total_delta_time: std::time::Duration = timings
+                    .delta_segment_times
+                    .iter()
                     .map(|(_, time)| *time)
                     .sum();
-                log::info!("    Delta segs:  {:?} ({} segment{})", 
+                log::info!(
+                    "    Delta segs:  {:?} ({} segment{})",
                     total_delta_time,
                     timings.delta_segment_times.len(),
-                    if timings.delta_segment_times.len() == 1 { "" } else { "s" });
-                
+                    if timings.delta_segment_times.len() == 1 {
+                        ""
+                    } else {
+                        "s"
+                    }
+                );
+
                 // Show individual delta segments if there are multiple or if verbose
                 if timings.delta_segment_times.len() > 1 || verbose {
                     for (seg_name, seg_time) in &timings.delta_segment_times {
@@ -98,22 +138,29 @@ pub fn cmd_did_resolve(dir: PathBuf, input: String, handle_resolver_url: Option<
         } else {
             log::info!("Index: {:?}", result.index_time);
         }
-        
+
         log::info!("Load operation: {:?}", result.load_time);
-        
+
         // Calculate true total including handle resolution
         let true_total = handle_resolve_duration + result.total_time;
-        log::info!("Total:          {:?} (handle: {:?} + did: {:?})", 
-            true_total, 
-            handle_resolve_duration, 
-            result.total_time);
-        
+        log::info!(
+            "Total:          {:?} (handle: {:?} + did: {:?})",
+            true_total,
+            handle_resolve_duration,
+            result.total_time
+        );
+
         // Calculate global position: (bundle * BUNDLE_SIZE) + position
-        let global_pos = (result.bundle_number as u64 * plcbundle::constants::BUNDLE_SIZE as u64) + result.position as u64;
-        log::info!("Source: bundle {:06}, position {} (global: {})\n", 
-            result.bundle_number, result.position, global_pos);
+        let global_pos = (result.bundle_number as u64 * plcbundle::constants::BUNDLE_SIZE as u64)
+            + result.position as u64;
+        log::info!(
+            "Source: bundle {:06}, position {} (global: {})\n",
+            result.bundle_number,
+            result.position,
+            global_pos
+        );
     }
-    
+
     // Output document (always to stdout)
     let json = serde_json::to_string_pretty(&result.document)?;
     println!("{}", json);
@@ -124,7 +171,7 @@ pub fn cmd_did_resolve(dir: PathBuf, input: String, handle_resolver_url: Option<
 fn calculate_shard_for_display(identifier: &str) -> u8 {
     use fnv::FnvHasher;
     use std::hash::Hasher;
-    
+
     let mut hasher = FnvHasher::default();
     hasher.write(identifier.as_bytes());
     let hash = hasher.finish() as u32;
@@ -135,27 +182,30 @@ fn calculate_shard_for_display(identifier: &str) -> u8 {
 // DID HANDLE - Resolve handle to DID
 // ============================================================================
 
-pub fn cmd_did_handle(dir: PathBuf, handle: String, handle_resolver_url: Option<String>) -> Result<()> {
+pub fn cmd_did_handle(
+    dir: PathBuf,
+    handle: String,
+    handle_resolver_url: Option<String>,
+) -> Result<()> {
     use plcbundle::constants;
-    
+
     // Use default resolver if none provided
-    let resolver_url = handle_resolver_url.or_else(|| {
-        Some(constants::DEFAULT_HANDLE_RESOLVER_URL.to_string())
-    });
-    
+    let resolver_url =
+        handle_resolver_url.or_else(|| Some(constants::DEFAULT_HANDLE_RESOLVER_URL.to_string()));
+
     // Initialize manager with handle resolver (default or provided)
     let manager = BundleManager::with_handle_resolver(dir, resolver_url)?;
-    
+
     // Resolve handle to DID
     let (did, resolve_time) = manager.resolve_handle_or_did(&handle)?;
-    
+
     if resolve_time > 0 {
         println!("{}", did);
     } else {
         // If it was already a DID, just print it
         println!("{}", did);
     }
-    
+
     Ok(())
 }
 
@@ -166,31 +216,41 @@ pub fn cmd_did_handle(dir: PathBuf, handle: String, handle_resolver_url: Option<
 pub fn cmd_did_lookup(dir: PathBuf, input: String, verbose: bool, json: bool) -> Result<()> {
     use plcbundle::constants;
     use std::time::Instant;
-    
+
     // Use default resolver if none provided (same pattern as cmd_did_resolve)
     let resolver_url = Some(constants::DEFAULT_HANDLE_RESOLVER_URL.to_string());
-    
+
     // Initialize manager with handle resolver (default or provided)
     let manager = BundleManager::with_handle_resolver(dir, resolver_url)?;
-    
+
     // Resolve handle to DID if needed
     let (did, handle_resolve_time) = manager.resolve_handle_or_did(&input)?;
-    
+
     if handle_resolve_time > 0 {
-        log::info!("Resolved handle: {} → {} (in {}ms)", input, did, handle_resolve_time);
+        log::info!(
+            "Resolved handle: {} → {} (in {}ms)",
+            input,
+            did,
+            handle_resolve_time
+        );
     } else {
         log::info!("Looking up DID: {}", did);
     }
-    
+
     // Get DID index for shard calculation (only for PLC DIDs)
     if did.starts_with("did:plc:") {
         let identifier = &did[8..]; // Strip "did:plc:" prefix
         let shard_num = calculate_shard_for_display(identifier);
-        log::debug!("DID {} -> identifier '{}' -> shard {:02x}", did, identifier, shard_num);
+        log::debug!(
+            "DID {} -> identifier '{}' -> shard {:02x}",
+            did,
+            identifier,
+            shard_num
+        );
     }
-    
+
     let total_start = Instant::now();
-    
+
     // Lookup operations with locations and stats (for verbose mode)
     let (ops_with_loc, shard_stats, shard_num, lookup_timings, load_time) = if verbose {
         manager.get_did_operations_with_locations_and_stats(&did)?
@@ -198,66 +258,102 @@ pub fn cmd_did_lookup(dir: PathBuf, input: String, verbose: bool, json: bool) ->
         let lookup_start = Instant::now();
         let ops = manager.get_did_operations_with_locations(&did)?;
         let lookup_elapsed = lookup_start.elapsed();
-        (ops, DIDLookupStats::default(), 0, DIDLookupTimings::default(), lookup_elapsed)
+        (
+            ops,
+            DIDLookupStats::default(),
+            0,
+            DIDLookupTimings::default(),
+            lookup_elapsed,
+        )
     };
-    
-    let index_time = lookup_timings.extract_identifier + lookup_timings.calculate_shard + lookup_timings.load_shard + lookup_timings.search;
+
+    let index_time = lookup_timings.extract_identifier
+        + lookup_timings.calculate_shard
+        + lookup_timings.load_shard
+        + lookup_timings.search;
     let lookup_elapsed = index_time + load_time;
-    
+
     // Show shard stats if available
     if verbose && shard_stats.total_entries > 0 {
-        log::debug!("Shard {:02x} loaded, size: {} bytes", shard_num, shard_stats.shard_size);
-        
+        log::debug!(
+            "Shard {:02x} loaded, size: {} bytes",
+            shard_num,
+            shard_stats.shard_size
+        );
+
         let reduction = if shard_stats.total_entries > 0 {
-            ((shard_stats.total_entries - shard_stats.prefix_narrowed_to) as f64 / shard_stats.total_entries as f64) * 100.0
+            ((shard_stats.total_entries - shard_stats.prefix_narrowed_to) as f64
+                / shard_stats.total_entries as f64)
+                * 100.0
         } else {
             0.0
         };
-        
-        log::debug!("Prefix index narrowed search: {} entries → {} entries ({:.1}% reduction)",
-            shard_stats.total_entries, shard_stats.prefix_narrowed_to, reduction);
-        log::debug!("Binary search found {} locations after {} attempts",
-            shard_stats.locations_found, shard_stats.binary_search_attempts);
+
+        log::debug!(
+            "Prefix index narrowed search: {} entries → {} entries ({:.1}% reduction)",
+            shard_stats.total_entries,
+            shard_stats.prefix_narrowed_to,
+            reduction
+        );
+        log::debug!(
+            "Binary search found {} locations after {} attempts",
+            shard_stats.locations_found,
+            shard_stats.binary_search_attempts
+        );
     }
-    
+
     // Check mempool
     let mempool_start = Instant::now();
     let mempool_ops = manager.get_did_operations_from_mempool(&did)?;
     let mempool_elapsed = mempool_start.elapsed();
-    
+
     let total_elapsed = total_start.elapsed();
-    
+
     // Show verbose timing breakdown
     if verbose {
         // Convert handle resolution time to Duration
         let handle_resolve_duration = std::time::Duration::from_millis(handle_resolve_time);
-        
+
         if handle_resolve_time > 0 {
             log::info!("Handle resolution: {:?}", handle_resolve_duration);
         }
-        
+
         // Show detailed index lookup timings
         log::info!("Index Lookup Breakdown:");
         log::info!("  Extract ID:    {:?}", lookup_timings.extract_identifier);
         log::info!("  Calc shard:    {:?}", lookup_timings.calculate_shard);
-        log::info!("  Load shard:    {:?} ({})", 
+        log::info!(
+            "  Load shard:    {:?} ({})",
             lookup_timings.load_shard,
-            if lookup_timings.cache_hit { "cache hit" } else { "cache miss" });
-        
+            if lookup_timings.cache_hit {
+                "cache hit"
+            } else {
+                "cache miss"
+            }
+        );
+
         // Search breakdown
         log::info!("  Search:");
         if let Some(ref base_time) = lookup_timings.base_search_time {
             log::info!("    Base shard:  {:?}", base_time);
         }
         if !lookup_timings.delta_segment_times.is_empty() {
-            let total_delta_time: std::time::Duration = lookup_timings.delta_segment_times.iter()
+            let total_delta_time: std::time::Duration = lookup_timings
+                .delta_segment_times
+                .iter()
                 .map(|(_, time)| *time)
                 .sum();
-            log::info!("    Delta segs:  {:?} ({} segment{})", 
+            log::info!(
+                "    Delta segs:  {:?} ({} segment{})",
                 total_delta_time,
                 lookup_timings.delta_segment_times.len(),
-                if lookup_timings.delta_segment_times.len() == 1 { "" } else { "s" });
-            
+                if lookup_timings.delta_segment_times.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            );
+
             // Show individual delta segments if there are multiple
             if lookup_timings.delta_segment_times.len() > 1 {
                 for (seg_name, seg_time) in &lookup_timings.delta_segment_times {
@@ -270,18 +366,24 @@ pub fn cmd_did_lookup(dir: PathBuf, input: String, verbose: bool, json: bool) ->
         }
         log::info!("    Search total: {:?}", lookup_timings.search);
         log::info!("  Index total:   {:?}", index_time);
-        log::info!("  Load operations: {:?} ({} operations)", load_time, ops_with_loc.len());
+        log::info!(
+            "  Load operations: {:?} ({} operations)",
+            load_time,
+            ops_with_loc.len()
+        );
         log::info!("  Mempool check: {:?}", mempool_elapsed);
-        
+
         // Calculate true total including handle resolution
         let true_total = handle_resolve_duration + total_elapsed;
-        log::info!("Total:          {:?} (handle: {:?} + lookup: {:?})", 
-            true_total, 
-            handle_resolve_duration, 
-            total_elapsed);
+        log::info!(
+            "Total:          {:?} (handle: {:?} + lookup: {:?})",
+            true_total,
+            handle_resolve_duration,
+            total_elapsed
+        );
         log::info!("");
     }
-    
+
     if ops_with_loc.is_empty() && mempool_ops.is_empty() {
         if json {
             println!("{{\"found\": false, \"operations\": []}}");
@@ -290,12 +392,27 @@ pub fn cmd_did_lookup(dir: PathBuf, input: String, verbose: bool, json: bool) ->
         }
         return Ok(());
     }
-    
+
     if json {
-        return output_lookup_json(&did, &ops_with_loc, &mempool_ops, total_elapsed, lookup_elapsed, mempool_elapsed);
+        return output_lookup_json(
+            &did,
+            &ops_with_loc,
+            &mempool_ops,
+            total_elapsed,
+            lookup_elapsed,
+            mempool_elapsed,
+        );
     }
-    
-    display_lookup_results(&did, &ops_with_loc, &mempool_ops, total_elapsed, lookup_elapsed, mempool_elapsed, verbose)
+
+    display_lookup_results(
+        &did,
+        &ops_with_loc,
+        &mempool_ops,
+        total_elapsed,
+        lookup_elapsed,
+        mempool_elapsed,
+        verbose,
+    )
 }
 
 fn output_lookup_json(
@@ -307,7 +424,7 @@ fn output_lookup_json(
     mempool_elapsed: std::time::Duration,
 ) -> Result<()> {
     use serde_json::json;
-    
+
     let mut bundled = Vec::new();
     for owl in ops_with_loc {
         bundled.push(json!({
@@ -318,7 +435,7 @@ fn output_lookup_json(
             "created_at": owl.operation.created_at,
         }));
     }
-    
+
     let mut mempool = Vec::new();
     for op in mempool_ops {
         mempool.push(json!({
@@ -327,7 +444,7 @@ fn output_lookup_json(
             "created_at": op.created_at,
         }));
     }
-    
+
     let output = json!({
         "found": true,
         "did": did,
@@ -339,7 +456,7 @@ fn output_lookup_json(
         "bundled": bundled,
         "mempool": mempool,
     });
-    
+
     println!("{}", serde_json::to_string_pretty(&output)?);
     Ok(())
 }
@@ -356,12 +473,12 @@ fn display_lookup_results(
     let nullified_count = ops_with_loc.iter().filter(|owl| owl.nullified).count();
     let total_ops = ops_with_loc.len() + mempool_ops.len();
     let active_ops = ops_with_loc.len() - nullified_count + mempool_ops.len();
-    
+
     println!("═══════════════════════════════════════════════════════════════");
     println!("                    DID Lookup Results");
     println!("═══════════════════════════════════════════════════════════════\n");
     println!("DID: {}\n", did);
-    
+
     println!("Summary");
     println!("───────");
     println!("  Total operations:   {}", total_ops);
@@ -376,44 +493,59 @@ fn display_lookup_results(
         println!("  Mempool:            {}", mempool_ops.len());
     }
     println!();
-    
+
     println!("Performance");
     println!("───────────");
     println!("  Index lookup:       {:?}", lookup_elapsed);
     println!("  Mempool check:      {:?}", mempool_elapsed);
     println!("  Total time:         {:?}\n", total_elapsed);
-    
+
     // Show operations
     if !ops_with_loc.is_empty() {
         println!("Bundled Operations ({} total)", ops_with_loc.len());
         println!("══════════════════════════════════════════════════════════════\n");
-        
+
         for (i, owl) in ops_with_loc.iter().enumerate() {
-            let status = if owl.nullified { "✗ Nullified" } else { "✓ Active" };
-            
-            println!("Operation {} [Bundle {:06}, Position {:04}]", i + 1, owl.bundle, owl.position);
-            println!("   CID:        {}", owl.operation.cid.as_ref().unwrap_or(&"".to_string()));
+            let status = if owl.nullified {
+                "✗ Nullified"
+            } else {
+                "✓ Active"
+            };
+
+            println!(
+                "Operation {} [Bundle {:06}, Position {:04}]",
+                i + 1,
+                owl.bundle,
+                owl.position
+            );
+            println!(
+                "   CID:        {}",
+                owl.operation.cid.as_ref().unwrap_or(&"".to_string())
+            );
             println!("   Created:    {}", owl.operation.created_at);
             println!("   Status:     {}\n", status);
-            
+
             if verbose && !owl.nullified {
                 show_operation_details(&owl.operation);
             }
         }
     }
-    
+
     if !mempool_ops.is_empty() {
         println!("Mempool Operations ({} total)", mempool_ops.len());
         println!("══════════════════════════════════════════════════════════════\n");
-        
+
         for (i, op) in mempool_ops.iter().enumerate() {
             println!("Operation {} [Mempool]", i + 1);
-            println!("   CID:        {}", op.cid.as_ref().unwrap_or(&"".to_string()));
+            println!(
+                "   CID:        {}",
+                op.cid.as_ref().unwrap_or(&"".to_string())
+            );
             println!("   Created:    {}", op.created_at);
             println!("   Status:     ✓ Active\n");
         }
     }
-    
+
     println!("✓ Lookup complete in {:?}", total_elapsed);
     Ok(())
 }
@@ -423,7 +555,7 @@ fn show_operation_details(op: &plcbundle::Operation) {
         if let Some(op_type) = op_data.get("type").and_then(|v| v.as_str()) {
             println!("   Type:       {}", op_type);
         }
-        
+
         if let Some(handle) = op_data.get("handle").and_then(|v| v.as_str()) {
             println!("   Handle:     {}", handle);
         } else if let Some(aka) = op_data.get("alsoKnownAs").and_then(|v| v.as_array()) {
@@ -439,9 +571,13 @@ fn show_operation_details(op: &plcbundle::Operation) {
 // DID BATCH - Process multiple DIDs (TODO)
 // ============================================================================
 
-pub fn cmd_did_batch(_dir: PathBuf, _action: String, _workers: usize, _output: Option<PathBuf>, _from_stdin: bool) -> Result<()> {
+pub fn cmd_did_batch(
+    _dir: PathBuf,
+    _action: String,
+    _workers: usize,
+    _output: Option<PathBuf>,
+    _from_stdin: bool,
+) -> Result<()> {
     log::error!("`did batch` not yet implemented");
     Ok(())
 }
-
-

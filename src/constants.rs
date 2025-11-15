@@ -101,4 +101,3 @@ pub const DEFAULT_ORIGIN: &str = "local";
 
 /// Zstd compression level (1 = fast, 3 = balanced, 19 = maximum)
 pub const ZSTD_COMPRESSION_LEVEL: i32 = 1;
-

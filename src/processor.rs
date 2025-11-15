@@ -1,5 +1,5 @@
-use crate::options::{Options, QueryMode};
 use crate::index::Index;
+use crate::options::{Options, QueryMode};
 use anyhow::Result;
 use rayon::prelude::*;
 use sonic_rs::JsonValueTrait;
@@ -47,7 +47,7 @@ impl QueryEngine {
 
     fn query_simple(&self, json_line: &str, path: &[String]) -> Result<Option<String>> {
         let data: sonic_rs::Value = sonic_rs::from_str(json_line)?;
-        
+
         let mut current = &data;
         for key in path {
             match current.get(key) {
@@ -69,13 +69,18 @@ impl QueryEngine {
         Ok(Some(output))
     }
 
-    fn query_jmespath(&self, json_line: &str, expr: &jmespath::Expression<'_>) -> Result<Option<String>> {
+    fn query_jmespath(
+        &self,
+        json_line: &str,
+        expr: &jmespath::Expression<'_>,
+    ) -> Result<Option<String>> {
         let data = jmespath::Variable::from_json(json_line)
             .map_err(|e| anyhow::anyhow!("Failed to parse JSON: {}", e))?;
-        
-        let result = expr.search(&data)
+
+        let result = expr
+            .search(&data)
             .map_err(|e| anyhow::anyhow!("JMESPath search failed: {}", e))?;
-        
+
         if result.is_null() {
             return Ok(None);
         }
@@ -145,7 +150,7 @@ impl Processor {
     /// Create a new processor with the given options
     pub fn new(options: Options) -> Result<Self> {
         let query_engine = QueryEngine::new(&options.query, options.query_mode)?;
-        
+
         Ok(Self {
             options,
             query_engine,
@@ -182,8 +187,11 @@ impl Processor {
         let callback = Arc::new(progress_callback);
 
         let process_fn = |bundle_num: &u32| -> Result<()> {
-            let bundle_path = self.options.directory.join(format!("{:06}.jsonl.zst", bundle_num));
-            
+            let bundle_path = self
+                .options
+                .directory
+                .join(format!("{:06}.jsonl.zst", bundle_num));
+
             if !bundle_path.exists() {
                 return Ok(());
             }

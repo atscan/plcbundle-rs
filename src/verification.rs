@@ -1,12 +1,12 @@
 // src/verification.rs
-use crate::index::BundleMetadata;
-use crate::manager::{VerifySpec, VerifyResult, ChainVerifySpec, ChainVerifyResult};
-use crate::index::Index;
 use crate::bundle_format;
+use crate::index::BundleMetadata;
+use crate::index::Index;
+use crate::manager::{ChainVerifyResult, ChainVerifySpec, VerifyResult, VerifySpec};
 use anyhow::Result;
-use std::path::Path;
 use std::fs::File;
 use std::io::Read;
+use std::path::Path;
 
 pub fn verify_bundle(
     directory: &Path,
@@ -14,9 +14,9 @@ pub fn verify_bundle(
     spec: VerifySpec,
 ) -> Result<VerifyResult> {
     let mut errors = Vec::new();
-    
+
     let bundle_path = directory.join(format!("{:06}.jsonl.zst", metadata.bundle_number));
-    
+
     if !bundle_path.exists() {
         errors.push(format!("Bundle file not found: {:?}", bundle_path));
         return Ok(VerifyResult {
@@ -24,7 +24,7 @@ pub fn verify_bundle(
             errors,
         });
     }
-    
+
     // Fast mode: only check metadata frame, skip all hash calculations
     if spec.fast {
         match bundle_format::extract_metadata_from_file(&bundle_path) {
@@ -36,21 +36,21 @@ pub fn verify_bundle(
                         metadata.bundle_number, file_metadata.bundle_number
                     ));
                 }
-                
+
                 if file_metadata.content_hash != metadata.content_hash {
                     errors.push(format!(
                         "Metadata content hash mismatch: expected {}, got {}",
                         metadata.content_hash, file_metadata.content_hash
                     ));
                 }
-                
+
                 if file_metadata.operation_count != metadata.operation_count as usize {
                     errors.push(format!(
                         "Metadata operation count mismatch: expected {}, got {}",
                         metadata.operation_count, file_metadata.operation_count
                     ));
                 }
-                
+
                 // Check parent hash if present
                 if let Some(ref parent_hash) = file_metadata.parent_hash {
                     if !metadata.parent.is_empty() && parent_hash != &metadata.parent {
@@ -72,41 +72,44 @@ pub fn verify_bundle(
                 // but don't fail (as per user request: "otherwise no change")
             }
         }
-        
+
         return Ok(VerifyResult {
             valid: errors.is_empty(),
             errors,
         });
     }
-    
+
     // Optimize: do both hashes efficiently in a single pass
     if spec.check_hash && spec.check_content_hash {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         use std::io::{BufReader, Read};
-        
+
         // Read entire file once into memory (like Go does)
         let file_data = std::fs::read(&bundle_path)?;
-        
+
         // Hash compressed file (entire file)
         let mut comp_hasher = Sha256::new();
         comp_hasher.update(&file_data);
         let comp_hash = format!("{:x}", comp_hasher.finalize());
-        
+
         // For content hash, skip metadata if present, then decompress
         let mut content_start = 0;
         if file_data.len() >= 4 {
-            let magic = u32::from_le_bytes([file_data[0], file_data[1], file_data[2], file_data[3]]);
+            let magic =
+                u32::from_le_bytes([file_data[0], file_data[1], file_data[2], file_data[3]]);
             if magic == bundle_format::SKIPPABLE_MAGIC_METADATA && file_data.len() >= 8 {
-                let frame_size = u32::from_le_bytes([file_data[4], file_data[5], file_data[6], file_data[7]]) as usize;
+                let frame_size =
+                    u32::from_le_bytes([file_data[4], file_data[5], file_data[6], file_data[7]])
+                        as usize;
                 content_start = 8 + frame_size; // Skip magic(4) + size(4) + data
             }
         }
-        
+
         // Use streaming decompression with hashing (more memory efficient)
         let compressed_data = &file_data[content_start..];
         let decoder = zstd::Decoder::new(compressed_data)?;
         let mut reader = BufReader::with_capacity(256 * 1024, decoder); // 256KB buffer
-        
+
         let mut content_hasher = Sha256::new();
         let mut buf = vec![0u8; 64 * 1024]; // 64KB read buffer
         loop {
@@ -117,14 +120,14 @@ pub fn verify_bundle(
             content_hasher.update(&buf[..n]);
         }
         let content_hash = format!("{:x}", content_hasher.finalize());
-        
+
         if comp_hash != metadata.compressed_hash {
             errors.push(format!(
                 "Compressed hash mismatch: expected {}, got {}",
                 metadata.compressed_hash, comp_hash
             ));
         }
-        
+
         if content_hash != metadata.content_hash {
             errors.push(format!(
                 "Content hash mismatch: expected {}, got {}",
@@ -133,14 +136,14 @@ pub fn verify_bundle(
         }
     } else if spec.check_hash {
         // Only compressed hash - fast path with streaming
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         use std::io::BufReader;
         let file = File::open(&bundle_path)?;
         let mut reader = BufReader::with_capacity(64 * 1024, file); // 64KB buffer
         let mut hasher = Sha256::new();
         std::io::copy(&mut reader, &mut hasher)?;
         let hash = format!("{:x}", hasher.finalize());
-        
+
         if hash != metadata.compressed_hash {
             errors.push(format!(
                 "Compressed hash mismatch: expected {}, got {}",
@@ -149,11 +152,11 @@ pub fn verify_bundle(
         }
     } else if spec.check_content_hash {
         // Only content hash
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         use std::io::{BufReader, Seek, SeekFrom};
         let file = File::open(&bundle_path)?;
         let mut reader = BufReader::new(file);
-        
+
         // Skip metadata frame if present
         let mut magic_buf = [0u8; 4];
         if reader.read_exact(&mut magic_buf).is_ok() {
@@ -170,15 +173,15 @@ pub fn verify_bundle(
         } else {
             reader.seek(SeekFrom::Start(0))?;
         }
-        
+
         let mut decoder = zstd::Decoder::new(reader)?;
         let mut content = Vec::new();
         decoder.read_to_end(&mut content)?;
-        
+
         let mut hasher = Sha256::new();
         hasher.update(&content);
         let hash = format!("{:x}", hasher.finalize());
-        
+
         if hash != metadata.content_hash {
             errors.push(format!(
                 "Content hash mismatch: expected {}, got {}",
@@ -186,12 +189,12 @@ pub fn verify_bundle(
             ));
         }
     }
-    
+
     if spec.check_operations {
         // Verify operation count
         // Skip metadata frame if present
         let mut file = File::open(&bundle_path)?;
-        
+
         // Try to skip metadata frame
         let mut magic_buf = [0u8; 4];
         if file.read_exact(&mut magic_buf).is_ok() {
@@ -213,13 +216,17 @@ pub fn verify_bundle(
             use std::io::Seek;
             file.seek(std::io::SeekFrom::Start(0))?;
         }
-        
+
         let decoder = zstd::Decoder::new(file)?;
         let reader = std::io::BufReader::new(decoder);
         use std::io::BufRead;
-        
-        let count = reader.lines().filter_map(|l| l.ok()).filter(|l| !l.is_empty()).count();
-        
+
+        let count = reader
+            .lines()
+            .filter_map(|l| l.ok())
+            .filter(|l| !l.is_empty())
+            .count();
+
         if count != metadata.operation_count as usize {
             errors.push(format!(
                 "Operation count mismatch: expected {}, got {}",
@@ -227,7 +234,7 @@ pub fn verify_bundle(
             ));
         }
     }
-    
+
     // Verify metadata in skippable frame (if present)
     // This is optional - some bundles may not have metadata frame
     match bundle_format::extract_metadata_from_file(&bundle_path) {
@@ -239,21 +246,21 @@ pub fn verify_bundle(
                     metadata.bundle_number, file_metadata.bundle_number
                 ));
             }
-            
+
             if file_metadata.content_hash != metadata.content_hash {
                 errors.push(format!(
                     "Metadata content hash mismatch: expected {}, got {}",
                     metadata.content_hash, file_metadata.content_hash
                 ));
             }
-            
+
             if file_metadata.operation_count != metadata.operation_count as usize {
                 errors.push(format!(
                     "Metadata operation count mismatch: expected {}, got {}",
                     metadata.operation_count, file_metadata.operation_count
                 ));
             }
-            
+
             // Check parent hash if present
             if let Some(ref parent_hash) = file_metadata.parent_hash {
                 if !metadata.parent.is_empty() && parent_hash != &metadata.parent {
@@ -274,7 +281,7 @@ pub fn verify_bundle(
             // No error is added, verification continues
         }
     }
-    
+
     Ok(VerifyResult {
         valid: errors.is_empty(),
         errors,
@@ -282,14 +289,14 @@ pub fn verify_bundle(
 }
 
 pub fn verify_chain(
-    _directory: &Path,  // Add underscore prefix
+    _directory: &Path, // Add underscore prefix
     index: &Index,
     spec: ChainVerifySpec,
 ) -> Result<ChainVerifyResult> {
     let end = spec.end_bundle.unwrap_or(index.last_bundle);
     let mut errors = Vec::new();
     let mut bundles_checked = 0;
-    
+
     for bundle_num in spec.start_bundle..=end {
         let metadata = match index.get_bundle(bundle_num) {
             Some(m) => m,
@@ -298,18 +305,21 @@ pub fn verify_chain(
                 continue;
             }
         };
-        
+
         bundles_checked += 1;
-        
+
         if spec.check_parent_links && bundle_num > 1 {
             let prev_metadata = match index.get_bundle(bundle_num - 1) {
                 Some(m) => m,
                 None => {
-                    errors.push((bundle_num, format!("Previous bundle {} not found", bundle_num - 1)));
+                    errors.push((
+                        bundle_num,
+                        format!("Previous bundle {} not found", bundle_num - 1),
+                    ));
                     continue;
                 }
             };
-            
+
             if metadata.parent != prev_metadata.hash {
                 errors.push((
                     bundle_num,
@@ -319,14 +329,14 @@ pub fn verify_chain(
                     ),
                 ));
             }
-            
+
             // Validate cursor matches previous bundle's end_time per spec
             let expected_cursor = if bundle_num == 1 {
                 String::new() // First bundle has empty cursor
             } else {
                 prev_metadata.end_time.clone()
             };
-            
+
             if metadata.cursor != expected_cursor {
                 errors.push((
                     bundle_num,
@@ -349,7 +359,7 @@ pub fn verify_chain(
             }
         }
     }
-    
+
     Ok(ChainVerifyResult {
         valid: errors.is_empty(),
         bundles_checked,

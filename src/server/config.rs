@@ -8,4 +8,3 @@ pub struct ServerConfig {
     pub enable_resolver: bool,
     pub version: String,
 }
-

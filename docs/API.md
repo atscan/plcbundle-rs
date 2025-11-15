@@ -41,6 +41,7 @@ export_to_writer<W: Write>(spec: ExportSpec, writer: W) -> Result<ExportStats>
 get_did_operations(did: &str) -> Result<Vec<Operation>>
 resolve_did(did: &str) -> Result<DIDDocument>
 batch_resolve_dids(dids: Vec<String>) -> Result<HashMap<String, Vec<Operation>>>
+sample_random_dids(count: usize, seed: Option<u64>) -> Result<Vec<String>>
 
 // === Verification ===
 verify_bundle(num: u32, spec: VerifySpec) -> Result<VerifyResult>
@@ -353,6 +354,19 @@ pub fn batch_resolve_dids(&self, dids: Vec<String>) -> Result<HashMap<String, Ve
 **Use Cases:**
 - Bulk DID resolution
 - Identity verification workflows
+
+### Random DID Sampling
+
+```rust
+pub fn sample_random_dids(&self, count: usize, seed: Option<u64>) -> Result<Vec<String>>
+```
+
+**Purpose**: Retrieve pseudo-random DIDs directly from the DID index without touching bundle files.
+
+**Details:**
+- Reads identifiers from memory-mapped shard data (no decompression).
+- Deterministic when `seed` is provided; otherwise uses current timestamp.
+- Useful for benchmarks, sampling, or quick spot checks.
 
 ---
 

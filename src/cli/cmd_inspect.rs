@@ -1,12 +1,12 @@
 // Inspect command - deep analysis of bundle contents
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
+use chrono::DateTime;
 use clap::Args;
 use plcbundle::{BundleManager, LoadOptions, Operation};
-use std::path::PathBuf;
-use std::collections::HashMap;
 use serde::Serialize;
 use serde_json::Value;
-use chrono::DateTime;
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 #[derive(Args)]
 #[command(
@@ -198,9 +198,12 @@ pub fn run(cmd: InspectCommand, dir: PathBuf) -> Result<()> {
         let index = manager.get_bundle_metadata(num)?;
 
         let embedded_info = embedded.as_ref().map(|meta| {
-            let metadata_frame_size = meta.frame_offsets.last().map(|&last_offset| {
-                file_size as i64 - last_offset
-            }).filter(|&size| size > 0).map(|s| s as u64);
+            let metadata_frame_size = meta
+                .frame_offsets
+                .last()
+                .map(|&last_offset| file_size as i64 - last_offset)
+                .filter(|&size| size > 0)
+                .map(|s| s as u64);
 
             EmbeddedMetadataInfo {
                 format: meta.format.clone(),
@@ -222,7 +225,8 @@ pub fn run(cmd: InspectCommand, dir: PathBuf) -> Result<()> {
         });
 
         let index_info = index.as_ref().map(|meta| {
-            let compression_ratio = (1.0 - meta.compressed_size as f64 / meta.uncompressed_size as f64) * 100.0;
+            let compression_ratio =
+                (1.0 - meta.compressed_size as f64 / meta.uncompressed_size as f64) * 100.0;
             IndexMetadataInfo {
                 hash: meta.hash.clone(),
                 parent: meta.parent.clone(),
@@ -355,9 +359,11 @@ fn analyze_operations(operations: &[Operation], cmd: &InspectCommand) -> Result<
                                 // Count domain (TLD)
                                 let parts: Vec<&str> = handle.split('.').collect();
                                 if parts.len() >= 2 {
-                                    let domain = format!("{}.{}",
+                                    let domain = format!(
+                                        "{}.{}",
                                         parts[parts.len() - 2],
-                                        parts[parts.len() - 1]);
+                                        parts[parts.len() - 1]
+                                    );
                                     *domain_counts.entry(domain).or_insert(0) += 1;
                                 }
 
@@ -469,16 +475,36 @@ fn analyze_operations(operations: &[Operation], cmd: &InspectCommand) -> Result<
         top_dids,
         single_op_dids,
         multi_op_dids,
-        total_handles: if cmd.skip_patterns { None } else { Some(total_handles) },
+        total_handles: if cmd.skip_patterns {
+            None
+        } else {
+            Some(total_handles)
+        },
         top_domains,
-        invalid_handles: if cmd.skip_patterns { None } else { Some(invalid_handles) },
-        total_services: if cmd.skip_patterns { None } else { Some(total_services) },
-        unique_endpoints: if cmd.skip_patterns { None } else { Some(endpoint_counts.len()) },
+        invalid_handles: if cmd.skip_patterns {
+            None
+        } else {
+            Some(invalid_handles)
+        },
+        total_services: if cmd.skip_patterns {
+            None
+        } else {
+            Some(total_services)
+        },
+        unique_endpoints: if cmd.skip_patterns {
+            None
+        } else {
+            Some(endpoint_counts.len())
+        },
         top_pds_endpoints,
         time_distribution,
         avg_ops_per_minute,
         avg_op_size,
-        min_op_size: if min_op_size == usize::MAX { 0 } else { min_op_size },
+        min_op_size: if min_op_size == usize::MAX {
+            0
+        } else {
+            min_op_size
+        },
         max_op_size,
         total_op_size,
     })
@@ -589,9 +615,18 @@ fn display_human(
     if let Some(ref index_meta) = result.index_metadata {
         println!("\n  Size:");
         println!("    File size:         {}", format_bytes(result.file_size));
-        println!("    Uncompressed:      {}", format_bytes(index_meta.uncompressed_size));
-        println!("    Compressed:        {}", format_bytes(index_meta.compressed_size));
-        println!("    Compression:       {:.1}%", index_meta.compression_ratio);
+        println!(
+            "    Uncompressed:      {}",
+            format_bytes(index_meta.uncompressed_size)
+        );
+        println!(
+            "    Compressed:        {}",
+            format_bytes(index_meta.compressed_size)
+        );
+        println!(
+            "    Compression:       {:.1}%",
+            index_meta.compression_ratio
+        );
         println!("    Compressed hash:   {}", index_meta.compressed_hash);
     } else {
         println!("  File size:           {}", format_bytes(result.file_size));
@@ -613,14 +648,24 @@ fn display_human(
             println!("  Created at:          {}", meta.created_at);
 
             println!("\n  Content:");
-            println!("    Operations:        {}", format_number(meta.operation_count));
+            println!(
+                "    Operations:        {}",
+                format_number(meta.operation_count)
+            );
             println!("    Unique DIDs:       {}", format_number(meta.did_count));
-            println!("    Frames:            {} × {} ops", meta.frame_count, format_number(meta.frame_size));
-            println!("    Timespan:          {} → {}", meta.start_time, meta.end_time);
+            println!(
+                "    Frames:            {} × {} ops",
+                meta.frame_count,
+                format_number(meta.frame_size)
+            );
+            println!(
+                "    Timespan:          {} → {}",
+                meta.start_time, meta.end_time
+            );
 
             let duration_ms = if let (Ok(start), Ok(end)) = (
                 DateTime::parse_from_rfc3339(&meta.start_time),
-                DateTime::parse_from_rfc3339(&meta.end_time)
+                DateTime::parse_from_rfc3339(&meta.end_time),
             ) {
                 end.signed_duration_since(start).num_seconds()
             } else {
@@ -660,9 +705,11 @@ fn display_human(
                 if meta.frame_offsets.len() <= 10 {
                     println!("    Offsets:           {:?}", meta.frame_offsets);
                 } else {
-                    println!("    First offsets:     {:?} ... ({} more)",
+                    println!(
+                        "    First offsets:     {:?} ... ({} more)",
                         &meta.frame_offsets[..5],
-                        meta.frame_offsets.len() - 5);
+                        meta.frame_offsets.len() - 5
+                    );
                 }
             }
 
@@ -674,13 +721,17 @@ fn display_human(
     println!("📊 Operations Analysis");
     println!("──────────────────────");
     println!("  Total operations:    {}", format_number(result.total_ops));
-    println!("  Active:              {} ({:.1}%)",
+    println!(
+        "  Active:              {} ({:.1}%)",
         format_number(result.active_ops),
-        (result.active_ops as f64 / result.total_ops as f64 * 100.0));
+        (result.active_ops as f64 / result.total_ops as f64 * 100.0)
+    );
     if result.nullified_ops > 0 {
-        println!("  Nullified:           {} ({:.1}%)",
+        println!(
+            "  Nullified:           {} ({:.1}%)",
             format_number(result.nullified_ops),
-            (result.nullified_ops as f64 / result.total_ops as f64 * 100.0));
+            (result.nullified_ops as f64 / result.total_ops as f64 * 100.0)
+        );
     }
 
     if !result.operation_types.is_empty() {
@@ -689,7 +740,12 @@ fn display_human(
         types.sort_by(|a, b| b.1.cmp(a.1));
         for (op_type, count) in types {
             let pct = *count as f64 / result.total_ops as f64 * 100.0;
-            println!("    {:<25} {} ({:.1}%)", op_type, format_number(*count), pct);
+            println!(
+                "    {:<25} {} ({:.1}%)",
+                op_type,
+                format_number(*count),
+                pct
+            );
         }
     }
     println!();
@@ -697,13 +753,20 @@ fn display_human(
     // DID patterns
     println!("👤 DID Activity Patterns");
     println!("────────────────────────");
-    println!("  Unique DIDs:         {}", format_number(result.unique_dids));
-    println!("  Single-op DIDs:      {} ({:.1}%)",
+    println!(
+        "  Unique DIDs:         {}",
+        format_number(result.unique_dids)
+    );
+    println!(
+        "  Single-op DIDs:      {} ({:.1}%)",
         format_number(result.single_op_dids),
-        (result.single_op_dids as f64 / result.unique_dids as f64 * 100.0));
-    println!("  Multi-op DIDs:       {} ({:.1}%)",
+        (result.single_op_dids as f64 / result.unique_dids as f64 * 100.0)
+    );
+    println!(
+        "  Multi-op DIDs:       {} ({:.1}%)",
         format_number(result.multi_op_dids),
-        (result.multi_op_dids as f64 / result.unique_dids as f64 * 100.0));
+        (result.multi_op_dids as f64 / result.unique_dids as f64 * 100.0)
+    );
 
     if !result.top_dids.is_empty() {
         println!("\n  Most Active DIDs:");
@@ -720,9 +783,11 @@ fn display_human(
         println!("  Total handles:       {}", format_number(total_handles));
         if let Some(invalid) = result.invalid_handles {
             if invalid > 0 {
-                println!("  Invalid patterns:    {} ({:.1}%)",
+                println!(
+                    "  Invalid patterns:    {} ({:.1}%)",
                     format_number(invalid),
-                    (invalid as f64 / total_handles as f64 * 100.0));
+                    (invalid as f64 / total_handles as f64 * 100.0)
+                );
             }
         }
 
@@ -730,7 +795,12 @@ fn display_human(
             println!("\n  Top Domains:");
             for dc in &result.top_domains {
                 let pct = dc.count as f64 / total_handles as f64 * 100.0;
-                println!("    {:<25} {} ({:.1}%)", dc.domain, format_number(dc.count), pct);
+                println!(
+                    "    {:<25} {} ({:.1}%)",
+                    dc.domain,
+                    format_number(dc.count),
+                    pct
+                );
             }
         }
         println!();
@@ -761,7 +831,10 @@ fn display_human(
         println!("  Earliest operation:  {}", td.earliest_op);
         println!("  Latest operation:    {}", td.latest_op);
         println!("  Time span:           {}", td.time_span);
-        println!("  Peak hour:           {} ({} ops)", td.peak_hour, td.peak_hour_ops);
+        println!(
+            "  Peak hour:           {} ({} ops)",
+            td.peak_hour, td.peak_hour_ops
+        );
         println!("  Total active hours:  {}", td.total_hours);
         println!("  Avg ops/minute:      {:.1}", result.avg_ops_per_minute);
     }
@@ -770,17 +843,36 @@ fn display_human(
     // Size analysis
     println!("📏 Size Analysis");
     println!("────────────────");
-    println!("  Total data:          {}", format_bytes(result.total_op_size));
-    println!("  Average per op:      {}", format_bytes(result.avg_op_size as u64));
-    println!("  Min operation:       {}", format_bytes(result.min_op_size as u64));
-    println!("  Max operation:       {}\n", format_bytes(result.max_op_size as u64));
+    println!(
+        "  Total data:          {}",
+        format_bytes(result.total_op_size)
+    );
+    println!(
+        "  Average per op:      {}",
+        format_bytes(result.avg_op_size as u64)
+    );
+    println!(
+        "  Min operation:       {}",
+        format_bytes(result.min_op_size as u64)
+    );
+    println!(
+        "  Max operation:       {}\n",
+        format_bytes(result.max_op_size as u64)
+    );
 
     // Sample operations
     if cmd.samples && !operations.is_empty() {
-        println!("📝 Sample Operations (first {})", cmd.sample_count.min(operations.len()));
+        println!(
+            "📝 Sample Operations (first {})",
+            cmd.sample_count.min(operations.len())
+        );
         println!("────────────────────────────────");
         for (i, op) in operations.iter().enumerate().take(cmd.sample_count) {
-            println!("  [{:04}] {}", i, op.cid.as_ref().unwrap_or(&"<no-cid>".to_string()));
+            println!(
+                "  [{:04}] {}",
+                i,
+                op.cid.as_ref().unwrap_or(&"<no-cid>".to_string())
+            );
             println!("         DID: {}", op.did);
             println!("         Time: {}", op.created_at);
             if op.nullified {

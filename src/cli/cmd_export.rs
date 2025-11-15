@@ -65,7 +65,8 @@ pub fn cmd_export(
 
     // Filter bundles by timestamp metadata if --after is specified
     let bundle_numbers: Vec<u32> = if let Some(ref after_ts) = after {
-        bundle_numbers.into_iter()
+        bundle_numbers
+            .into_iter()
             .filter_map(|num| {
                 if let Some(meta) = index.get_bundle(num) {
                     // Check if bundle's end_time is after the filter timestamp
@@ -88,7 +89,10 @@ pub fn cmd_export(
         log::debug!("📦 Index: v{} ({})", index.version, index.origin);
         log::debug!("📊 Processing {} bundles", bundle_numbers.len());
         if let Some(ref count) = count {
-            log::debug!("🔢 Export limit: {} operations", utils::format_number(*count as u64));
+            log::debug!(
+                "🔢 Export limit: {} operations",
+                utils::format_number(*count as u64)
+            );
         }
         if let Some(ref after) = after {
             log::debug!("⏰ After timestamp: {}", after);
@@ -97,7 +101,10 @@ pub fn cmd_export(
 
     // Open output with buffering
     let writer: Box<dyn Write> = if let Some(output_path) = output {
-        Box::new(BufWriter::with_capacity(1024 * 1024, File::create(output_path)?))
+        Box::new(BufWriter::with_capacity(
+            1024 * 1024,
+            File::create(output_path)?,
+        ))
     } else {
         Box::new(BufWriter::with_capacity(1024 * 1024, io::stdout()))
     };
@@ -132,8 +139,13 @@ pub fn cmd_export(
         let reader = BufReader::with_capacity(1024 * 1024, decoder);
 
         // Fast path: no filters and Jsonl format - just pass through lines
-        let needs_parsing = after.is_some() || did.is_some() || op_type.is_some() || 
-                           matches!(format, ExportFormat::Json | ExportFormat::Csv | ExportFormat::Parquet);
+        let needs_parsing = after.is_some()
+            || did.is_some()
+            || op_type.is_some()
+            || matches!(
+                format,
+                ExportFormat::Json | ExportFormat::Csv | ExportFormat::Parquet
+            );
 
         if !needs_parsing {
             // Fast path: no parsing needed, just copy lines
@@ -162,7 +174,10 @@ pub fn cmd_export(
 
                 // Progress update
                 if !quiet && exported_count % BATCH_SIZE == 0 {
-                    eprint!("\r   Exported: {} operations", utils::format_number(exported_count as u64));
+                    eprint!(
+                        "\r   Exported: {} operations",
+                        utils::format_number(exported_count as u64)
+                    );
                     io::stderr().flush()?;
                 }
             }
@@ -191,7 +206,9 @@ pub fn cmd_export(
 
                 // Apply filters using sonic-rs Value API
                 if let Some(ref after_ts) = after {
-                    if let Some(created_at) = data.get("createdAt").or_else(|| data.get("created_at")) {
+                    if let Some(created_at) =
+                        data.get("createdAt").or_else(|| data.get("created_at"))
+                    {
                         if let Some(ts_str) = created_at.as_str() {
                             if ts_str < after_ts.as_str() {
                                 continue;
@@ -251,10 +268,19 @@ pub fn cmd_export(
                     }
                     ExportFormat::Csv => {
                         let did = data.get("did").and_then(|v| v.as_str()).unwrap_or("");
-                        let op = data.get("operation").map(|v| sonic_rs::to_string(v).unwrap_or_default()).unwrap_or_default();
-                        let created_at = data.get("createdAt").or_else(|| data.get("created_at"))
-                            .and_then(|v| v.as_str()).unwrap_or("");
-                        let nullified = data.get("nullified").and_then(|v| v.as_bool()).unwrap_or(false);
+                        let op = data
+                            .get("operation")
+                            .map(|v| sonic_rs::to_string(v).unwrap_or_default())
+                            .unwrap_or_default();
+                        let created_at = data
+                            .get("createdAt")
+                            .or_else(|| data.get("created_at"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let nullified = data
+                            .get("nullified")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
                         format!("{},{},{},{}", did, op, created_at, nullified)
                     }
                     ExportFormat::Parquet => {
@@ -275,7 +301,10 @@ pub fn cmd_export(
 
                 // Progress update
                 if !quiet && exported_count % BATCH_SIZE == 0 {
-                    eprint!("\r   Exported: {} operations", utils::format_number(exported_count as u64));
+                    eprint!(
+                        "\r   Exported: {} operations",
+                        utils::format_number(exported_count as u64)
+                    );
                     io::stderr().flush()?;
                 }
             }
@@ -289,11 +318,15 @@ pub fn cmd_export(
     writer.flush()?;
 
     if !quiet {
-        log::info!("\r   Exported: {} operations", utils::format_number(exported_count as u64));
+        log::info!(
+            "\r   Exported: {} operations",
+            utils::format_number(exported_count as u64)
+        );
         let elapsed = start.elapsed();
         log::info!("✅ Complete in {}", HumanDuration(elapsed));
         if elapsed.as_secs_f64() > 0.0 {
-            log::info!("   Throughput: {:.0} ops/sec",
+            log::info!(
+                "   Throughput: {:.0} ops/sec",
                 exported_count as f64 / elapsed.as_secs_f64()
             );
         }

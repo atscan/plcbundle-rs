@@ -1,9 +1,9 @@
+use super::utils;
 use anyhow::{Result, bail};
 use clap::Args;
 use plcbundle::BundleManager;
-use std::path::PathBuf;
 use std::io::{self, Write};
-use super::utils;
+use std::path::PathBuf;
 
 #[derive(Args)]
 pub struct RollbackCommand {
@@ -80,7 +80,7 @@ fn calculate_rollback_plan(manager: &BundleManager, cmd: &RollbackCommand) -> Re
     }
 
     let last_bundle = manager.get_last_bundle();
-    
+
     if last_bundle == 0 {
         bail!("no bundles to rollback");
     }
@@ -90,15 +90,19 @@ fn calculate_rollback_plan(manager: &BundleManager, cmd: &RollbackCommand) -> Re
         to
     } else if let Some(last) = cmd.last {
         if last >= last_bundle {
-            bail!("cannot rollback {} bundles, only {} exist", last, last_bundle);
+            bail!(
+                "cannot rollback {} bundles, only {} exist",
+                last,
+                last_bundle
+            );
         }
         let calculated = last_bundle - last;
-        
+
         // Prevent accidental deletion of all bundles via --last
         if calculated == 0 {
             bail!("invalid rollback: would delete all bundles (use --to 0 explicitly if intended)");
         }
-        
+
         calculated
     } else {
         unreachable!()
@@ -111,7 +115,7 @@ fn calculate_rollback_plan(manager: &BundleManager, cmd: &RollbackCommand) -> Re
 
     // Build list of bundles to delete
     let bundles_to_delete: Vec<u32> = (target_bundle + 1..=last_bundle).collect();
-    
+
     if bundles_to_delete.is_empty() {
         bail!("already at bundle {} (nothing to rollback)", target_bundle);
     }
@@ -126,7 +130,7 @@ fn calculate_rollback_plan(manager: &BundleManager, cmd: &RollbackCommand) -> Re
         if let Some(meta) = manager.get_bundle_metadata(*bundle_num)? {
             deleted_ops += meta.operation_count as usize;
             deleted_size += meta.compressed_size;
-            
+
             if start_time.is_none() {
                 start_time = Some(meta.start_time.clone());
             }
@@ -143,9 +147,13 @@ fn calculate_rollback_plan(manager: &BundleManager, cmd: &RollbackCommand) -> Re
     // Check mempool and DID index
     let mempool_stats = manager.get_mempool_stats()?;
     let has_mempool = mempool_stats.count > 0;
-    
+
     let did_stats = manager.get_did_index_stats();
-    let has_did_index = did_stats.get("total_dids").and_then(|v| v.as_i64()).unwrap_or(0) > 0;
+    let has_did_index = did_stats
+        .get("total_dids")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0)
+        > 0;
 
     Ok(RollbackPlan {
         target_bundle,
@@ -166,28 +174,38 @@ fn display_rollback_plan(dir: &PathBuf, plan: &RollbackPlan) -> Result<()> {
 
     println!("📁 Repository");
     println!("   Directory:       {}", utils::display_path(dir).display());
-    
+
     let current_bundles = plan.bundles_to_keep + plan.bundles_to_delete.len();
     if current_bundles > 0 {
         let last = plan.bundles_to_delete.last().unwrap();
-        println!("   Current state:   {} bundles ({:06} → {:06})",
-            current_bundles, 1, last);
+        println!(
+            "   Current state:   {} bundles ({:06} → {:06})",
+            current_bundles, 1, last
+        );
     }
     println!("   Target:          bundle {:06}\n", plan.target_bundle);
 
     println!("🗑️  Will Delete");
     println!("   Bundles:         {}", plan.bundles_to_delete.len());
-    println!("   Operations:      {}", super::utils::format_number(plan.deleted_ops as u64));
-    println!("   Data size:       {}", super::utils::format_bytes(plan.deleted_size));
-    
+    println!(
+        "   Operations:      {}",
+        super::utils::format_number(plan.deleted_ops as u64)
+    );
+    println!(
+        "   Data size:       {}",
+        super::utils::format_bytes(plan.deleted_size)
+    );
+
     if let Some((start, end)) = &plan.affected_period {
         let start_dt = chrono::DateTime::parse_from_rfc3339(start)
             .unwrap_or_else(|_| chrono::Utc::now().into());
-        let end_dt = chrono::DateTime::parse_from_rfc3339(end)
-            .unwrap_or_else(|_| chrono::Utc::now().into());
-        println!("   Time period:     {} to {}",
+        let end_dt =
+            chrono::DateTime::parse_from_rfc3339(end).unwrap_or_else(|_| chrono::Utc::now().into());
+        println!(
+            "   Time period:     {} to {}",
             start_dt.format("%Y-%m-%d %H:%M"),
-            end_dt.format("%Y-%m-%d %H:%M"));
+            end_dt.format("%Y-%m-%d %H:%M")
+        );
     }
     println!();
 
@@ -199,7 +217,10 @@ fn display_rollback_plan(dir: &PathBuf, plan: &RollbackPlan) -> Result<()> {
             println!("   • {:06}", bundle_num);
         }
         if plan.bundles_to_delete.len() > display_count {
-            println!("   ... and {} more", plan.bundles_to_delete.len() - display_count);
+            println!(
+                "   ... and {} more",
+                plan.bundles_to_delete.len() - display_count
+            );
         }
         println!();
     }
@@ -227,14 +248,18 @@ fn confirm_rollback(keep_files: bool) -> Result<bool> {
         println!("⚠️  This will permanently DELETE data!");
         print!("Type 'rollback' to confirm: ");
     }
-    
+
     io::stdout().flush()?;
 
     let mut response = String::new();
     io::stdin().read_line(&mut response)?;
-    
-    let expected = if keep_files { "rollback-index" } else { "rollback" };
-    
+
+    let expected = if keep_files {
+        "rollback-index"
+    } else {
+        "rollback"
+    };
+
     Ok(response.trim() == expected)
 }
 
@@ -250,11 +275,17 @@ fn perform_rollback(
     // Step 1: Delete bundle files (or skip if keep_files)
     current_step += 1;
     if !cmd.keep_files {
-        println!("[{}/{}] Deleting bundle files...", current_step, total_steps);
+        println!(
+            "[{}/{}] Deleting bundle files...",
+            current_step, total_steps
+        );
         delete_bundle_files(manager, &plan.bundles_to_delete, cmd.verbose)?;
         println!("      ✓ Deleted {} file(s)\n", plan.bundles_to_delete.len());
     } else {
-        println!("[{}/{}] Skipping file deletion (--keep-files)...", current_step, total_steps);
+        println!(
+            "[{}/{}] Skipping file deletion (--keep-files)...",
+            current_step, total_steps
+        );
         println!("      ℹ Bundle files remain on disk\n");
     }
 
@@ -270,7 +301,10 @@ fn perform_rollback(
 
     // Step 3: Update index
     current_step += 1;
-    println!("[{}/{}] Updating bundle index...", current_step, total_steps);
+    println!(
+        "[{}/{}] Updating bundle index...",
+        current_step, total_steps
+    );
     manager.rollback_to_bundle(plan.target_bundle)?;
     println!("      ✓ Index updated ({} bundles)\n", plan.bundles_to_keep);
 
@@ -317,18 +351,26 @@ fn handle_did_index(
 
     if cmd.rebuild_did_index {
         println!("      Rebuilding DID index...");
-        
+
         if plan.bundles_to_keep == 0 {
             println!("      ℹ No bundles to index");
             return Ok(());
         }
 
         let _stats = manager.rebuild_did_index(None::<fn(u32, u32)>)?;
-        println!("      ✓ DID index rebuilt ({} bundles)", plan.bundles_to_keep);
+        println!(
+            "      ✓ DID index rebuilt ({} bundles)",
+            plan.bundles_to_keep
+        );
     } else {
         let did_stats = manager.get_did_index_stats();
         println!("      ⚠️  DID index is out of date");
-        if did_stats.get("total_entries").and_then(|v| v.as_i64()).unwrap_or(0) > 0 {
+        if did_stats
+            .get("total_entries")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+            > 0
+        {
             println!("         Run: plcbundle-rs index rebuild");
         }
     }
@@ -344,8 +386,10 @@ fn display_rollback_success(plan: &RollbackPlan, cmd: &RollbackCommand) -> Resul
 
     if plan.bundles_to_keep > 0 {
         println!("📦 New State");
-        println!("   Bundles:         {} ({:06} → {:06})",
-            plan.bundles_to_keep, 1, plan.target_bundle);
+        println!(
+            "   Bundles:         {} ({:06} → {:06})",
+            plan.bundles_to_keep, 1, plan.target_bundle
+        );
     } else {
         println!("📦 New State");
         println!("   Repository:      EMPTY (all bundles removed)");
@@ -359,8 +403,14 @@ fn display_rollback_success(plan: &RollbackPlan, cmd: &RollbackCommand) -> Resul
     // Show what was removed
     println!("🗑️  Removed");
     println!("   Bundles:         {}", plan.bundles_to_delete.len());
-    println!("   Operations:      {}", super::utils::format_number(plan.deleted_ops as u64));
-    println!("   Data freed:      {}", super::utils::format_bytes(plan.deleted_size));
+    println!(
+        "   Operations:      {}",
+        super::utils::format_number(plan.deleted_ops as u64)
+    );
+    println!(
+        "   Data freed:      {}",
+        super::utils::format_bytes(plan.deleted_size)
+    );
 
     if cmd.keep_files {
         println!("   Files:           kept on disk");
@@ -377,4 +427,3 @@ fn display_rollback_success(plan: &RollbackPlan, cmd: &RollbackCommand) -> Resul
 
     Ok(())
 }
-

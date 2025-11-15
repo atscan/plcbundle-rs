@@ -1,16 +1,16 @@
 // src/manager.rs
 use crate::constants;
-use crate::index::{Index, BundleMetadata};
+use crate::index::{BundleMetadata, Index};
+use crate::iterators::{ExportIterator, QueryIterator, RangeIterator};
 use crate::operations::{Operation, OperationFilter, OperationRequest, OperationWithLocation};
-use crate::iterators::{QueryIterator, ExportIterator, RangeIterator};
 use crate::options::QueryMode;
-use crate::{cache, did_index, verification, mempool, handle_resolver};
+use crate::{cache, did_index, handle_resolver, mempool, verification};
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
-use std::io::Write;
-use chrono::{DateTime, Utc};
 
 /// Result of a sync_next_bundle operation
 #[derive(Debug, Clone)]
@@ -92,12 +92,15 @@ impl BundleManager {
         Self::with_handle_resolver(directory, None)
     }
 
-    pub fn with_handle_resolver(directory: PathBuf, handle_resolver_url: Option<String>) -> Result<Self> {
+    pub fn with_handle_resolver(
+        directory: PathBuf,
+        handle_resolver_url: Option<String>,
+    ) -> Result<Self> {
         let index = Index::load(&directory)?;
         let did_index = did_index::Manager::new(directory.clone())?;
 
-        let handle_resolver = handle_resolver_url
-            .map(|url| Arc::new(handle_resolver::HandleResolver::new(url)));
+        let handle_resolver =
+            handle_resolver_url.map(|url| Arc::new(handle_resolver::HandleResolver::new(url)));
 
         Ok(Self {
             directory: directory.clone(),
@@ -124,37 +127,37 @@ impl BundleManager {
     // === Smart Loading ===
     pub fn load_bundle(&self, num: u32, options: LoadOptions) -> Result<LoadResult> {
         self.stats.write().unwrap().bundles_loaded += 1;
-        
+
         if let Some(cached) = self.cache.get(num) {
             self.stats.write().unwrap().cache_hits += 1;
             return Ok(self.filter_load_result(cached, &options));
         }
-        
+
         self.stats.write().unwrap().cache_misses += 1;
-        
+
         let bundle_path = self.directory.join(format!("{:06}.jsonl.zst", num));
         let operations = self.load_bundle_from_disk(&bundle_path)?;
-        
+
         if options.cache {
             self.cache.insert(num, operations.clone());
         }
-        
+
         Ok(self.filter_load_result(operations, &options))
     }
 
     // === Single Operation Access ===
-    
+
     /// Get a single operation as raw JSON (fastest, preserves field order)
-    /// 
+    ///
     /// This method uses frame-based access for efficient random reads.
     /// Falls back to legacy sequential scan if no frame index is available.
     pub fn get_operation_raw(&self, bundle_num: u32, position: usize) -> Result<String> {
         let bundle_path = self.directory.join(format!("{:06}.jsonl.zst", bundle_num));
-        
+
         if !bundle_path.exists() {
             anyhow::bail!("Bundle {} not found", bundle_num);
         }
-        
+
         // Try frame-based access first (new format)
         match self.get_operation_raw_with_frames(&bundle_path, position) {
             Ok(json) => return Ok(json),
@@ -168,41 +171,45 @@ impl BundleManager {
             }
         }
     }
-    
+
     /// Frame-based operation access (new format with metadata)
-    fn get_operation_raw_with_frames(&self, bundle_path: &std::path::Path, position: usize) -> Result<String> {
+    fn get_operation_raw_with_frames(
+        &self,
+        bundle_path: &std::path::Path,
+        position: usize,
+    ) -> Result<String> {
         use crate::bundle_format;
         use std::io::{Read, Seek, SeekFrom};
-        
+
         // Open file and read actual metadata frame size
         let mut file = std::fs::File::open(bundle_path)?;
-        
+
         // Read magic (4 bytes)
         let mut magic_buf = [0u8; 4];
         file.read_exact(&mut magic_buf)?;
         let magic = u32::from_le_bytes(magic_buf);
-        
+
         if magic != bundle_format::SKIPPABLE_MAGIC_METADATA {
             anyhow::bail!("No metadata frame at start of bundle");
         }
-        
+
         // Read frame size (4 bytes)
         let mut size_buf = [0u8; 4];
         file.read_exact(&mut size_buf)?;
         let frame_data_size = u32::from_le_bytes(size_buf) as i64;
-        
+
         // Metadata frame total size = magic(4) + size(4) + data
         let metadata_frame_size = 8 + frame_data_size;
-        
+
         // Read the actual metadata
         let mut metadata_data = vec![0u8; frame_data_size as usize];
         file.read_exact(&mut metadata_data)?;
         let metadata: bundle_format::BundleMetadata = serde_json::from_slice(&metadata_data)?;
-        
+
         if metadata.frame_offsets.is_empty() {
             anyhow::bail!("No frame offsets in metadata");
         }
-        
+
         // Now seek back to start and use the frame-based loader
         file.seek(SeekFrom::Start(0))?;
         bundle_format::load_operation_at_position(
@@ -212,26 +219,30 @@ impl BundleManager {
             metadata_frame_size,
         )
     }
-    
+
     /// Legacy sequential scan (for old bundles without frame index)
-    fn get_operation_raw_legacy(&self, bundle_path: &std::path::Path, position: usize) -> Result<String> {
+    fn get_operation_raw_legacy(
+        &self,
+        bundle_path: &std::path::Path,
+        position: usize,
+    ) -> Result<String> {
         let file = std::fs::File::open(bundle_path)?;
         let decoder = zstd::Decoder::new(file)?;
         let reader = std::io::BufReader::new(decoder);
-        
+
         use std::io::BufRead;
-        
+
         for (idx, line_result) in reader.lines().enumerate() {
             if idx == position {
                 return Ok(line_result?);
             }
         }
-        
+
         anyhow::bail!("Operation position {} out of bounds", position)
     }
-    
+
     /// Get a single operation as parsed struct
-    /// 
+    ///
     /// This method retrieves the raw JSON and parses it into an Operation struct.
     /// Use `get_operation_raw()` if you only need the JSON.
     pub fn get_operation(&self, bundle_num: u32, position: usize) -> Result<Operation> {
@@ -239,19 +250,23 @@ impl BundleManager {
         let op: Operation = serde_json::from_str(&json)?;
         Ok(op)
     }
-    
+
     /// Get operation with timing statistics (for CLI verbose mode)
-    pub fn get_operation_with_stats(&self, bundle_num: u32, position: usize) -> Result<OperationResult> {
+    pub fn get_operation_with_stats(
+        &self,
+        bundle_num: u32,
+        position: usize,
+    ) -> Result<OperationResult> {
         let start = std::time::Instant::now();
         let json = self.get_operation_raw(bundle_num, position)?;
         let duration = start.elapsed();
-        
+
         // Update stats
         {
             let mut stats = self.stats.write().unwrap();
             stats.operations_read += 1;
         }
-        
+
         Ok(OperationResult {
             raw_json: json.clone(),
             size_bytes: json.len(),
@@ -262,15 +277,15 @@ impl BundleManager {
     // === Batch Operations ===
     pub fn get_operations_batch(&self, requests: Vec<OperationRequest>) -> Result<Vec<Operation>> {
         let mut results = Vec::new();
-        
+
         let mut by_bundle: HashMap<u32, Vec<&OperationRequest>> = HashMap::new();
         for req in &requests {
             by_bundle.entry(req.bundle).or_default().push(req);
         }
-        
+
         for (bundle_num, reqs) in by_bundle {
             let load_result = self.load_bundle(bundle_num, LoadOptions::default())?;
-            
+
             for req in reqs {
                 for op in &load_result.operations {
                     if self.matches_request(op, req) {
@@ -279,7 +294,7 @@ impl BundleManager {
                 }
             }
         }
-        
+
         Ok(results)
     }
 
@@ -296,32 +311,38 @@ impl BundleManager {
     pub fn get_did_operations(&self, did: &str) -> Result<Vec<Operation>> {
         let did_index = self.did_index.read().unwrap();
         let bundle_refs = did_index.get_bundles_for_did(did)?;
-        
+
         let mut operations = Vec::new();
         for bundle_num in bundle_refs {
-            let result = self.load_bundle(bundle_num, LoadOptions {
-                filter: Some(OperationFilter {
-                    did: Some(did.to_string()),
+            let result = self.load_bundle(
+                bundle_num,
+                LoadOptions {
+                    filter: Some(OperationFilter {
+                        did: Some(did.to_string()),
+                        ..Default::default()
+                    }),
                     ..Default::default()
-                }),
-                ..Default::default()
-            })?;
+                },
+            )?;
             operations.extend(result.operations);
         }
-        
+
         Ok(operations)
     }
 
     /// Get DID operations with location information (bundle number and position)
-    pub fn get_did_operations_with_locations(&self, did: &str) -> Result<Vec<OperationWithLocation>> {
+    pub fn get_did_operations_with_locations(
+        &self,
+        did: &str,
+    ) -> Result<Vec<OperationWithLocation>> {
         let did_index = self.did_index.read().unwrap();
         let locations = did_index.get_did_locations(did)?;
-        
+
         let mut ops_with_loc = Vec::new();
         for loc in locations {
             let bundle_num = loc.bundle() as u32;
             let position = loc.position() as usize;
-            
+
             match self.get_operation(bundle_num, position) {
                 Ok(op) => {
                     ops_with_loc.push(OperationWithLocation {
@@ -332,34 +353,49 @@ impl BundleManager {
                     });
                 }
                 Err(e) => {
-                    log::warn!("Failed to load operation at bundle {} position {}: {}", bundle_num, position, e);
+                    log::warn!(
+                        "Failed to load operation at bundle {} position {}: {}",
+                        bundle_num,
+                        position,
+                        e
+                    );
                 }
             }
         }
-        
+
         // Sort by global position (bundle * BUNDLE_SIZE + position)
         ops_with_loc.sort_by_key(|owl| {
             (owl.bundle as u64) * constants::BUNDLE_SIZE as u64 + owl.position as u64
         });
-        
+
         Ok(ops_with_loc)
     }
 
     /// Get DID operations with locations and detailed statistics (for verbose logging)
-    pub fn get_did_operations_with_locations_and_stats(&self, did: &str) -> Result<(Vec<OperationWithLocation>, did_index::DIDLookupStats, u8, did_index::DIDLookupTimings, std::time::Duration)> {
+    pub fn get_did_operations_with_locations_and_stats(
+        &self,
+        did: &str,
+    ) -> Result<(
+        Vec<OperationWithLocation>,
+        did_index::DIDLookupStats,
+        u8,
+        did_index::DIDLookupTimings,
+        std::time::Duration,
+    )> {
         use std::time::Instant;
-        
+
         let index_start = Instant::now();
         let did_index = self.did_index.read().unwrap();
-        let (locations, shard_stats, shard_num, lookup_timings) = did_index.get_did_locations_with_stats(did)?;
+        let (locations, shard_stats, shard_num, lookup_timings) =
+            did_index.get_did_locations_with_stats(did)?;
         let _index_time = index_start.elapsed();
-        
+
         let mut ops_with_loc = Vec::new();
         let load_start = Instant::now();
         for loc in locations {
             let bundle_num = loc.bundle() as u32;
             let position = loc.position() as usize;
-            
+
             match self.get_operation(bundle_num, position) {
                 Ok(op) => {
                     ops_with_loc.push(OperationWithLocation {
@@ -370,18 +406,35 @@ impl BundleManager {
                     });
                 }
                 Err(e) => {
-                    log::warn!("Failed to load operation at bundle {} position {}: {}", bundle_num, position, e);
+                    log::warn!(
+                        "Failed to load operation at bundle {} position {}: {}",
+                        bundle_num,
+                        position,
+                        e
+                    );
                 }
             }
         }
         let load_time = load_start.elapsed();
-        
+
         // Sort by global position (bundle * BUNDLE_SIZE + position)
         ops_with_loc.sort_by_key(|owl| {
             (owl.bundle as u64) * constants::BUNDLE_SIZE as u64 + owl.position as u64
         });
-        
-        Ok((ops_with_loc, shard_stats, shard_num, lookup_timings, load_time))
+
+        Ok((
+            ops_with_loc,
+            shard_stats,
+            shard_num,
+            lookup_timings,
+            load_time,
+        ))
+    }
+
+    /// Sample random DIDs directly from the DID index without reading bundles.
+    pub fn sample_random_dids(&self, count: usize, seed: Option<u64>) -> Result<Vec<String>> {
+        let did_index = self.did_index.read().unwrap();
+        did_index.sample_random_dids(count, seed)
     }
 
     /// Get DID operations from mempool
@@ -411,7 +464,8 @@ impl BundleManager {
         // Get all operations for this DID with timing
         let index_start = Instant::now();
         let did_index = self.did_index.read().unwrap();
-        let (locations, shard_stats, shard_num, lookup_timings) = did_index.get_did_locations_with_stats(did)?;
+        let (locations, shard_stats, shard_num, lookup_timings) =
+            did_index.get_did_locations_with_stats(did)?;
         let index_time = index_start.elapsed();
 
         if locations.is_empty() {
@@ -449,12 +503,12 @@ impl BundleManager {
 
     pub fn batch_resolve_dids(&self, dids: Vec<String>) -> Result<HashMap<String, Vec<Operation>>> {
         let mut results = HashMap::new();
-        
+
         for did in dids {
             let ops = self.get_did_operations(&did)?;
             results.insert(did, ops);
         }
-        
+
         Ok(results)
     }
 
@@ -474,7 +528,7 @@ impl BundleManager {
     {
         let mut writer = writer_fn();
         let mut stats = ExportStats::default();
-        
+
         for item in self.export(spec) {
             let data = item?;
             writer.write_all(data.as_bytes())?;
@@ -482,16 +536,17 @@ impl BundleManager {
             stats.records_written += 1;
             stats.bytes_written += data.len() as u64 + 1;
         }
-        
+
         Ok(stats)
     }
 
     // === Verification ===
     pub fn verify_bundle(&self, num: u32, spec: VerifySpec) -> Result<VerifyResult> {
         let index = self.index.read().unwrap();
-        let metadata = index.get_bundle(num)
+        let metadata = index
+            .get_bundle(num)
             .ok_or_else(|| anyhow::anyhow!("Bundle {} not in index", num))?;
-        
+
         verification::verify_bundle(&self.directory, metadata, spec)
     }
 
@@ -502,40 +557,43 @@ impl BundleManager {
     // === Multi-info ===
     pub fn get_bundle_info(&self, num: u32, flags: InfoFlags) -> Result<BundleInfo> {
         let index = self.index.read().unwrap();
-        let metadata = index.get_bundle(num)
+        let metadata = index
+            .get_bundle(num)
             .ok_or_else(|| anyhow::anyhow!("Bundle {} not found", num))?;
-        
+
         let mut info = BundleInfo {
             metadata: metadata.clone(),
-            exists: self.directory.join(format!("{:06}.jsonl.zst", num)).exists(),
+            exists: self
+                .directory
+                .join(format!("{:06}.jsonl.zst", num))
+                .exists(),
             cached: self.cache.contains(num),
             operations: None,
             size_info: None,
         };
-        
+
         if flags.include_operations {
             let result = self.load_bundle(num, LoadOptions::default())?;
             info.operations = Some(result.operations);
         }
-        
+
         if flags.include_size_info {
             info.size_info = Some(SizeInfo {
                 compressed: metadata.compressed_size,
                 uncompressed: metadata.uncompressed_size,
             });
         }
-        
+
         Ok(info)
     }
 
     // === Rollback ===
     pub fn rollback_plan(&self, spec: RollbackSpec) -> Result<RollbackPlan> {
-        let affected_bundles: Vec<u32> = (spec.target_bundle..=self.get_last_bundle())
-            .collect();
-        
+        let affected_bundles: Vec<u32> = (spec.target_bundle..=self.get_last_bundle()).collect();
+
         let mut affected_operations = 0;
         let mut affected_dids = std::collections::HashSet::new();
-        
+
         for bundle_num in &affected_bundles {
             if let Ok(result) = self.load_bundle(*bundle_num, LoadOptions::default()) {
                 affected_operations += result.operations.len();
@@ -544,10 +602,10 @@ impl BundleManager {
                 }
             }
         }
-        
+
         Ok(RollbackPlan {
             target_bundle: spec.target_bundle,
-            affected_bundles: affected_bundles.clone(),  // Clone here
+            affected_bundles: affected_bundles.clone(), // Clone here
             affected_operations,
             affected_dids: affected_dids.len(),
             estimated_time_ms: affected_bundles.len() as u64 * 10,
@@ -556,7 +614,7 @@ impl BundleManager {
 
     pub fn rollback(&self, spec: RollbackSpec) -> Result<RollbackResult> {
         let plan = self.rollback_plan(spec.clone())?;
-        
+
         if spec.dry_run {
             return Ok(RollbackResult {
                 success: true,
@@ -564,7 +622,7 @@ impl BundleManager {
                 plan: Some(plan),
             });
         }
-        
+
         for bundle_num in &plan.affected_bundles {
             let path = self.directory.join(format!("{:06}.jsonl.zst", bundle_num));
             if path.exists() {
@@ -572,13 +630,15 @@ impl BundleManager {
             }
             self.cache.remove(*bundle_num);
         }
-        
+
         let mut index = self.index.write().unwrap();
         index.last_bundle = spec.target_bundle;
-        index.bundles.retain(|b| b.bundle_number <= spec.target_bundle);
-        
+        index
+            .bundles
+            .retain(|b| b.bundle_number <= spec.target_bundle);
+
         self.rebuild_did_index(None::<fn(u32, u32)>)?;
-        
+
         Ok(RollbackResult {
             success: true,
             bundles_removed: plan.affected_bundles.len(),
@@ -589,10 +649,13 @@ impl BundleManager {
     // === Cache Hints ===
     pub fn prefetch_bundles(&self, nums: Vec<u32>) -> Result<()> {
         for num in nums {
-            self.load_bundle(num, LoadOptions {
-                cache: true,
-                ..Default::default()
-            })?;
+            self.load_bundle(
+                num,
+                LoadOptions {
+                    cache: true,
+                    ..Default::default()
+                },
+            )?;
         }
         Ok(())
     }
@@ -606,7 +669,7 @@ impl BundleManager {
             WarmUpStrategy::Range(start, end) => (start..=end).collect(),
             WarmUpStrategy::All => (1..=self.get_last_bundle()).collect(),
         };
-        
+
         self.prefetch_bundles(bundles)
     }
 
@@ -616,33 +679,35 @@ impl BundleManager {
         F: Fn(u32, u32) + Send + Sync,
     {
         use std::fs;
-        
+
         let last_bundle = self.get_last_bundle();
         let new_index = did_index::Manager::new(self.directory.clone())?;
         let mut stats = RebuildStats::default();
-        
+
         // Create temporary directory for bundle data files
         // This avoids keeping all bundle data in memory simultaneously during loading.
         // We write each bundle to disk immediately after loading, freeing memory.
-        let temp_dir = std::env::temp_dir().join(format!("plcbundle_rebuild_{}", std::process::id()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("plcbundle_rebuild_{}", std::process::id()));
         let bundle_data_dir = temp_dir.join("bundle_data");
         fs::create_dir_all(&bundle_data_dir)?;
-        
+
         // Pass 1: Stream bundles to temporary files
         for bundle_num in 1..=last_bundle {
             if let Some(ref cb) = progress_cb {
                 cb(bundle_num, last_bundle);
             }
-            
+
             if let Ok(result) = self.load_bundle(bundle_num, LoadOptions::default()) {
-                let operations: Vec<(String, bool)> = result.operations
+                let operations: Vec<(String, bool)> = result
+                    .operations
                     .iter()
                     .map(|op| (op.did.clone(), op.nullified))
                     .collect();
-                
+
                 stats.operations_indexed += operations.len() as u64;
                 stats.bundles_processed += 1;
-                
+
                 // Write bundle data to temp file immediately (frees memory)
                 let bundle_file = bundle_data_dir.join(format!("{:06}.json", bundle_num));
                 let bundle_data = (bundle_num, operations);
@@ -650,7 +715,7 @@ impl BundleManager {
                 fs::write(&bundle_file, json_data)?;
             }
         }
-        
+
         // Pass 2: Read bundle data from temp files and build index
         // NOTE: build_from_scratch requires all data upfront, so we still need to load
         // all bundles into memory. However, by writing to temp files first, we:
@@ -666,36 +731,37 @@ impl BundleManager {
                 bundles_data.push(bundle_data);
             }
         }
-        
+
         // Build index from scratch
         new_index.build_from_scratch(bundles_data, |current, total| {
             if let Some(ref cb) = progress_cb {
                 cb(current as u32, total as u32);
             }
         })?;
-        
+
         // Clean up temporary bundle data files
         fs::remove_dir_all(&bundle_data_dir).ok();
-        
+
         *self.did_index.write().unwrap() = new_index;
-        
+
         Ok(stats)
     }
 
     pub fn get_did_index_stats(&self) -> HashMap<String, serde_json::Value> {
         self.did_index.read().unwrap().get_stats()
     }
-    
+
     /// Get DID index stats as struct (legacy format)
     pub fn get_did_index_stats_struct(&self) -> DIDIndexStats {
         let stats_map = self.get_did_index_stats();
-        
+
         // Convert to old format
         DIDIndexStats {
-            total_dids: stats_map.get("total_dids")
+            total_dids: stats_map
+                .get("total_dids")
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0) as usize,
-            total_entries: 0, // Not tracked in new version
+            total_entries: 0,            // Not tracked in new version
             avg_operations_per_did: 0.0, // Not tracked in new version
         }
     }
@@ -784,12 +850,13 @@ impl BundleManager {
             mp.clear();
             mp.save()?;
         }
-        
+
         // Also delete all mempool files to prevent stale data from previous bundles
         if let Ok(entries) = std::fs::read_dir(&self.directory) {
             for entry in entries.flatten() {
                 if let Some(name) = entry.file_name().to_str() {
-                    if name.starts_with(constants::MEMPOOL_FILE_PREFIX) && name.ends_with(".jsonl") {
+                    if name.starts_with(constants::MEMPOOL_FILE_PREFIX) && name.ends_with(".jsonl")
+                    {
                         let _ = std::fs::remove_file(entry.path());
                     }
                 }
@@ -827,8 +894,7 @@ impl BundleManager {
         let result = self.load_bundle(last_bundle, LoadOptions::default())?;
 
         if let Some(last_op) = result.operations.last() {
-            let timestamp = DateTime::parse_from_rfc3339(&last_op.created_at)?
-                .with_timezone(&Utc);
+            let timestamp = DateTime::parse_from_rfc3339(&last_op.created_at)?.with_timezone(&Utc);
             Ok(timestamp)
         } else {
             // Bundle is empty (shouldn't happen), use epoch
@@ -842,19 +908,26 @@ impl BundleManager {
     fn validate_sync_state(&self) -> Result<()> {
         let last_bundle = self.get_last_bundle();
         let next_bundle_num = last_bundle + 1;
-        
+
         // Check for and delete mempool files for already-completed bundles
         let mut found_stale_files = false;
         if let Ok(entries) = std::fs::read_dir(&self.directory) {
             for entry in entries.flatten() {
                 if let Some(name) = entry.file_name().to_str() {
-                    if name.starts_with(constants::MEMPOOL_FILE_PREFIX) && name.ends_with(".jsonl") {
+                    if name.starts_with(constants::MEMPOOL_FILE_PREFIX) && name.ends_with(".jsonl")
+                    {
                         // Extract bundle number from filename: plc_mempool_NNNNNN.jsonl
-                        if let Some(num_str) = name.strip_prefix(constants::MEMPOOL_FILE_PREFIX).and_then(|s| s.strip_suffix(".jsonl")) {
+                        if let Some(num_str) = name
+                            .strip_prefix(constants::MEMPOOL_FILE_PREFIX)
+                            .and_then(|s| s.strip_suffix(".jsonl"))
+                        {
                             if let Ok(bundle_num) = num_str.parse::<u32>() {
                                 // Delete mempool files for completed bundles or way future bundles
                                 if bundle_num <= last_bundle || bundle_num > next_bundle_num {
-                                    log::warn!("Removing stale mempool file for bundle {:06}", bundle_num);
+                                    log::warn!(
+                                        "Removing stale mempool file for bundle {:06}",
+                                        bundle_num
+                                    );
                                     let _ = std::fs::remove_file(entry.path());
                                     found_stale_files = true;
                                 }
@@ -864,26 +937,27 @@ impl BundleManager {
                 }
             }
         }
-        
+
         if found_stale_files {
             log::info!("Cleaned up stale mempool files");
         }
-        
+
         let mempool_stats = self.get_mempool_stats()?;
-        
+
         if mempool_stats.count == 0 {
             return Ok(()); // Empty mempool is always valid
         }
-        
+
         // Check if mempool operations are for the correct bundle
         let mempool_ops = self.get_mempool_operations()?;
         if mempool_ops.is_empty() {
             return Ok(());
         }
-        
+
         // Get the last operation from the previous bundle
         let last_bundle_time = if next_bundle_num > 1 {
-            let last_bundle_result = self.load_bundle(next_bundle_num - 1, LoadOptions::default())?;
+            let last_bundle_result =
+                self.load_bundle(next_bundle_num - 1, LoadOptions::default())?;
             if let Some(last_op) = last_bundle_result.operations.last() {
                 chrono::DateTime::parse_from_rfc3339(&last_op.created_at)
                     .ok()
@@ -894,42 +968,57 @@ impl BundleManager {
         } else {
             None
         };
-        
+
         // Special case: When creating the first bundle (next_bundle_num == 1, meaning
         // last_bundle == 0, i.e., empty repository), any existing mempool is likely stale
         // from a previous sync attempt. Clear it to start fresh from the beginning.
         if next_bundle_num == 1 && mempool_stats.count > 0 {
-            log::warn!("Starting first bundle (empty repository), but mempool has {} operations", mempool_stats.count);
+            log::warn!(
+                "Starting first bundle (empty repository), but mempool has {} operations",
+                mempool_stats.count
+            );
             if let Some(first_time) = mempool_stats.first_time {
-                log::warn!("Mempool operations start at: {}", first_time.format("%Y-%m-%d %H:%M:%S"));
+                log::warn!(
+                    "Mempool operations start at: {}",
+                    first_time.format("%Y-%m-%d %H:%M:%S")
+                );
             }
             log::warn!("Clearing mempool to start fresh from the beginning...");
             self.clear_mempool()?;
             return Ok(());
         }
-        
+
         // Check if mempool operations are chronologically valid relative to last bundle
         if let Some(last_time) = last_bundle_time {
             if let Some(first_mempool_time) = mempool_stats.first_time {
                 // Case 1: Mempool operations are BEFORE the last bundle (definitely stale)
                 if first_mempool_time < last_time {
                     log::warn!("Detected stale mempool data (operations before last bundle)");
-                    log::warn!("First mempool op: {}, Last bundle op: {}", 
+                    log::warn!(
+                        "First mempool op: {}, Last bundle op: {}",
                         first_mempool_time.format("%Y-%m-%d %H:%M:%S"),
-                        last_time.format("%Y-%m-%d %H:%M:%S"));
+                        last_time.format("%Y-%m-%d %H:%M:%S")
+                    );
                     log::warn!("Clearing mempool to start fresh...");
                     self.clear_mempool()?;
                     return Ok(());
                 }
-                
+
                 // Case 2: Mempool operations are slightly after last bundle, but way too close
                 // This indicates they're from a previous failed attempt at this bundle
                 // BUT: Only clear if the mempool file is old (modified > 1 hour ago)
                 // If it's recent, it might be a legitimate resume of a slow sync
                 let time_diff = first_mempool_time.signed_duration_since(last_time);
-                if time_diff < chrono::Duration::seconds(constants::MIN_BUNDLE_CREATION_INTERVAL_SECS) && mempool_stats.count < constants::BUNDLE_SIZE {
+                if time_diff
+                    < chrono::Duration::seconds(constants::MIN_BUNDLE_CREATION_INTERVAL_SECS)
+                    && mempool_stats.count < constants::BUNDLE_SIZE
+                {
                     // Check mempool file modification time
-                    let mempool_filename = format!("{}{:06}.jsonl", constants::MEMPOOL_FILE_PREFIX, next_bundle_num);
+                    let mempool_filename = format!(
+                        "{}{:06}.jsonl",
+                        constants::MEMPOOL_FILE_PREFIX,
+                        next_bundle_num
+                    );
                     let mempool_path = self.directory.join(mempool_filename);
 
                     let is_stale = if let Ok(metadata) = std::fs::metadata(&mempool_path) {
@@ -946,30 +1035,43 @@ impl BundleManager {
                     };
 
                     if is_stale {
-                        log::warn!("Detected potentially stale mempool data (too close to last bundle timestamp)");
-                        log::warn!("Time difference: {}s, Operations: {}/{}",
-                            time_diff.num_seconds(), mempool_stats.count, constants::BUNDLE_SIZE);
-                        log::warn!("This likely indicates a previous failed sync attempt. Clearing mempool...");
+                        log::warn!(
+                            "Detected potentially stale mempool data (too close to last bundle timestamp)"
+                        );
+                        log::warn!(
+                            "Time difference: {}s, Operations: {}/{}",
+                            time_diff.num_seconds(),
+                            mempool_stats.count,
+                            constants::BUNDLE_SIZE
+                        );
+                        log::warn!(
+                            "This likely indicates a previous failed sync attempt. Clearing mempool..."
+                        );
                         self.clear_mempool()?;
                     } else {
                         if *self.verbose.lock().unwrap() {
-                            log::debug!("Mempool appears recent, allowing resume despite close timestamp");
+                            log::debug!(
+                                "Mempool appears recent, allowing resume despite close timestamp"
+                            );
                         }
                     }
                     return Ok(());
                 }
             }
         }
-        
+
         // Check if mempool has way too many operations (likely from failed previous attempt)
         if mempool_stats.count > constants::BUNDLE_SIZE {
-            log::warn!("Mempool has {} operations (expected max {})", 
-                mempool_stats.count, constants::BUNDLE_SIZE);
+            log::warn!(
+                "Mempool has {} operations (expected max {})",
+                mempool_stats.count,
+                constants::BUNDLE_SIZE
+            );
             log::warn!("This indicates a previous sync attempt failed. Clearing mempool...");
             self.clear_mempool()?;
             return Ok(());
         }
-        
+
         Ok(())
     }
 
@@ -988,8 +1090,12 @@ impl BundleManager {
         let bundle_count = end_bundle - start_bundle + 1;
 
         if *self.verbose.lock().unwrap() {
-            log::info!("Batch updating DID index for bundles {:06} to {:06}... ({} bundles)",
-                start_bundle, end_bundle, bundle_count);
+            log::info!(
+                "Batch updating DID index for bundles {:06} to {:06}... ({} bundles)",
+                start_bundle,
+                end_bundle,
+                bundle_count
+            );
         }
 
         // Process bundles incrementally (avoid loading all into memory)
@@ -1002,13 +1108,18 @@ impl BundleManager {
         for bundle_num in start_bundle..=end_bundle {
             if let Ok(result) = self.load_bundle(bundle_num, LoadOptions::default()) {
                 total_operations += result.operations.len();
-                let operations: Vec<(String, bool)> = result.operations
+                let operations: Vec<(String, bool)> = result
+                    .operations
                     .iter()
                     .map(|op| (op.did.clone(), op.nullified))
                     .collect();
-                
+
                 // Process immediately instead of accumulating
-                let _ = self.did_index.write().unwrap().update_for_bundle(bundle_num, operations)?;
+                let _ = self
+                    .did_index
+                    .write()
+                    .unwrap()
+                    .update_for_bundle(bundle_num, operations)?;
                 bundles_processed += 1;
             }
         }
@@ -1021,7 +1132,8 @@ impl BundleManager {
 
         log::debug!(
             "[Batch DID Index] Processed {} bundles ({} operations) in {:.3}s ({:.0} ops/sec)",
-            bundles_processed, total_operations,
+            bundles_processed,
+            total_operations,
             update_duration.as_secs_f64(),
             total_operations as f64 / update_duration.as_secs_f64()
         );
@@ -1031,7 +1143,8 @@ impl BundleManager {
         if *self.verbose.lock().unwrap() {
             log::info!(
                 "✓ DID index updated for bundles {:06} to {:06} in {:.3}s (load={:.1}s, update={:.1}s, {:.0} ops/sec overall)",
-                start_bundle, end_bundle,
+                start_bundle,
+                end_bundle,
                 total_duration.as_secs_f64(),
                 load_duration.as_secs_f64(),
                 update_duration.as_secs_f64(),
@@ -1045,7 +1158,11 @@ impl BundleManager {
     /// Async wrapper for batch_update_did_index that runs in a blocking task
     ///
     /// This prevents blocking the async runtime (and HTTP server) during heavy I/O operations.
-    pub async fn batch_update_did_index_async(&self, start_bundle: u32, end_bundle: u32) -> Result<()> {
+    pub async fn batch_update_did_index_async(
+        &self,
+        start_bundle: u32,
+        end_bundle: u32,
+    ) -> Result<()> {
         let manager = self.clone_for_arc();
 
         tokio::task::spawn_blocking(move || {
@@ -1070,15 +1187,21 @@ impl BundleManager {
         let (mut after_time, mut prev_boundary) = if next_bundle_num > 1 {
             let last = self.load_bundle(next_bundle_num - 1, LoadOptions::default())?;
             let boundary = get_boundary_cids(&last.operations);
-            let cursor = last.operations.last()
+            let cursor = last
+                .operations
+                .last()
                 .map(|op| op.created_at.clone())
                 .unwrap_or_default();
-            
+
             if *self.verbose.lock().unwrap() {
-                log::info!("Loaded {} boundary CIDs from bundle {:06} (at {})", 
-                    boundary.len(), next_bundle_num - 1, cursor);
+                log::info!(
+                    "Loaded {} boundary CIDs from bundle {:06} (at {})",
+                    boundary.len(),
+                    next_bundle_num - 1,
+                    cursor
+                );
             }
-            
+
             (cursor, boundary)
         } else {
             ("1970-01-01T00:00:00Z".to_string(), HashSet::new())
@@ -1090,11 +1213,14 @@ impl BundleManager {
         if mempool_stats.count > 0 {
             if let Some(last_time) = mempool_stats.last_time {
                 if *self.verbose.lock().unwrap() {
-                    log::debug!("Mempool has {} ops, resuming from {}", 
-                        mempool_stats.count, last_time.format("%Y-%m-%dT%H:%M:%S"));
+                    log::debug!(
+                        "Mempool has {} ops, resuming from {}",
+                        mempool_stats.count,
+                        last_time.format("%Y-%m-%dT%H:%M:%S")
+                    );
                 }
                 after_time = last_time.to_rfc3339();
-                
+
                 // Calculate boundaries from MEMPOOL for next fetch
                 let mempool_ops = self.get_mempool_operations()?;
                 if !mempool_ops.is_empty() {
@@ -1106,12 +1232,25 @@ impl BundleManager {
             }
         }
 
-        log::debug!("Preparing bundle {:06} (mempool: {} ops)...",
-            next_bundle_num, mempool_stats.count);
-        log::debug!("Starting cursor: {}", if after_time.is_empty() || after_time == "1970-01-01T00:00:00Z" { "" } else { &after_time });
-        
+        log::debug!(
+            "Preparing bundle {:06} (mempool: {} ops)...",
+            next_bundle_num,
+            mempool_stats.count
+        );
+        log::debug!(
+            "Starting cursor: {}",
+            if after_time.is_empty() || after_time == "1970-01-01T00:00:00Z" {
+                ""
+            } else {
+                &after_time
+            }
+        );
+
         if !prev_boundary.is_empty() && *self.verbose.lock().unwrap() && mempool_stats.count == 0 {
-            log::info!("  Starting with {} boundary CIDs from previous bundle", prev_boundary.len());
+            log::info!(
+                "  Starting with {} boundary CIDs from previous bundle",
+                prev_boundary.len()
+            );
         }
 
         // Ensure mempool is initialized
@@ -1135,7 +1274,7 @@ impl BundleManager {
 
             fetch_num += 1;
             let needed = constants::BUNDLE_SIZE - stats.count;
-            
+
             // Smart batch sizing - request more than exact amount to account for duplicates
             let request_count = match needed {
                 n if n <= 50 => 50,
@@ -1145,18 +1284,24 @@ impl BundleManager {
             };
 
             if *self.verbose.lock().unwrap() {
-                log::info!("  Fetch #{}: requesting {} (need {} more, have {}/{})",
-                    fetch_num, request_count, needed, stats.count, constants::BUNDLE_SIZE);
+                log::info!(
+                    "  Fetch #{}: requesting {} (need {} more, have {}/{})",
+                    fetch_num,
+                    request_count,
+                    needed,
+                    stats.count,
+                    constants::BUNDLE_SIZE
+                );
             }
 
             let fetch_op_start = Instant::now();
             let plc_ops = client.fetch_operations(&after_time, request_count).await?;
 
             let fetched_count = plc_ops.len();
-            
+
             // Check for incomplete batch (indicates caught up)
             let got_incomplete_batch = fetched_count > 0 && fetched_count < request_count;
-            
+
             if plc_ops.is_empty() || got_incomplete_batch {
                 caught_up = true;
                 if *self.verbose.lock().unwrap() && fetch_num > 0 {
@@ -1174,12 +1319,15 @@ impl BundleManager {
             let before_dedup = ops.len();
             ops = strip_boundary_duplicates(ops, &prev_boundary);
             let after_dedup = ops.len();
-            
+
             let boundary_removed = before_dedup - after_dedup;
             if boundary_removed > 0 {
                 total_boundary_dupes += boundary_removed;
                 if *self.verbose.lock().unwrap() {
-                    log::info!("  Stripped {} boundary duplicates from fetch", boundary_removed);
+                    log::info!(
+                        "  Stripped {} boundary duplicates from fetch",
+                        boundary_removed
+                    );
                 }
             }
 
@@ -1189,7 +1337,7 @@ impl BundleManager {
             } else {
                 0
             };
-            
+
             let dupes_in_fetch = after_dedup - added;
             total_dupes += dupes_in_fetch;
 
@@ -1203,12 +1351,25 @@ impl BundleManager {
 
             if *self.verbose.lock().unwrap() {
                 if boundary_removed > 0 || dupes_in_fetch > 0 {
-                    log::info!("  → +{} unique ({} dupes, {} boundary) in {:.9}s • Running: {}/{} ({:.0} ops/sec)",
-                        added, dupes_in_fetch, boundary_removed, fetch_duration.as_secs_f64(),
-                        new_stats.count, constants::BUNDLE_SIZE, ops_per_sec);
+                    log::info!(
+                        "  → +{} unique ({} dupes, {} boundary) in {:.9}s • Running: {}/{} ({:.0} ops/sec)",
+                        added,
+                        dupes_in_fetch,
+                        boundary_removed,
+                        fetch_duration.as_secs_f64(),
+                        new_stats.count,
+                        constants::BUNDLE_SIZE,
+                        ops_per_sec
+                    );
                 } else {
-                    log::info!("  → +{} unique in {:.9}s • Running: {}/{} ({:.0} ops/sec)",
-                        added, fetch_duration.as_secs_f64(), new_stats.count, constants::BUNDLE_SIZE, ops_per_sec);
+                    log::info!(
+                        "  → +{} unique in {:.9}s • Running: {}/{} ({:.0} ops/sec)",
+                        added,
+                        fetch_duration.as_secs_f64(),
+                        new_stats.count,
+                        constants::BUNDLE_SIZE,
+                        ops_per_sec
+                    );
                 }
             }
 
@@ -1216,7 +1377,7 @@ impl BundleManager {
             if let Some(last_time) = new_stats.last_time {
                 after_time = last_time.to_rfc3339();
             }
-            
+
             // Stop if we got an incomplete batch or made no progress
             if got_incomplete_batch || added == 0 {
                 caught_up = true;
@@ -1235,7 +1396,7 @@ impl BundleManager {
         };
 
         let final_stats = self.get_mempool_stats()?;
-        
+
         // Bundles must contain exactly BUNDLE_SIZE operations (no partial bundles allowed)
         if final_stats.count < constants::BUNDLE_SIZE {
             if caught_up {
@@ -1257,16 +1418,25 @@ impl BundleManager {
         }
 
         if *self.verbose.lock().unwrap() {
-            log::info!("  ✓ Collected {} unique ops from {} fetches ({:.1}% dedup)",
-                final_stats.count, fetch_num, dedup_pct);
+            log::info!(
+                "  ✓ Collected {} unique ops from {} fetches ({:.1}% dedup)",
+                final_stats.count,
+                fetch_num,
+                dedup_pct
+            );
         }
 
         // Take operations and create bundle
-        log::debug!("Calling operations.SaveBundle with bundle={}", next_bundle_num);
+        log::debug!(
+            "Calling operations.SaveBundle with bundle={}",
+            next_bundle_num
+        );
 
         let operations = {
             let mut mempool = self.mempool.write().unwrap();
-            let mem = mempool.as_mut().ok_or_else(|| anyhow::anyhow!("Mempool not initialized"))?;
+            let mem = mempool
+                .as_mut()
+                .ok_or_else(|| anyhow::anyhow!("Mempool not initialized"))?;
             // Take up to BUNDLE_SIZE operations (or all if less)
             let count = mem.count().min(constants::BUNDLE_SIZE);
             mem.take(count)?
@@ -1297,19 +1467,29 @@ impl BundleManager {
         // Save bundle to disk with timing breakdown
         // Save bundle and update DID index (now fast with delta segments)
         let save_start = Instant::now();
-        let (serialize_time, compress_time, hash_time, did_index_time, index_write_time, did_index_compacted) =
-            self.save_bundle_with_timing(next_bundle_num, operations).await?;
+        let (
+            serialize_time,
+            compress_time,
+            hash_time,
+            did_index_time,
+            index_write_time,
+            did_index_compacted,
+        ) = self
+            .save_bundle_with_timing(next_bundle_num, operations)
+            .await?;
         let save_duration = save_start.elapsed();
 
         // Show timing breakdown in verbose mode only
         if *self.verbose.lock().unwrap() {
-            log::debug!("  Save timing: serialize={:.3}ms, compress={:.3}ms, hash={:.3}ms, did_index={:.3}ms, index_write={:.3}ms, total={:.1}ms",
+            log::debug!(
+                "  Save timing: serialize={:.3}ms, compress={:.3}ms, hash={:.3}ms, did_index={:.3}ms, index_write={:.3}ms, total={:.1}ms",
                 serialize_time.as_secs_f64() * 1000.0,
                 compress_time.as_secs_f64() * 1000.0,
                 hash_time.as_secs_f64() * 1000.0,
                 did_index_time.as_secs_f64() * 1000.0,
                 index_write_time.as_secs_f64() * 1000.0,
-                save_duration.as_secs_f64() * 1000.0);
+                save_duration.as_secs_f64() * 1000.0
+            );
         }
 
         log::debug!("Adding bundle {} to index", next_bundle_num);
@@ -1331,25 +1511,38 @@ impl BundleManager {
             let age = now.signed_duration_since(created_time);
             let age_str = format_age(age);
 
-            (hash, age_str, bundle_meta.did_count, bundle_meta.compressed_size)
+            (
+                hash,
+                age_str,
+                bundle_meta.did_count,
+                bundle_meta.compressed_size,
+            )
         };
 
         // Get mempool count after clearing (should be 0, but check anyway)
         let mempool_count = self.get_mempool_stats().map(|s| s.count).unwrap_or(0);
         let total_duration_ms = (fetch_total_duration + save_duration).as_millis() as u64;
         let fetch_duration_ms = fetch_total_duration.as_millis() as u64;
-        
+
         // Calculate separate timings: bundle save (serialize + compress + hash) vs index (did_index + index_write)
         let bundle_save_ms = (serialize_time + compress_time + hash_time).as_millis() as u64;
         let index_ms = (did_index_time + index_write_time).as_millis() as u64;
 
         // Only log detailed info in verbose mode
         if *self.verbose.lock().unwrap() {
-            log::info!("→ Bundle {:06} | {} | fetch: {:.3}s ({} reqs) | {}",
-                next_bundle_num, short_hash, fetch_total_duration.as_secs_f64(),
-                fetch_num, age_str);
-            log::debug!("Bundle done = {}, finish duration = {:.3}ms",
-                next_bundle_num, save_duration.as_secs_f64() * 1000.0);
+            log::info!(
+                "→ Bundle {:06} | {} | fetch: {:.3}s ({} reqs) | {}",
+                next_bundle_num,
+                short_hash,
+                fetch_total_duration.as_secs_f64(),
+                fetch_num,
+                age_str
+            );
+            log::debug!(
+                "Bundle done = {}, finish duration = {:.3}ms",
+                next_bundle_num,
+                save_duration.as_secs_f64() * 1000.0
+            );
         }
 
         Ok(SyncResult::BundleCreated {
@@ -1372,7 +1565,11 @@ impl BundleManager {
     ///
     /// If max_bundles is Some(n), stop after syncing n bundles
     /// If max_bundles is None, sync until caught up
-    pub async fn sync_once(&self, client: &crate::sync::PLCClient, max_bundles: Option<usize>) -> Result<usize> {
+    pub async fn sync_once(
+        &self,
+        client: &crate::sync::PLCClient,
+        max_bundles: Option<usize>,
+    ) -> Result<usize> {
         let mut synced = 0;
 
         loop {
@@ -1401,12 +1598,23 @@ impl BundleManager {
     }
 
     /// Save bundle to disk with compression and index updates (with timing)
-    async fn save_bundle_with_timing(&self, bundle_num: u32, operations: Vec<Operation>) -> Result<(std::time::Duration, std::time::Duration, std::time::Duration, std::time::Duration, std::time::Duration, bool)> {
-        use std::time::Instant;
+    async fn save_bundle_with_timing(
+        &self,
+        bundle_num: u32,
+        operations: Vec<Operation>,
+    ) -> Result<(
+        std::time::Duration,
+        std::time::Duration,
+        std::time::Duration,
+        std::time::Duration,
+        std::time::Duration,
+        bool,
+    )> {
         use anyhow::Context;
         use std::collections::HashSet;
         use std::fs::File;
         use std::io::Write;
+        use std::time::Instant;
 
         if operations.is_empty() {
             anyhow::bail!("Cannot save empty bundle");
@@ -1448,7 +1656,7 @@ impl BundleManager {
         // Calculate content hash from uncompressed data
         let hash_start = Instant::now();
         content_hash = {
-            use sha2::{Sha256, Digest};
+            use sha2::{Digest, Sha256};
             let mut hasher = Sha256::new();
             let mut missing_raw_json = 0;
 
@@ -1459,7 +1667,10 @@ impl BundleManager {
                 } else {
                     missing_raw_json += 1;
                     if missing_raw_json == 1 && *self.verbose.lock().unwrap() {
-                        log::warn!("⚠️  Bundle {}: Operation missing raw_json, using re-serialized JSON (may cause hash mismatch!)", bundle_num);
+                        log::warn!(
+                            "⚠️  Bundle {}: Operation missing raw_json, using re-serialized JSON (may cause hash mismatch!)",
+                            bundle_num
+                        );
                     }
                     sonic_rs::to_string(op)?
                 };
@@ -1468,7 +1679,11 @@ impl BundleManager {
             }
 
             if missing_raw_json > 0 && *self.verbose.lock().unwrap() {
-                log::warn!("⚠️  Bundle {}: {} operations missing raw_json (content hash may be incorrect!)", bundle_num, missing_raw_json);
+                log::warn!(
+                    "⚠️  Bundle {}: {} operations missing raw_json (content hash may be incorrect!)",
+                    bundle_num,
+                    missing_raw_json
+                );
             }
 
             format!("{:x}", hasher.finalize())
@@ -1483,81 +1698,104 @@ impl BundleManager {
         // Genesis bundle: SHA256("plcbundle:genesis:" + content_hash)
         // Subsequent: SHA256(parent_chain_hash + ":" + current_content_hash)
         let (parent, chain_hash) = if bundle_num > 1 {
-            use sha2::{Sha256, Digest};
-            let parent_chain_hash = self.index
+            use sha2::{Digest, Sha256};
+            let parent_chain_hash = self
+                .index
                 .read()
                 .unwrap()
                 .get_bundle(bundle_num - 1)
                 .map(|b| b.hash.clone())
                 .unwrap_or_default();
-            
+
             // Debug logging for hash calculation issues
             if parent_chain_hash.is_empty() {
-                log::warn!("⚠️  Bundle {}: Parent bundle {} not found in index! Using empty parent hash.", bundle_num, bundle_num - 1);
+                log::warn!(
+                    "⚠️  Bundle {}: Parent bundle {} not found in index! Using empty parent hash.",
+                    bundle_num,
+                    bundle_num - 1
+                );
             } else if *self.verbose.lock().unwrap() {
-                log::debug!("Bundle {}: Parent hash from bundle {}: {}", bundle_num, bundle_num - 1, &parent_chain_hash[..16]);
-                log::debug!("Bundle {}: Content hash: {}", bundle_num, &content_hash[..16]);
+                log::debug!(
+                    "Bundle {}: Parent hash from bundle {}: {}",
+                    bundle_num,
+                    bundle_num - 1,
+                    &parent_chain_hash[..16]
+                );
+                log::debug!(
+                    "Bundle {}: Content hash: {}",
+                    bundle_num,
+                    &content_hash[..16]
+                );
             }
-            
+
             let chain_input = format!("{}:{}", parent_chain_hash, content_hash);
             let mut hasher = Sha256::new();
             hasher.update(chain_input.as_bytes());
             let hash = format!("{:x}", hasher.finalize());
-            
+
             if *self.verbose.lock().unwrap() {
                 log::debug!("Bundle {}: Chain hash: {}", bundle_num, &hash[..16]);
             }
-            
+
             (parent_chain_hash, hash)
         } else {
             // Genesis bundle
-            use sha2::{Sha256, Digest};
+            use sha2::{Digest, Sha256};
             let chain_input = format!("plcbundle:genesis:{}", content_hash);
             let mut hasher = Sha256::new();
             hasher.update(chain_input.as_bytes());
             let hash = format!("{:x}", hasher.finalize());
-            
+
             (String::new(), hash)
         };
 
         // Get cursor (end_time of previous bundle per spec)
         // For the first bundle, cursor is empty string
         let cursor = if bundle_num > 1 {
-            let prev_end_time = self.index
+            let prev_end_time = self
+                .index
                 .read()
                 .unwrap()
                 .get_bundle(bundle_num - 1)
                 .map(|b| b.end_time.clone())
                 .unwrap_or_default();
-            
+
             // Validate cursor matches previous bundle's end_time
             if prev_end_time.is_empty() {
-                log::warn!("⚠️  Bundle {}: Previous bundle {} has empty end_time, cursor will be empty", bundle_num, bundle_num - 1);
+                log::warn!(
+                    "⚠️  Bundle {}: Previous bundle {} has empty end_time, cursor will be empty",
+                    bundle_num,
+                    bundle_num - 1
+                );
             }
-            
+
             prev_end_time
         } else {
             String::new()
         };
-        
+
         // Validate cursor correctness (for non-genesis bundles)
         if bundle_num > 1 {
             let expected_cursor = {
                 let index = self.index.read().unwrap();
-                index.get_bundle(bundle_num - 1)
+                index
+                    .get_bundle(bundle_num - 1)
                     .map(|b| b.end_time.clone())
                     .unwrap_or_default()
             };
             if cursor != expected_cursor {
                 anyhow::bail!(
                     "Cursor validation failed for bundle {}: expected {} (previous bundle end_time), got {}",
-                    bundle_num, expected_cursor, cursor
+                    bundle_num,
+                    expected_cursor,
+                    cursor
                 );
             }
         } else if !cursor.is_empty() {
             anyhow::bail!(
                 "Cursor validation failed for bundle {} (genesis): cursor should be empty, got {}",
-                bundle_num, cursor
+                bundle_num,
+                cursor
             );
         }
 
@@ -1567,7 +1805,11 @@ impl BundleManager {
             bundle_number: bundle_num,
             origin: self.index.read().unwrap().origin.clone(),
             content_hash: content_hash.clone(),
-            parent_hash: if !parent.is_empty() { Some(parent.clone()) } else { None },
+            parent_hash: if !parent.is_empty() {
+                Some(parent.clone())
+            } else {
+                None
+            },
             operation_count: operation_count as usize,
             did_count: did_count as usize,
             start_time: start_time.clone(),
@@ -1586,28 +1828,45 @@ impl BundleManager {
         let bundle_path_clone = bundle_path.clone();
         let bundle_metadata_frame_clone = bundle_metadata_frame.clone();
         let compressed_frames_clone = compressed_frames.clone();
-        
+
         // Write file first (metadata frame doesn't contain compressed_hash, so we can write it)
         tokio::task::spawn_blocking({
             let bundle_path_clone = bundle_path_clone.clone();
             let bundle_metadata_frame_clone = bundle_metadata_frame_clone.clone();
             let compressed_frames_clone = compressed_frames_clone.clone();
             move || {
-                let mut file = File::create(&bundle_path_clone)
-                    .with_context(|| format!("Failed to create bundle file: {}", bundle_path_clone.display()))?;
-                
+                let mut file = File::create(&bundle_path_clone).with_context(|| {
+                    format!(
+                        "Failed to create bundle file: {}",
+                        bundle_path_clone.display()
+                    )
+                })?;
+
                 // Write metadata as skippable frame first
                 crate::bundle_format::write_metadata_frame(&mut file, &bundle_metadata_frame_clone)
-                    .with_context(|| format!("Failed to write metadata frame to: {}", bundle_path_clone.display()))?;
+                    .with_context(|| {
+                        format!(
+                            "Failed to write metadata frame to: {}",
+                            bundle_path_clone.display()
+                        )
+                    })?;
 
                 // Write all compressed frames
                 for frame in &compressed_frames_clone {
-                    file.write_all(frame)
-                        .with_context(|| format!("Failed to write compressed frame to: {}", bundle_path_clone.display()))?;
+                    file.write_all(frame).with_context(|| {
+                        format!(
+                            "Failed to write compressed frame to: {}",
+                            bundle_path_clone.display()
+                        )
+                    })?;
                 }
-                file.flush()
-                    .with_context(|| format!("Failed to flush bundle file: {}", bundle_path_clone.display()))?;
-                
+                file.flush().with_context(|| {
+                    format!(
+                        "Failed to flush bundle file: {}",
+                        bundle_path_clone.display()
+                    )
+                })?;
+
                 Ok::<(), anyhow::Error>(())
             }
         })
@@ -1618,10 +1877,14 @@ impl BundleManager {
         let compressed_hash = tokio::task::spawn_blocking({
             let bundle_path_clone = bundle_path_clone.clone();
             move || {
-                use sha2::{Sha256, Digest};
-                let file_data = std::fs::read(&bundle_path_clone)
-                    .with_context(|| format!("Failed to read bundle file for hash: {}", bundle_path_clone.display()))?;
-                
+                use sha2::{Digest, Sha256};
+                let file_data = std::fs::read(&bundle_path_clone).with_context(|| {
+                    format!(
+                        "Failed to read bundle file for hash: {}",
+                        bundle_path_clone.display()
+                    )
+                })?;
+
                 let mut hasher = Sha256::new();
                 hasher.update(&file_data);
                 Ok::<String, anyhow::Error>(format!("{:x}", hasher.finalize()))
@@ -1649,7 +1912,11 @@ impl BundleManager {
             .map(|op| (op.did.clone(), op.nullified))
             .collect();
 
-        let did_index_compacted = self.did_index.write().unwrap().update_for_bundle(bundle_num, did_ops)?;
+        let did_index_compacted = self
+            .did_index
+            .write()
+            .unwrap()
+            .update_for_bundle(bundle_num, did_ops)?;
         let did_index_time = did_index_start.elapsed();
 
         // Update main index
@@ -1686,32 +1953,44 @@ impl BundleManager {
             // This prevents blocking the async runtime while holding the lock
             index.clone()
         };
-        
+
         // Serialize and write index in blocking task to avoid blocking async runtime
         // Use atomic write (temp file + rename) to prevent corruption on shutdown
         let index_path_clone = index_path.clone();
         tokio::task::spawn_blocking(move || {
             let index_json = serde_json::to_string_pretty(&index_json)?;
-            
+
             // Atomic write: write to temp file first, then rename
             // This ensures the index file is never partially written, even if process is killed
             let temp_path = index_path_clone.with_extension("json.tmp");
-            std::fs::write(&temp_path, index_json)
-                .with_context(|| format!("Failed to write temp index to: {}", temp_path.display()))?;
-            
+            std::fs::write(&temp_path, index_json).with_context(|| {
+                format!("Failed to write temp index to: {}", temp_path.display())
+            })?;
+
             // Atomic rename - this is guaranteed to be atomic on most filesystems
-            std::fs::rename(&temp_path, &index_path_clone)
-                .with_context(|| format!("Failed to rename temp index to: {}", index_path_clone.display()))?;
-            
+            std::fs::rename(&temp_path, &index_path_clone).with_context(|| {
+                format!(
+                    "Failed to rename temp index to: {}",
+                    index_path_clone.display()
+                )
+            })?;
+
             Ok::<(), anyhow::Error>(())
         })
         .await
         .context("Index write task failed")??;
         let index_write_time = index_write_start.elapsed();
 
-        Ok((serialize_time, compress_time, hash_time, did_index_time, index_write_time, did_index_compacted))
+        Ok((
+            serialize_time,
+            compress_time,
+            hash_time,
+            did_index_time,
+            index_write_time,
+            did_index_compacted,
+        ))
     }
-    
+
     /// Save bundle to disk with compression and index updates (backwards compatibility)
     #[allow(dead_code)]
     async fn save_bundle(&self, bundle_num: u32, operations: Vec<Operation>) -> Result<()> {
@@ -1720,29 +1999,33 @@ impl BundleManager {
     }
 
     /// Migrate a bundle to multi-frame format
-    /// 
+    ///
     /// This method loads a bundle and re-saves it with multi-frame compression
     /// (100 operations per frame) with frame offsets for efficient random access.
-    /// 
+    ///
     /// Returns: (size_diff, new_uncompressed_size, new_compressed_size)
     pub fn migrate_bundle(&self, bundle_num: u32) -> Result<(i64, u64, u64)> {
         use anyhow::Context;
-        use std::fs::File;
         use std::collections::HashSet;
+        use std::fs::File;
 
         // Get existing bundle metadata
-        let meta = self.get_bundle_metadata(bundle_num)?
+        let meta = self
+            .get_bundle_metadata(bundle_num)?
             .ok_or_else(|| anyhow::anyhow!("Bundle {} not in index", bundle_num))?;
-        
+
         let old_size = meta.compressed_size;
 
         // Load bundle operations
-        let load_result = self.load_bundle(bundle_num, LoadOptions {
-            decompress: true,
-            cache: false,
-            filter: None,
-            limit: None,
-        })?;
+        let load_result = self.load_bundle(
+            bundle_num,
+            LoadOptions {
+                decompress: true,
+                cache: false,
+                filter: None,
+                limit: None,
+            },
+        )?;
 
         let operations = load_result.operations;
         if operations.is_empty() {
@@ -1759,7 +2042,8 @@ impl BundleManager {
         let did_count = unique_dids.len() as u32;
 
         // Compress operations into frames using parallel compression
-        let frame_result = crate::bundle_format::compress_operations_to_frames_parallel(&operations)?;
+        let frame_result =
+            crate::bundle_format::compress_operations_to_frames_parallel(&operations)?;
         let compressed_size = frame_result.compressed_size;
         let uncompressed_size = frame_result.uncompressed_size;
 
@@ -1771,8 +2055,9 @@ impl BundleManager {
 
         // Recalculate chain hash to verify correctness
         let (expected_parent, recalculated_chain_hash) = if bundle_num > 1 {
-            use sha2::{Sha256, Digest};
-            let parent_chain_hash = self.index
+            use sha2::{Digest, Sha256};
+            let parent_chain_hash = self
+                .index
                 .read()
                 .unwrap()
                 .get_bundle(bundle_num - 1)
@@ -1786,7 +2071,7 @@ impl BundleManager {
 
             (parent_chain_hash, hash)
         } else {
-            use sha2::{Sha256, Digest};
+            use sha2::{Digest, Sha256};
             let chain_input = format!("plcbundle:genesis:{}", content_hash);
             let mut hasher = Sha256::new();
             hasher.update(chain_input.as_bytes());
@@ -1800,7 +2085,9 @@ impl BundleManager {
             anyhow::bail!(
                 "Chain hash mismatch in bundle {}: original={}, recalculated={}\n\
                 This indicates the original bundle content may be corrupted or the chain was broken.",
-                bundle_num, meta.hash, recalculated_chain_hash
+                bundle_num,
+                meta.hash,
+                recalculated_chain_hash
             );
         }
 
@@ -1809,7 +2096,9 @@ impl BundleManager {
             anyhow::bail!(
                 "Parent hash mismatch in bundle {}: original={}, expected={}\n\
                 This indicates the chain linkage is broken.",
-                bundle_num, meta.parent, expected_parent
+                bundle_num,
+                meta.parent,
+                expected_parent
             );
         }
 
@@ -1820,44 +2109,53 @@ impl BundleManager {
         // Get cursor (end_time of previous bundle per spec)
         // For the first bundle, cursor is empty string
         let cursor = if bundle_num > 1 {
-            let prev_end_time = self.index
+            let prev_end_time = self
+                .index
                 .read()
                 .unwrap()
                 .get_bundle(bundle_num - 1)
                 .map(|b| b.end_time.clone())
                 .unwrap_or_default();
-            
+
             // Validate cursor matches previous bundle's end_time
             if prev_end_time.is_empty() {
-                log::warn!("⚠️  Bundle {}: Previous bundle {} has empty end_time, cursor will be empty", bundle_num, bundle_num - 1);
+                log::warn!(
+                    "⚠️  Bundle {}: Previous bundle {} has empty end_time, cursor will be empty",
+                    bundle_num,
+                    bundle_num - 1
+                );
             }
-            
+
             prev_end_time
         } else {
             String::new()
         };
-        
+
         // Validate cursor correctness (for non-genesis bundles)
         if bundle_num > 1 {
             let expected_cursor = {
                 let index = self.index.read().unwrap();
-                index.get_bundle(bundle_num - 1)
+                index
+                    .get_bundle(bundle_num - 1)
                     .map(|b| b.end_time.clone())
                     .unwrap_or_default()
             };
             if cursor != expected_cursor {
                 anyhow::bail!(
                     "Cursor validation failed for bundle {}: expected {} (previous bundle end_time), got {}",
-                    bundle_num, expected_cursor, cursor
+                    bundle_num,
+                    expected_cursor,
+                    cursor
                 );
             }
         } else if !cursor.is_empty() {
             anyhow::bail!(
                 "Cursor validation failed for bundle {} (genesis): cursor should be empty, got {}",
-                bundle_num, cursor
+                bundle_num,
+                cursor
             );
         }
-        
+
         let origin = self.index.read().unwrap().origin.clone();
 
         // Create bundle metadata using library function
@@ -1865,7 +2163,11 @@ impl BundleManager {
             bundle_num,
             &origin,
             &content_hash,
-            if !parent.is_empty() { Some(&parent) } else { None },
+            if !parent.is_empty() {
+                Some(&parent)
+            } else {
+                None
+            },
             operation_count as usize,
             did_count as usize,
             &start_time,
@@ -1888,7 +2190,7 @@ impl BundleManager {
         // Write new bundle with multi-frame format using library function
         let mut file = File::create(&bundle_path)
             .with_context(|| format!("Failed to create bundle file: {}", bundle_path.display()))?;
-        
+
         crate::bundle_format::write_bundle_with_frames(
             &mut file,
             &bundle_metadata_frame,
@@ -1919,10 +2221,14 @@ impl BundleManager {
 
         // Calculate compressed_hash from the entire file (as verification does)
         // This must be done AFTER writing the file because it includes the metadata frame
-        use sha2::{Sha256, Digest};
-        let file_data = std::fs::read(&bundle_path)
-            .with_context(|| format!("Failed to read bundle file for hash: {}", bundle_path.display()))?;
-        
+        use sha2::{Digest, Sha256};
+        let file_data = std::fs::read(&bundle_path).with_context(|| {
+            format!(
+                "Failed to read bundle file for hash: {}",
+                bundle_path.display()
+            )
+        })?;
+
         let mut hasher = Sha256::new();
         hasher.update(&file_data);
         let compressed_hash = format!("{:x}", hasher.finalize());
@@ -1947,7 +2253,11 @@ impl BundleManager {
         {
             let mut index = self.index.write().unwrap();
             // Update existing bundle metadata
-            if let Some(existing) = index.bundles.iter_mut().find(|b| b.bundle_number == bundle_num) {
+            if let Some(existing) = index
+                .bundles
+                .iter_mut()
+                .find(|b| b.bundle_number == bundle_num)
+            {
                 *existing = bundle_metadata.clone();
             } else {
                 index.bundles.push(bundle_metadata.clone());
@@ -1955,7 +2265,8 @@ impl BundleManager {
 
             // Recalculate totals
             index.total_size_bytes = index.bundles.iter().map(|b| b.compressed_size).sum();
-            index.total_uncompressed_size_bytes = index.bundles.iter().map(|b| b.uncompressed_size).sum();
+            index.total_uncompressed_size_bytes =
+                index.bundles.iter().map(|b| b.uncompressed_size).sum();
             index.updated_at = chrono::Utc::now().to_rfc3339();
 
             // Save index to disk
@@ -1990,61 +2301,77 @@ impl BundleManager {
     }
 
     // === Remote Access ===
-    
+
     /// Fetch index from remote URL or local file path
-    /// 
+    ///
     /// This is an async method that requires a tokio runtime.
     /// For synchronous usage, use the remote module functions directly.
     pub async fn fetch_remote_index(&self, target: &str) -> Result<Index> {
         crate::remote::fetch_index(target).await
     }
-    
+
     /// Fetch bundle operations from remote URL
-    /// 
+    ///
     /// This is an async method that requires a tokio runtime.
-    pub async fn fetch_remote_bundle(&self, base_url: &str, bundle_num: u32) -> Result<Vec<Operation>> {
+    pub async fn fetch_remote_bundle(
+        &self,
+        base_url: &str,
+        bundle_num: u32,
+    ) -> Result<Vec<Operation>> {
         crate::remote::fetch_bundle_operations(base_url, bundle_num).await
     }
-    
+
     /// Fetch a single operation from remote URL
-    /// 
+    ///
     /// This is an async method that requires a tokio runtime.
-    pub async fn fetch_remote_operation(&self, base_url: &str, bundle_num: u32, position: usize) -> Result<String> {
+    pub async fn fetch_remote_operation(
+        &self,
+        base_url: &str,
+        bundle_num: u32,
+        position: usize,
+    ) -> Result<String> {
         crate::remote::fetch_operation(base_url, bundle_num, position).await
     }
 
     /// Rollback repository to a specific bundle
     pub fn rollback_to_bundle(&mut self, target_bundle: u32) -> Result<()> {
         use anyhow::Context;
-        
+
         let mut index = self.index.write().unwrap();
-        
+
         // Keep only bundles up to target
         index.bundles.retain(|b| b.bundle_number <= target_bundle);
         index.last_bundle = target_bundle;
         index.updated_at = chrono::Utc::now().to_rfc3339();
-        
+
         // Recalculate total sizes
         index.total_size_bytes = index.bundles.iter().map(|b| b.compressed_size).sum();
-        index.total_uncompressed_size_bytes = index.bundles.iter().map(|b| b.uncompressed_size).sum();
-        
+        index.total_uncompressed_size_bytes =
+            index.bundles.iter().map(|b| b.uncompressed_size).sum();
+
         // Save updated index
         let index_path = self.directory.join("plc_bundles.json");
         let index_json = serde_json::to_string_pretty(&*index)?;
         std::fs::write(&index_path, index_json)
             .with_context(|| format!("Failed to write index to: {}", index_path.display()))?;
-        
+
         Ok(())
     }
 
     /// Get bundle metadata from index
-    pub fn get_bundle_metadata(&self, bundle_num: u32) -> Result<Option<crate::index::BundleMetadata>> {
+    pub fn get_bundle_metadata(
+        &self,
+        bundle_num: u32,
+    ) -> Result<Option<crate::index::BundleMetadata>> {
         let index = self.index.read().unwrap();
         Ok(index.get_bundle(bundle_num).cloned())
     }
 
     /// Get embedded metadata from bundle's skippable frame
-    pub fn get_embedded_metadata(&self, bundle_num: u32) -> Result<Option<crate::bundle_format::BundleMetadata>> {
+    pub fn get_embedded_metadata(
+        &self,
+        bundle_num: u32,
+    ) -> Result<Option<crate::bundle_format::BundleMetadata>> {
         let bundle_path = self.directory.join(format!("{:06}.jsonl.zst", bundle_num));
 
         if !bundle_path.exists() {
@@ -2065,12 +2392,12 @@ impl BundleManager {
 
         for &bundle_num in bundle_numbers {
             let bundle_path = self.directory.join(format!("{:06}.jsonl.zst", bundle_num));
-            
+
             // Get file size before deletion
             if let Ok(metadata) = std::fs::metadata(&bundle_path) {
                 deleted_size += metadata.len();
             }
-            
+
             match std::fs::remove_file(&bundle_path) {
                 Ok(_) => deleted += 1,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => deleted += 1,
@@ -2086,12 +2413,12 @@ impl BundleManager {
     }
 
     // === Server API Methods ===
-    
+
     /// Get PLC origin from index
     pub fn get_plc_origin(&self) -> String {
         self.index.read().unwrap().origin.clone()
     }
-    
+
     /// Stream bundle raw (compressed) data
     /// Returns a reader that can be used to stream the compressed bundle file
     pub fn stream_bundle_raw(&self, bundle_num: u32) -> Result<std::fs::File> {
@@ -2102,24 +2429,30 @@ impl BundleManager {
 
         let bundle_path = self.directory.join(format!("{:06}.jsonl.zst", bundle_num));
         if !bundle_path.exists() {
-            anyhow::bail!("Bundle {} file not found (exists in index but missing on disk)", bundle_num);
+            anyhow::bail!(
+                "Bundle {} file not found (exists in index but missing on disk)",
+                bundle_num
+            );
         }
         Ok(std::fs::File::open(bundle_path)?)
     }
-    
+
     /// Stream bundle decompressed (JSONL) data
     /// Returns a reader that decompresses the bundle on-the-fly
-    pub fn stream_bundle_decompressed(&self, bundle_num: u32) -> Result<Box<dyn std::io::Read + Send>> {
+    pub fn stream_bundle_decompressed(
+        &self,
+        bundle_num: u32,
+    ) -> Result<Box<dyn std::io::Read + Send>> {
         let file = self.stream_bundle_raw(bundle_num)?;
         Ok(Box::new(zstd::Decoder::new(file)?))
     }
-    
+
     /// Get current cursor (global position of last operation)
     /// Cursor = (last_bundle * BUNDLE_SIZE) + mempool_ops_count
     pub fn get_current_cursor(&self) -> u64 {
         let index = self.index.read().unwrap();
         let bundled_ops = index.last_bundle as u64 * constants::BUNDLE_SIZE as u64;
-        
+
         // Add mempool operations if available
         let mempool_guard = self.mempool.read().unwrap();
         let mempool_ops = if let Some(mp) = mempool_guard.as_ref() {
@@ -2127,36 +2460,36 @@ impl BundleManager {
         } else {
             0
         };
-        
+
         bundled_ops + mempool_ops
     }
-    
+
     /// Resolve handle to DID or validate DID format (async version)
     /// Returns (did, handle_resolve_time_ms)
     /// Use this version when calling from async code (e.g., server handlers)
     pub async fn resolve_handle_or_did_async(&self, input: &str) -> Result<(String, u64)> {
         use std::time::Instant;
-        
+
         let input = input.trim();
-        
+
         // Normalize handle format (remove at://, @ prefixes)
         let normalized = if !input.starts_with("did:") {
             handle_resolver::normalize_handle(input)
         } else {
             input.to_string()
         };
-        
+
         // If already a DID, validate and return
         if normalized.starts_with("did:plc:") {
             crate::resolver::validate_did_format(&normalized)?;
             return Ok((normalized, 0));
         }
-        
+
         // Support did:web too
         if normalized.starts_with("did:web:") {
             return Ok((normalized, 0));
         }
-        
+
         // It's a handle - need resolver
         let resolver = match &self.handle_resolver {
             Some(r) => r,
@@ -2166,46 +2499,48 @@ impl BundleManager {
                     Configure resolver with:\n\
                       plcbundle --handle-resolver {} did resolve {}\n\n\
                     Or set default in config",
-                    normalized, constants::DEFAULT_HANDLE_RESOLVER_URL, normalized
+                    normalized,
+                    constants::DEFAULT_HANDLE_RESOLVER_URL,
+                    normalized
                 );
             }
         };
-        
+
         // Resolve handle (async operation)
         let resolve_start = Instant::now();
         let did = resolver.resolve_handle(&normalized).await?;
         let resolve_time = resolve_start.elapsed();
-        
+
         Ok((did, resolve_time.as_millis() as u64))
     }
-    
+
     /// Resolve handle to DID or validate DID format
     /// Returns (did, handle_resolve_time_ms)
     /// This is a synchronous wrapper that uses tokio runtime for async resolution
     /// For async code, use resolve_handle_or_did_async instead
     pub fn resolve_handle_or_did(&self, input: &str) -> Result<(String, u64)> {
         use std::time::Instant;
-        
+
         let input = input.trim();
-        
+
         // Normalize handle format (remove at://, @ prefixes)
         let normalized = if !input.starts_with("did:") {
             handle_resolver::normalize_handle(input)
         } else {
             input.to_string()
         };
-        
+
         // If already a DID, validate and return
         if normalized.starts_with("did:plc:") {
             crate::resolver::validate_did_format(&normalized)?;
             return Ok((normalized, 0));
         }
-        
+
         // Support did:web too
         if normalized.starts_with("did:web:") {
             return Ok((normalized, 0));
         }
-        
+
         // It's a handle - need resolver
         let resolver = match &self.handle_resolver {
             Some(r) => r,
@@ -2215,11 +2550,13 @@ impl BundleManager {
                     Configure resolver with:\n\
                       plcbundle --handle-resolver {} did resolve {}\n\n\
                     Or set default in config",
-                    normalized, constants::DEFAULT_HANDLE_RESOLVER_URL, normalized
+                    normalized,
+                    constants::DEFAULT_HANDLE_RESOLVER_URL,
+                    normalized
                 );
             }
         };
-        
+
         // Use tokio runtime to resolve handle (async operation)
         // Not in a runtime - safe to create one and use block_on
         let resolve_start = Instant::now();
@@ -2227,10 +2564,10 @@ impl BundleManager {
             .map_err(|e| anyhow::anyhow!("Failed to create tokio runtime: {}", e))?;
         let did = runtime.block_on(resolver.resolve_handle(&normalized))?;
         let resolve_time = resolve_start.elapsed();
-        
+
         Ok((did, resolve_time.as_millis() as u64))
     }
-    
+
     /// Get resolver statistics
     /// Returns a HashMap with resolver performance metrics
     pub fn get_resolver_stats(&self) -> HashMap<String, serde_json::Value> {
@@ -2238,11 +2575,13 @@ impl BundleManager {
         // TODO: Track resolver statistics
         HashMap::new()
     }
-    
+
     /// Get handle resolver base URL
     /// Returns None if handle resolver is not configured
     pub fn get_handle_resolver_base_url(&self) -> Option<String> {
-        self.handle_resolver.as_ref().map(|r| r.get_base_url().to_string())
+        self.handle_resolver
+            .as_ref()
+            .map(|r| r.get_base_url().to_string())
     }
 
     /// Get a reference to the handle resolver
@@ -2290,15 +2629,15 @@ impl BundleManager {
 
     fn filter_load_result(&self, operations: Vec<Operation>, options: &LoadOptions) -> LoadResult {
         let mut filtered = operations;
-        
+
         if let Some(ref filter) = options.filter {
             filtered.retain(|op| self.matches_filter(op, filter));
         }
-        
+
         if let Some(limit) = options.limit {
             filtered.truncate(limit);
         }
-        
+
         LoadResult {
             bundle_number: 0,
             operations: filtered,
@@ -2312,17 +2651,17 @@ impl BundleManager {
                 return false;
             }
         }
-        
+
         if let Some(ref op_type) = filter.operation_type {
             if &op.operation != op_type {
                 return false;
             }
         }
-        
+
         if !filter.include_nullified && op.nullified {
             return false;
         }
-        
+
         true
     }
 
@@ -2445,7 +2784,7 @@ pub struct VerifySpec {
     pub check_hash: bool,
     pub check_content_hash: bool,
     pub check_operations: bool,
-    pub fast: bool,  // Fast mode: only check metadata frame, skip hash calculations
+    pub fast: bool, // Fast mode: only check metadata frame, skip hash calculations
 }
 
 #[derive(Debug)]
@@ -2528,4 +2867,3 @@ pub struct RebuildStats {
     pub bundles_processed: u32,
     pub operations_indexed: u64,
 }
-

@@ -1,11 +1,11 @@
 // Replace your current src/index.rs with this:
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};  // Add Serialize here
+use serde::{Deserialize, Serialize}; // Add Serialize here
 use std::fs::File;
 use std::path::Path;
 
-#[derive(Debug, Deserialize, Serialize, Clone)]  // Add Clone here
+#[derive(Debug, Deserialize, Serialize, Clone)] // Add Clone here
 pub struct Index {
     pub version: String,
     pub origin: String,
@@ -16,7 +16,7 @@ pub struct Index {
     pub bundles: Vec<BundleMetadata>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]  // Add Serialize here
+#[derive(Debug, Deserialize, Serialize, Clone)] // Add Serialize here
 pub struct BundleMetadata {
     pub bundle_number: u32,
     pub start_time: String,
@@ -26,12 +26,12 @@ pub struct BundleMetadata {
     pub hash: String,
     pub content_hash: String,
     #[serde(default)]
-    pub parent: String,  // Empty string for first bundle
+    pub parent: String, // Empty string for first bundle
     pub compressed_hash: String,
     pub compressed_size: u64,
     pub uncompressed_size: u64,
     #[serde(default)]
-    pub cursor: String,  // Empty string for first bundle
+    pub cursor: String, // Empty string for first bundle
     pub created_at: String,
 }
 
@@ -43,6 +43,8 @@ impl Index {
     }
 
     pub fn get_bundle(&self, bundle_number: u32) -> Option<&BundleMetadata> {
-        self.bundles.iter().find(|b| b.bundle_number == bundle_number)
+        self.bundles
+            .iter()
+            .find(|b| b.bundle_number == bundle_number)
     }
 }

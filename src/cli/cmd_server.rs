@@ -1,23 +1,23 @@
 // Server command - start HTTP server
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use clap::Args;
 use std::path::PathBuf;
 use tokio::time::Duration;
 
 #[cfg(feature = "server")]
+use super::utils;
+#[cfg(feature = "server")]
+use chrono::Utc;
+#[cfg(feature = "server")]
 use plcbundle::BundleManager;
 #[cfg(feature = "server")]
-use super::utils;
+use plcbundle::server::{Server, ServerConfig};
 #[cfg(feature = "server")]
 use std::sync::Arc;
 #[cfg(feature = "server")]
 use tokio::signal;
 #[cfg(feature = "server")]
 use tokio::task::{JoinHandle, JoinSet};
-#[cfg(feature = "server")]
-use chrono::Utc;
-#[cfg(feature = "server")]
-use plcbundle::server::{Server, ServerConfig};
 
 #[derive(Args)]
 #[command(
@@ -83,21 +83,23 @@ fn parse_duration(s: &str) -> Result<Duration> {
     // Simple parser: "60s", "5m", "1h"
     let s = s.trim();
     if s.ends_with('s') {
-        let secs: u64 = s[..s.len() - 1].parse()
+        let secs: u64 = s[..s.len() - 1]
+            .parse()
             .context("Invalid duration format")?;
         Ok(Duration::from_secs(secs))
     } else if s.ends_with('m') {
-        let mins: u64 = s[..s.len() - 1].parse()
+        let mins: u64 = s[..s.len() - 1]
+            .parse()
             .context("Invalid duration format")?;
         Ok(Duration::from_secs(mins * 60))
     } else if s.ends_with('h') {
-        let hours: u64 = s[..s.len() - 1].parse()
+        let hours: u64 = s[..s.len() - 1]
+            .parse()
             .context("Invalid duration format")?;
         Ok(Duration::from_secs(hours * 3600))
     } else {
         // Try parsing as seconds
-        let secs: u64 = s.parse()
-            .context("Invalid duration format")?;
+        let secs: u64 = s.parse().context("Invalid duration format")?;
         Ok(Duration::from_secs(secs))
     }
 }
@@ -131,22 +133,28 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
     // Initialize manager with handle resolver
     // Always use default resolver URL if not explicitly provided (DID endpoints always available)
     use plcbundle::constants;
-    
+
     let handle_resolver_url = if cmd.handle_resolver.is_none() {
         if cmd.verbose {
-            log::debug!("[Resolver] Using default handle resolver: {}", constants::DEFAULT_HANDLE_RESOLVER_URL);
+            log::debug!(
+                "[Resolver] Using default handle resolver: {}",
+                constants::DEFAULT_HANDLE_RESOLVER_URL
+            );
         }
         Some(constants::DEFAULT_HANDLE_RESOLVER_URL.to_string())
     } else {
         if cmd.verbose {
-            log::debug!("[Resolver] Using custom handle resolver: {}", cmd.handle_resolver.as_ref().unwrap());
+            log::debug!(
+                "[Resolver] Using custom handle resolver: {}",
+                cmd.handle_resolver.as_ref().unwrap()
+            );
         }
         cmd.handle_resolver.clone()
     };
     let manager = if cmd.sync {
         // Sync mode can auto-init
-        BundleManager::with_handle_resolver(dir.clone(), handle_resolver_url.clone())
-            .or_else(|_| {
+        BundleManager::with_handle_resolver(dir.clone(), handle_resolver_url.clone()).or_else(
+            |_| {
                 // Try to initialize if it doesn't exist (similar to init command)
                 let index_path = dir.join("plc_bundles.json");
                 if !index_path.exists() {
@@ -167,7 +175,8 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
                     std::fs::write(&index_path, json)?;
                 }
                 BundleManager::with_handle_resolver(dir.clone(), handle_resolver_url.clone())
-            })?
+            },
+        )?
     } else {
         // Read-only mode cannot auto-init
         BundleManager::with_handle_resolver(dir.clone(), handle_resolver_url)
@@ -191,69 +200,99 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
         if cmd.verbose {
             log::debug!("[Resolver] Checking DID index status...");
         }
-        
+
         let did_index_stats = manager.get_did_index_stats();
-        let total_dids = did_index_stats.get("total_dids").and_then(|v| v.as_i64()).unwrap_or(0);
-        let total_entries = did_index_stats.get("total_entries").and_then(|v| v.as_i64()).unwrap_or(0);
+        let total_dids = did_index_stats
+            .get("total_dids")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let total_entries = did_index_stats
+            .get("total_entries")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
         if cmd.verbose {
-            log::debug!("[Resolver] DID index stats: total_dids={}, total_entries={}", 
-                total_dids, total_entries);
+            log::debug!(
+                "[Resolver] DID index stats: total_dids={}, total_entries={}",
+                total_dids,
+                total_entries
+            );
         }
-        
+
         if total_dids == 0 {
             if cmd.verbose {
                 log::debug!("[Resolver] DID index is empty or missing");
             }
-            
+
             let last_bundle = manager.get_last_bundle();
             if cmd.verbose {
                 log::debug!("[Resolver] Last bundle number: {}", last_bundle);
             }
-            
+
             if last_bundle == 0 {
                 eprintln!("⚠️  No bundles to index. DID resolution will not be available.");
-                eprintln!("    Sync bundles first with 'plcbundle sync' or 'plcbundle server --sync'");
+                eprintln!(
+                    "    Sync bundles first with 'plcbundle sync' or 'plcbundle server --sync'"
+                );
                 if cmd.verbose {
                     log::debug!("[Resolver] Skipping index build - no bundles available");
                 }
             } else {
                 eprintln!("Building DID index...");
                 eprintln!("Indexing {} bundles\n", last_bundle);
-                
+
                 if cmd.verbose {
-                    log::debug!("[Resolver] Starting index rebuild for {} bundles", last_bundle);
+                    log::debug!(
+                        "[Resolver] Starting index rebuild for {} bundles",
+                        last_bundle
+                    );
                 }
-                
+
                 let verbose = cmd.verbose; // Copy for closure
                 let start_time = std::time::Instant::now();
                 manager.rebuild_did_index(Some(move |current, total| {
                     if current % 10 == 0 || current == total {
-                        eprint!("\rProgress: {}/{} ({:.1}%)", current, total, 
-                            (current as f64 / total as f64) * 100.0);
+                        eprint!(
+                            "\rProgress: {}/{} ({:.1}%)",
+                            current,
+                            total,
+                            (current as f64 / total as f64) * 100.0
+                        );
                     }
                     if verbose && current % 100 == 0 {
                         log::debug!("[Resolver] Index progress: {}/{} bundles", current, total);
                     }
                 }))?;
-                
+
                 let elapsed = start_time.elapsed();
                 eprintln!();
-                
+
                 let stats = manager.get_did_index_stats();
-                let final_total_dids = stats.get("total_dids").and_then(|v| v.as_i64()).unwrap_or(0);
-                let final_total_entries = stats.get("total_entries").and_then(|v| v.as_i64()).unwrap_or(0);
+                let final_total_dids = stats
+                    .get("total_dids")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                let final_total_entries = stats
+                    .get("total_entries")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
                 eprintln!("✓ DID index built");
                 eprintln!("  Total DIDs: {}\n", final_total_dids);
-                
+
                 if cmd.verbose {
                     log::debug!("[Resolver] Index build completed in {:?}", elapsed);
-                    log::debug!("[Resolver] Final stats: total_dids={}, total_entries={}", 
-                        final_total_dids, final_total_entries);
+                    log::debug!(
+                        "[Resolver] Final stats: total_dids={}, total_entries={}",
+                        final_total_dids,
+                        final_total_entries
+                    );
                 }
             }
         } else {
             if cmd.verbose {
-                log::debug!("[Resolver] DID index already exists with {} DIDs", total_dids);
+                log::debug!(
+                    "[Resolver] DID index already exists with {} DIDs",
+                    total_dids
+                );
             }
         }
     } else {
@@ -265,8 +304,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
     let manager = Arc::new(manager);
 
     let addr = format!("{}:{}", cmd.host, cmd.port);
-    let socket_addr: SocketAddr = addr.parse()
-        .context("Invalid address format")?;
+    let socket_addr: SocketAddr = addr.parse().context("Invalid address format")?;
 
     // Display server info
     display_server_info(&manager, &addr, &cmd);
@@ -310,8 +348,8 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
         let shutdown_tx_sync = shutdown_tx.clone();
 
         let sync_handle = tokio::spawn(async move {
-            use plcbundle::sync::{PLCClient, SyncManager, SyncConfig};
-            
+            use plcbundle::sync::{PLCClient, SyncConfig, SyncManager};
+
             // Create PLC client
             let client = match PLCClient::new(&plc_url) {
                 Ok(c) => c,
@@ -333,8 +371,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
 
             use plcbundle::sync::ServerLogger;
             let logger = ServerLogger::new(verbose, interval);
-            let sync_manager = SyncManager::new(manager_clone, client, config)
-                .with_logger(logger);
+            let sync_manager = SyncManager::new(manager_clone, client, config).with_logger(logger);
 
             if let Err(e) = sync_manager.run_continuous().await {
                 eprintln!("[Sync] Sync loop error: {}", e);
@@ -366,7 +403,8 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
     eprintln!("\nPress Ctrl+C to stop\n");
 
     // Run server with immediate shutdown
-    let listener = tokio::net::TcpListener::bind(socket_addr).await
+    let listener = tokio::net::TcpListener::bind(socket_addr)
+        .await
         .context("Failed to bind to address")?;
 
     // Run the server - the shutdown_signal future will complete when Ctrl+C is pressed
@@ -385,20 +423,22 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
     Ok(())
 }
 
-
 #[cfg(feature = "server")]
 async fn run_resolver_ping_loop(
     resolver: Arc<plcbundle::handle_resolver::HandleResolver>,
     verbose: bool,
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) {
-    use tokio::time::{sleep, Duration, Instant};
+    use tokio::time::{Duration, Instant, sleep};
 
     // Ping every 2 minutes to keep HTTP/2 connections alive
     let ping_interval = Duration::from_secs(120);
 
     if verbose {
-        log::debug!("[Resolver] Starting keep-alive ping loop (interval: {:?})", ping_interval);
+        log::debug!(
+            "[Resolver] Starting keep-alive ping loop (interval: {:?})",
+            ping_interval
+        );
         log::debug!("[Resolver] Resolver URL: {}", resolver.get_base_url());
     }
 
@@ -425,7 +465,10 @@ async fn run_resolver_ping_loop(
         let start = Instant::now();
 
         if verbose {
-            log::debug!("[Resolver] Ping #{}: sending keep-alive request...", ping_count);
+            log::debug!(
+                "[Resolver] Ping #{}: sending keep-alive request...",
+                ping_count
+            );
         }
 
         match resolver.ping().await {
@@ -464,7 +507,7 @@ async fn run_resolver_ping_loop(
         if verbose {
             log::debug!("[Resolver] Next ping in {:?}...", ping_interval);
         }
-        
+
         // Use select to allow cancellation during sleep
         tokio::select! {
             _ = sleep(ping_interval) => {}
@@ -503,7 +546,10 @@ async fn wait_for_background_tasks(tasks: Vec<BackgroundTaskHandle>) {
 
     if !immediate_tasks.is_empty() {
         eprintln!();
-        eprintln!("Stopping {} immediate background task(s)...", immediate_tasks.len());
+        eprintln!(
+            "Stopping {} immediate background task(s)...",
+            immediate_tasks.len()
+        );
         for task in immediate_tasks {
             let BackgroundTaskHandle { name, handle, .. } = task;
             handle.abort();
@@ -582,7 +628,10 @@ async fn wait_for_background_tasks(tasks: Vec<BackgroundTaskHandle>) {
 #[cfg(feature = "server")]
 fn display_server_info(manager: &BundleManager, addr: &str, cmd: &ServerCommand) {
     eprintln!("Starting plcbundle HTTP server...");
-    eprintln!("  Directory: {}", utils::display_path(manager.directory()).display());
+    eprintln!(
+        "  Directory: {}",
+        utils::display_path(manager.directory()).display()
+    );
     eprintln!("  Listening: http://{}", addr);
 
     if cmd.sync {
@@ -615,4 +664,3 @@ fn display_server_info(manager: &BundleManager, addr: &str, cmd: &ServerCommand)
     let index = manager.get_index();
     eprintln!("  Bundles: {} available", index.bundles.len());
 }
-

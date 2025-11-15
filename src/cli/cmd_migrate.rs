@@ -1,12 +1,12 @@
 // Migrate command - convert bundles to multi-frame format
+use super::progress::ProgressBar;
+use super::utils::format_bytes;
 use anyhow::{Result, bail};
 use clap::Args;
 use plcbundle::BundleManager;
+use plcbundle::bundle_format;
 use std::path::PathBuf;
 use std::time::Instant;
-use super::progress::ProgressBar;
-use super::utils::format_bytes;
-use plcbundle::bundle_format;
 
 #[derive(Args)]
 #[command(
@@ -80,7 +80,7 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
 
     for meta in bundles {
         let bundle_path = dir.join(format!("{:06}.jsonl.zst", meta.bundle_number));
-        
+
         // Try to extract metadata to check format
         let old_format = match bundle_format::extract_metadata_from_file(&bundle_path) {
             Ok(embedded_meta) => {
@@ -111,7 +111,9 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
                 old_format,
             });
             total_size += meta.compressed_size;
-            *format_counts.entry(needs_migration.last().unwrap().old_format.clone()).or_insert(0) += 1;
+            *format_counts
+                .entry(needs_migration.last().unwrap().old_format.clone())
+                .or_insert(0) += 1;
         }
     }
 
@@ -142,8 +144,16 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
     };
 
     eprintln!("  Bundles: {}", needs_migration.len());
-    eprintln!("  Size:    {} ({:.3}x compression)", format_bytes(total_size), avg_compression);
-    eprintln!("  Workers: {}, Compression Level: {}\n", workers, plcbundle::constants::ZSTD_COMPRESSION_LEVEL);
+    eprintln!(
+        "  Size:    {} ({:.3}x compression)",
+        format_bytes(total_size),
+        avg_compression
+    );
+    eprintln!(
+        "  Workers: {}, Compression Level: {}\n",
+        workers,
+        plcbundle::constants::ZSTD_COMPRESSION_LEVEL
+    );
 
     if cmd.dry_run {
         eprintln!("💡 Dry-run mode");
@@ -185,47 +195,53 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
             .par_chunks(chunk_size)
             .flat_map(|chunk| {
                 // Process chunk in parallel
-                chunk.par_iter().map(|info| {
-                    let result = manager.migrate_bundle(info.bundle_number);
+                chunk
+                    .par_iter()
+                    .map(|info| {
+                        let result = manager.migrate_bundle(info.bundle_number);
 
-                    // Update progress with bytes
-                    {
-                        let mut prog = progress_arc.lock().unwrap();
-                        *prog += 1;
-                        let count = *prog;
-                        drop(prog);
+                        // Update progress with bytes
+                        {
+                            let mut prog = progress_arc.lock().unwrap();
+                            *prog += 1;
+                            let count = *prog;
+                            drop(prog);
 
-                        let mut bytes = bytes_processed_arc.lock().unwrap();
-                        *bytes += info.old_size;
-                        let total_bytes = *bytes;
-                        drop(bytes);
+                            let mut bytes = bytes_processed_arc.lock().unwrap();
+                            *bytes += info.old_size;
+                            let total_bytes = *bytes;
+                            drop(bytes);
 
-                        progress.set_with_bytes(count, total_bytes);
-                    }
+                            progress.set_with_bytes(count, total_bytes);
+                        }
 
-                    (info, result)
-                }).collect::<Vec<_>>()
+                        (info, result)
+                    })
+                    .collect::<Vec<_>>()
             })
             .collect()
     } else {
         // Sequential mode
-        needs_migration.iter().map(|info| {
-            let result = manager.migrate_bundle(info.bundle_number);
+        needs_migration
+            .iter()
+            .map(|info| {
+                let result = manager.migrate_bundle(info.bundle_number);
 
-            let mut prog = progress_arc.lock().unwrap();
-            *prog += 1;
-            let count = *prog;
-            drop(prog);
+                let mut prog = progress_arc.lock().unwrap();
+                *prog += 1;
+                let count = *prog;
+                drop(prog);
 
-            let mut bytes = bytes_processed_arc.lock().unwrap();
-            *bytes += info.old_size;
-            let total_bytes = *bytes;
-            drop(bytes);
+                let mut bytes = bytes_processed_arc.lock().unwrap();
+                *bytes += info.old_size;
+                let total_bytes = *bytes;
+                drop(bytes);
 
-            progress.set_with_bytes(count, total_bytes);
+                progress.set_with_bytes(count, total_bytes);
 
-            (info, result)
-        }).collect()
+                (info, result)
+            })
+            .collect()
     };
 
     // Process results
@@ -250,8 +266,10 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
                     } else {
                         format!("-{}", format_bytes((-size_diff) as u64))
                     };
-                    eprintln!("✓ {:06}: {:.3}x→{:.3}x {}",
-                        info.bundle_number, old_ratio, new_ratio, size_change);
+                    eprintln!(
+                        "✓ {:06}: {:.3}x→{:.3}x {}",
+                        info.bundle_number, old_ratio, new_ratio, size_change
+                    );
                 }
             }
             Err(e) => {
@@ -259,7 +277,9 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
                 let err_msg = e.to_string();
 
                 // Always print chain hash errors (even in non-verbose mode)
-                if err_msg.contains("Chain hash mismatch") || err_msg.contains("Parent hash mismatch") {
+                if err_msg.contains("Chain hash mismatch")
+                    || err_msg.contains("Parent hash mismatch")
+                {
                     eprintln!("\n❌ Bundle {:06}: {}", info.bundle_number, err_msg);
                 } else if cmd.verbose {
                     eprintln!("✗ Bundle {:06} failed: {}", info.bundle_number, e);
@@ -280,7 +300,11 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
         eprintln!("\nUpdating index...");
         let update_start = Instant::now();
         // Index is already updated by migrate_bundle, just verify
-        eprintln!("  ✓ {} entries in {:?}", hash_changes.len(), update_start.elapsed());
+        eprintln!(
+            "  ✓ {} entries in {:?}",
+            hash_changes.len(),
+            update_start.elapsed()
+        );
     }
 
     // Summary
@@ -310,44 +334,60 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
             } else {
                 format!("-{}", format_bytes((-size_diff) as u64))
             };
-            eprintln!("Size          {:<13} {:<13} {} ({:.1}%)",
+            eprintln!(
+                "Size          {:<13} {:<13} {} ({:.1}%)",
                 format_bytes(total_old_size),
                 format_bytes(total_new_size),
                 size_change,
-                size_diff as f64 / total_old_size as f64 * 100.0);
-            eprintln!("Ratio         {:<13} {:<13} {}",
+                size_diff as f64 / total_old_size as f64 * 100.0
+            );
+            eprintln!(
+                "Ratio         {:<13} {:<13} {}",
                 format!("{:.3}x", old_ratio),
                 format!("{:.3}x", new_ratio),
-                format!("{:+.3}x", ratio_diff));
+                format!("{:+.3}x", ratio_diff)
+            );
             let avg_change = size_diff / success as i64;
             let avg_change_str = if avg_change >= 0 {
                 format!("+{}", format_bytes(avg_change as u64))
             } else {
                 format!("-{}", format_bytes((-avg_change) as u64))
             };
-            eprintln!("Avg/bundle    {:<13} {:<13} {}\n",
+            eprintln!(
+                "Avg/bundle    {:<13} {:<13} {}\n",
                 format_bytes(total_old_size / success as u64),
                 format_bytes(total_new_size / success as u64),
-                avg_change_str);
+                avg_change_str
+            );
 
             if total_actual_metadata > 0 {
                 let compression_efficiency = size_diff - total_actual_metadata as i64;
                 let threshold = total_old_size as i64 / 1000; // 0.1% of old size
 
                 eprintln!("Breakdown:");
-                eprintln!("  Metadata:     {} (~{}/bundle, structural)",
+                eprintln!(
+                    "  Metadata:     {} (~{}/bundle, structural)",
                     format_bytes(total_actual_metadata),
-                    format_bytes(total_actual_metadata / success as u64));
+                    format_bytes(total_actual_metadata / success as u64)
+                );
 
                 if compression_efficiency.abs() > threshold {
                     if compression_efficiency > 0 {
-                        let pct_worse = compression_efficiency as f64 / total_old_size as f64 * 100.0;
-                        eprintln!("  Compression:  {} ({:.2}% worse)",
-                            format_bytes(compression_efficiency as u64), pct_worse);
+                        let pct_worse =
+                            compression_efficiency as f64 / total_old_size as f64 * 100.0;
+                        eprintln!(
+                            "  Compression:  {} ({:.2}% worse)",
+                            format_bytes(compression_efficiency as u64),
+                            pct_worse
+                        );
                     } else {
-                        let pct_better = (-compression_efficiency) as f64 / total_old_size as f64 * 100.0;
-                        eprintln!("  Compression:  {} ({:.2}% better)",
-                            format_bytes((-compression_efficiency) as u64), pct_better);
+                        let pct_better =
+                            (-compression_efficiency) as f64 / total_old_size as f64 * 100.0;
+                        eprintln!(
+                            "  Compression:  {} ({:.2}% better)",
+                            format_bytes((-compression_efficiency) as u64),
+                            pct_better
+                        );
                     }
                 } else {
                     eprintln!("  Compression:  unchanged");
@@ -396,23 +436,22 @@ struct BundleMigrationInfo {
 
 fn measure_metadata_size(bundle_path: &PathBuf) -> Result<u64> {
     use std::io::Read;
-    
+
     let mut file = std::fs::File::open(bundle_path)?;
-    
+
     // Read magic (4 bytes) + size (4 bytes)
     let mut header = [0u8; 8];
     file.read_exact(&mut header)?;
-    
+
     // Check if it's a skippable frame
     let magic = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
     if magic < 0x184D2A50 || magic > 0x184D2A5F {
         return Ok(0); // No metadata frame
     }
-    
+
     // Get frame data size
     let frame_size = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as u64;
-    
+
     // Total metadata size = 4 (magic) + 4 (size) + frameSize (data)
     Ok(8 + frame_size)
 }
-

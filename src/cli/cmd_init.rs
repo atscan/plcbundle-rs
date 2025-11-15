@@ -85,7 +85,7 @@ pub fn run(cmd: InitCommand) -> Result<()> {
 }
 
 fn prompt_plc_directory_url() -> Result<String> {
-    use dialoguer::{theme::ColorfulTheme, Select};
+    use dialoguer::{Select, theme::ColorfulTheme};
 
     println!("\n┌  Welcome to plcbundle-rs!");
     println!("│");

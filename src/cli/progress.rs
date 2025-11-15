@@ -1,4 +1,4 @@
-use std::io::{self, Write, IsTerminal};
+use std::io::{self, IsTerminal, Write};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -108,14 +108,14 @@ impl ProgressBar {
     fn print(&self) {
         let current = *self.current.lock().unwrap();
         let current_bytes = *self.current_bytes.lock().unwrap();
-        
+
         if self.is_tty {
             self.print_bar(current, current_bytes);
         } else {
             self.print_line(current, current_bytes);
         }
     }
-    
+
     fn print_bar(&self, current: usize, current_bytes: u64) {
         let mut last_print = self.last_print.lock().unwrap();
 
@@ -173,7 +173,13 @@ impl ProgressBar {
             } else {
                 eprint!(
                     "\r  [{}] {:6.2}% | {}/{} | {:.1}/s | {:.1} MB/s | ETA: {} ",
-                    bar, percent, current, self.total, speed, mb_per_sec, format_eta(eta)
+                    bar,
+                    percent,
+                    current,
+                    self.total,
+                    speed,
+                    mb_per_sec,
+                    format_eta(eta)
                 );
             }
         } else {
@@ -185,16 +191,21 @@ impl ProgressBar {
             } else {
                 eprint!(
                     "\r  [{}] {:6.2}% | {}/{} | {:.1}/s | ETA: {} ",
-                    bar, percent, current, self.total, speed, format_eta(eta)
+                    bar,
+                    percent,
+                    current,
+                    self.total,
+                    speed,
+                    format_eta(eta)
                 );
             }
         }
         let _ = io::stderr().flush();
     }
-    
+
     fn print_line(&self, current: usize, current_bytes: u64) {
         let mut last_line_print = self.last_line_print.lock().unwrap();
-        
+
         // Throttle line updates (max 1 per second for logging, but always show completion)
         let is_complete = current >= self.total;
         if !is_complete && last_line_print.elapsed() < Duration::from_secs(1) {
@@ -202,20 +213,20 @@ impl ProgressBar {
         }
         *last_line_print = Instant::now();
         drop(last_line_print);
-        
+
         let percent = if self.total > 0 {
             (current as f64 / self.total as f64) * 100.0
         } else {
             0.0
         };
-        
+
         let elapsed = self.start_time.elapsed();
         let speed = if elapsed.as_secs_f64() > 0.0 {
             current as f64 / elapsed.as_secs_f64()
         } else {
             0.0
         };
-        
+
         if self.show_bytes && current_bytes > 0 {
             let mb_processed = current_bytes as f64 / 1_000_000.0;
             let mb_per_sec = if elapsed.as_secs_f64() > 0.0 {
@@ -223,11 +234,15 @@ impl ProgressBar {
             } else {
                 0.0
             };
-            eprintln!("Progress: {:.1}% ({}/{} | {:.1}/s | {:.1} MB/s)", 
-                percent, current, self.total, speed, mb_per_sec);
+            eprintln!(
+                "Progress: {:.1}% ({}/{} | {:.1}/s | {:.1} MB/s)",
+                percent, current, self.total, speed, mb_per_sec
+            );
         } else {
-            eprintln!("Progress: {:.1}% ({}/{} | {:.1}/s)", 
-                percent, current, self.total, speed);
+            eprintln!(
+                "Progress: {:.1}% ({}/{} | {:.1}/s)",
+                percent, current, self.total, speed
+            );
         }
     }
 }
@@ -250,4 +265,3 @@ fn format_eta(duration: Duration) -> String {
         format!("{}h {}m", hours, mins)
     }
 }
-

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use indicatif::{ProgressBar, ProgressStyle, HumanDuration};
+use indicatif::{HumanDuration, ProgressBar, ProgressStyle};
 use plcbundle::*;
 use std::io::Write;
 use std::path::PathBuf;
@@ -9,7 +9,7 @@ use std::time::Instant;
 use super::utils;
 // QueryModeArg and OutputFormat are defined in plcbundle-rs.rs
 // Access them via the parent module
-use super::{QueryModeArg, OutputFormat};
+use super::{OutputFormat, QueryModeArg};
 
 pub struct StdoutHandler {
     lock: Mutex<()>,
@@ -150,11 +150,18 @@ pub fn cmd_query(
 
     if !quiet {
         log::info!("\n✅ Complete in {}", HumanDuration(elapsed));
-        log::info!("   Operations: {} ({:.2}% matched)", 
-            utils::format_number(stats.operations as u64), match_pct);
-        log::info!("   Data processed: {}", utils::format_bytes(stats.total_bytes));
+        log::info!(
+            "   Operations: {} ({:.2}% matched)",
+            utils::format_number(stats.operations as u64),
+            match_pct
+        );
+        log::info!(
+            "   Data processed: {}",
+            utils::format_bytes(stats.total_bytes)
+        );
         if elapsed.as_secs_f64() > 0.0 {
-            log::info!("   Throughput: {:.0} ops/sec | {}/s",
+            log::info!(
+                "   Throughput: {:.0} ops/sec | {}/s",
                 stats.operations as f64 / elapsed.as_secs_f64(),
                 utils::format_bytes((stats.total_bytes as f64 / elapsed.as_secs_f64()) as u64)
             );

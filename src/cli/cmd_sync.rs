@@ -1,10 +1,13 @@
+use super::utils;
 use anyhow::Result;
 use clap::Args;
-use plcbundle::{BundleManager, sync::{PLCClient, SyncManager, SyncConfig, CliLogger, ServerLogger}, constants};
+use plcbundle::{
+    BundleManager, constants,
+    sync::{CliLogger, PLCClient, ServerLogger, SyncConfig, SyncManager},
+};
 use std::path::PathBuf;
-use std::time::Duration;
 use std::sync::Arc;
-use super::utils;
+use std::time::Duration;
 
 #[derive(Args)]
 pub struct SyncCommand {
@@ -39,11 +42,17 @@ pub struct SyncCommand {
 
 fn parse_duration(s: &str) -> Result<Duration, String> {
     if let Some(s) = s.strip_suffix('s') {
-        s.parse::<u64>().map(Duration::from_secs).map_err(|e| e.to_string())
+        s.parse::<u64>()
+            .map(Duration::from_secs)
+            .map_err(|e| e.to_string())
     } else if let Some(s) = s.strip_suffix('m') {
-        s.parse::<u64>().map(|m| Duration::from_secs(m * 60)).map_err(|e| e.to_string())
+        s.parse::<u64>()
+            .map(|m| Duration::from_secs(m * 60))
+            .map_err(|e| e.to_string())
     } else {
-        s.parse::<u64>().map(Duration::from_secs).map_err(|e| e.to_string())
+        s.parse::<u64>()
+            .map(Duration::from_secs)
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -72,7 +81,7 @@ pub fn run(cmd: SyncCommand) -> Result<()> {
         };
 
         let quiet = cmd.quiet;
-        
+
         if cmd.continuous {
             // For continuous mode, use run_continuous() with ServerLogger to enable verbose toggle
             let config = SyncConfig {
@@ -84,20 +93,22 @@ pub fn run(cmd: SyncCommand) -> Result<()> {
                 shutdown_rx: None,
                 shutdown_tx: None,
             };
-            
+
             let logger = ServerLogger::new(cmd.verbose, cmd.interval);
-            let sync_manager = SyncManager::new(manager, client, config)
-                .with_logger(logger);
-            
+            let sync_manager = SyncManager::new(manager, client, config).with_logger(logger);
+
             sync_manager.run_continuous().await?;
             Ok(())
         } else {
             // For one-time sync, use run_once() with logger
             let logger = CliLogger::new(quiet);
-            let sync_manager = SyncManager::new(manager, client, config)
-                .with_logger(logger);
-            
-            let max_bundles = if cmd.max_bundles > 0 { Some(cmd.max_bundles) } else { None };
+            let sync_manager = SyncManager::new(manager, client, config).with_logger(logger);
+
+            let max_bundles = if cmd.max_bundles > 0 {
+                Some(cmd.max_bundles)
+            } else {
+                None
+            };
             let synced = sync_manager.run_once(max_bundles).await?;
 
             if !quiet {

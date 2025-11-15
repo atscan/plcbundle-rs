@@ -1,8 +1,8 @@
 // DID Resolution - Convert PLC operations to W3C DID Documents
+use crate::operations::Operation;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::operations::Operation;
 
 // ============================================================================
 // DID State (PLC-specific format)
@@ -127,7 +127,10 @@ fn apply_operation_to_state(state: &mut DIDState, op_data: &serde_json::Value) {
     }
 
     // Update verification methods
-    if let Some(vm) = op_data.get("verificationMethods").and_then(|v| v.as_object()) {
+    if let Some(vm) = op_data
+        .get("verificationMethods")
+        .and_then(|v| v.as_object())
+    {
         state.verification_methods = vm
             .iter()
             .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
@@ -136,7 +139,9 @@ fn apply_operation_to_state(state: &mut DIDState, op_data: &serde_json::Value) {
 
     // Handle legacy signingKey format
     if let Some(signing_key) = op_data.get("signingKey").and_then(|v| v.as_str()) {
-        state.verification_methods.insert("atproto".to_string(), signing_key.to_string());
+        state
+            .verification_methods
+            .insert("atproto".to_string(), signing_key.to_string());
     }
 
     // Update alsoKnownAs
@@ -161,10 +166,13 @@ fn apply_operation_to_state(state: &mut DIDState, op_data: &serde_json::Value) {
             .filter_map(|(k, v)| {
                 let service_type = v.get("type")?.as_str()?.to_string();
                 let endpoint = v.get("endpoint")?.as_str()?.to_string();
-                Some((k.clone(), ServiceDefinition {
-                    service_type,
-                    endpoint: normalize_service_endpoint(&endpoint),
-                }))
+                Some((
+                    k.clone(),
+                    ServiceDefinition {
+                        service_type,
+                        endpoint: normalize_service_endpoint(&endpoint),
+                    },
+                ))
             })
             .collect();
     }
@@ -262,15 +270,18 @@ fn detect_key_type(did_key: &str) -> KeyType {
 
     // The 'z' is base58btc multibase prefix, check next characters
     match &multibase[1..3] {
-        "Q3" => KeyType::Secp256k1,  // zQ3s...
-        "Dn" => KeyType::P256,        // zDn...
-        "6M" => KeyType::Ed25519,     // z6Mk...
+        "Q3" => KeyType::Secp256k1, // zQ3s...
+        "Dn" => KeyType::P256,      // zDn...
+        "6M" => KeyType::Ed25519,   // z6Mk...
         _ => KeyType::Unknown,
     }
 }
 
 fn extract_multibase_from_did_key(did_key: &str) -> String {
-    did_key.strip_prefix("did:key:").unwrap_or(did_key).to_string()
+    did_key
+        .strip_prefix("did:key:")
+        .unwrap_or(did_key)
+        .to_string()
 }
 
 fn normalize_service_endpoint(endpoint: &str) -> String {
@@ -297,13 +308,19 @@ pub fn validate_did_format(did: &str) -> Result<()> {
     // Validate identifier part (24 chars, base32 alphabet)
     let identifier = &did[8..];
     if identifier.len() != 24 {
-        anyhow::bail!("invalid identifier length: expected 24 chars, got {}", identifier.len());
+        anyhow::bail!(
+            "invalid identifier length: expected 24 chars, got {}",
+            identifier.len()
+        );
     }
 
     // Check base32 alphabet (a-z, 2-7)
     for c in identifier.chars() {
         if !matches!(c, 'a'..='z' | '2'..='7') {
-            anyhow::bail!("invalid character in identifier: {} (must be base32: a-z, 2-7)", c);
+            anyhow::bail!(
+                "invalid character in identifier: {} (must be base32: a-z, 2-7)",
+                c
+            );
         }
     }
 
@@ -329,15 +346,12 @@ pub struct AuditLogEntry {
 pub fn format_audit_log(operations: &[Operation]) -> Vec<AuditLogEntry> {
     operations
         .iter()
-        .map(|op| {
-            AuditLogEntry {
-                did: op.did.clone(),
-                operation: op.operation.clone(),
-                cid: op.cid.clone(),
-                nullified: if op.nullified { Some(true) } else { None },
-                created_at: op.created_at.clone(),
-            }
+        .map(|op| AuditLogEntry {
+            did: op.did.clone(),
+            operation: op.operation.clone(),
+            cid: op.cid.clone(),
+            nullified: if op.nullified { Some(true) } else { None },
+            created_at: op.created_at.clone(),
         })
         .collect()
 }
-

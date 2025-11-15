@@ -22,7 +22,7 @@ pub fn parse_bundle_spec(spec: Option<String>, max_bundle: u32) -> Result<Vec<u3
 /// Parse bundle range string (e.g., "1-10,15,20-25")
 pub fn parse_bundle_range(spec: &str, _max_bundle: u32) -> Result<Vec<u32>> {
     let mut result = Vec::new();
-    
+
     for part in spec.split(',') {
         let part = part.trim();
         if part.contains('-') {
@@ -41,7 +41,7 @@ pub fn parse_bundle_range(spec: &str, _max_bundle: u32) -> Result<Vec<u32>> {
             result.push(num);
         }
     }
-    
+
     Ok(result)
 }
 
@@ -114,7 +114,10 @@ pub fn get_num_workers(workers: usize, fallback: usize) -> usize {
         match std::thread::available_parallelism() {
             Ok(n) => n.get(),
             Err(e) => {
-                eprintln!("Warning: Failed to detect CPU count: {}, using fallback: {}", e, fallback);
+                eprintln!(
+                    "Warning: Failed to detect CPU count: {}, using fallback: {}",
+                    e, fallback
+                );
                 fallback
             }
         }
@@ -122,4 +125,3 @@ pub fn get_num_workers(workers: usize, fallback: usize) -> usize {
         workers
     }
 }
-

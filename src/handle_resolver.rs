@@ -143,7 +143,7 @@ pub fn validate_handle_format(handle: &str) -> Result<()> {
     // Valid handle pattern (simplified - matches AT Protocol spec)
     let valid_pattern = Regex::new(r"^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$")
         .expect("Invalid regex pattern");
-    
+
     if !valid_pattern.is_match(handle) {
         anyhow::bail!("Invalid handle format");
     }
@@ -163,4 +163,3 @@ pub fn normalize_handle(handle: &str) -> String {
         .trim_start_matches("@")
         .to_string()
 }
-

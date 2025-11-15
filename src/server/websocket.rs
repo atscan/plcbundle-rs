@@ -2,16 +2,16 @@
 
 use crate::constants;
 use crate::server::handlers::ServerState;
+use axum::extract::ws::Message;
 use axum::{
     body::Bytes,
     extract::{Query, State, ws::WebSocketUpgrade},
     response::Response,
 };
-use axum::extract::ws::Message;
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use std::sync::Arc;
-use tokio::time::{interval, Duration};
+use tokio::time::{Duration, interval};
 
 #[derive(Deserialize)]
 pub struct CursorQuery {
@@ -23,7 +23,9 @@ pub async fn handle_websocket(
     ws: WebSocketUpgrade,
     Query(params): Query<CursorQuery>,
 ) -> Response {
-    let start_cursor = params.cursor.unwrap_or_else(|| state.manager.get_current_cursor());
+    let start_cursor = params
+        .cursor
+        .unwrap_or_else(|| state.manager.get_current_cursor());
     ws.on_upgrade(move |socket| handle_websocket_connection(socket, state, start_cursor))
 }
 
@@ -38,7 +40,8 @@ async fn handle_websocket_connection(
     let receiver_task = tokio::spawn(async move {
         while let Some(msg) = receiver.next().await {
             match msg {
-                Ok(axum::extract::ws::Message::Close(_)) | Ok(axum::extract::ws::Message::Pong(_)) => {
+                Ok(axum::extract::ws::Message::Close(_))
+                | Ok(axum::extract::ws::Message::Pong(_)) => {
                     // Normal close or pong, continue
                 }
                 Err(e) => {
@@ -83,14 +86,14 @@ async fn stream_live_operations(
         if start_bundle_idx < bundles.len() {
             for i in start_bundle_idx..bundles.len() {
                 let bundle_num = bundles[i].bundle_number;
-                let skip_until = if i == start_bundle_idx { start_position } else { 0 };
+                let skip_until = if i == start_bundle_idx {
+                    start_position
+                } else {
+                    0
+                };
 
-                let streamed = stream_bundle(
-                    &state.manager,
-                    bundle_num,
-                    skip_until,
-                    sender,
-                ).await?;
+                let streamed =
+                    stream_bundle(&state.manager, bundle_num, skip_until, sender).await?;
                 current_record += streamed as u64;
             }
         }
@@ -107,7 +110,8 @@ async fn stream_live_operations(
         &mut current_record,
         &mut last_seen_mempool_count,
         sender,
-    ).await?;
+    )
+    .await?;
 
     // Poll for new bundles and mempool updates
     let mut ticker = interval(Duration::from_millis(500));
@@ -135,7 +139,8 @@ async fn stream_live_operations(
             &mut current_record,
             &mut last_seen_mempool_count,
             sender,
-        ).await?;
+        )
+        .await?;
 
         // Send ping
         if let Err(e) = sender.send(Message::Ping(Bytes::new())).await {
@@ -178,7 +183,8 @@ async fn stream_bundle(
             position += 1;
         }
         lines
-    }).await?;
+    })
+    .await?;
 
     // Send lines
     let mut streamed = 0;
@@ -247,4 +253,3 @@ async fn stream_mempool(
     *last_seen_count = mempool_ops.len();
     Ok(())
 }
-

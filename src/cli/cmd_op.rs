@@ -32,39 +32,34 @@ pub fn parse_op_position(bundle: u32, position: Option<usize>) -> (u32, usize) {
 #[allow(dead_code)]
 fn format_duration(duration: Duration) -> String {
     let secs = duration.as_secs();
-    
+
     if secs < 60 {
         return format!("{}s", secs);
     }
-    
+
     let minutes = secs / 60;
     if minutes < 60 {
         return format!("{}m", minutes);
     }
-    
+
     let hours = minutes / 60;
     if hours < 24 {
         return format!("{}h", hours);
     }
-    
+
     let days = hours / 24;
     if days < 365 {
         return format!("{}d", days);
     }
-    
+
     format!("{}y", days / 365)
 }
 
-pub fn cmd_op_get(
-    dir: PathBuf,
-    bundle: u32,
-    position: Option<usize>,
-    quiet: bool,
-) -> Result<()> {
+pub fn cmd_op_get(dir: PathBuf, bundle: u32, position: Option<usize>, quiet: bool) -> Result<()> {
     let (bundle_num, op_index) = parse_op_position(bundle, position);
-    
+
     let manager = BundleManager::new(dir)?;
-    
+
     if quiet {
         // Just output JSON - no stats
         let json = manager.get_operation_raw(bundle_num, op_index)?;
@@ -72,71 +67,80 @@ pub fn cmd_op_get(
     } else {
         // Output with stats
         let result = manager.get_operation_with_stats(bundle_num, op_index)?;
-        let global_pos = ((bundle_num - 1) as u64 * constants::BUNDLE_SIZE as u64) + op_index as u64;
-        
-        log::info!("[Load] Bundle {:06}:{:04} (pos={}) in {:?} | {} bytes",
-            bundle_num, op_index, global_pos, result.load_duration, result.size_bytes);
-        
+        let global_pos =
+            ((bundle_num - 1) as u64 * constants::BUNDLE_SIZE as u64) + op_index as u64;
+
+        log::info!(
+            "[Load] Bundle {:06}:{:04} (pos={}) in {:?} | {} bytes",
+            bundle_num,
+            op_index,
+            global_pos,
+            result.load_duration,
+            result.size_bytes
+        );
+
         println!("{}", result.raw_json);
     }
-    
+
     Ok(())
 }
 
-pub fn cmd_op_show(
-    dir: PathBuf,
-    bundle: u32,
-    position: Option<usize>,
-    quiet: bool,
-) -> Result<()> {
+pub fn cmd_op_show(dir: PathBuf, bundle: u32, position: Option<usize>, quiet: bool) -> Result<()> {
     let (bundle_num, op_index) = parse_op_position(bundle, position);
-    
+
     let manager = BundleManager::new(dir)?;
-    
+
     // Use the new get_operation API instead of loading entire bundle
     let load_start = Instant::now();
     let op = manager.get_operation(bundle_num, op_index)?;
     let load_duration = load_start.elapsed();
-    
+
     let parse_start = Instant::now();
     // Operation is already parsed by get_operation
     let parse_duration = parse_start.elapsed();
-    
+
     let global_pos = ((bundle_num - 1) as u64 * constants::BUNDLE_SIZE as u64) + op_index as u64;
-    
+
     // Extract operation details
-    let op_type = op.operation.get("type")
+    let op_type = op
+        .operation
+        .get("type")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
-    
-    let handle = op.operation.get("handle")
+
+    let handle = op
+        .operation
+        .get("handle")
         .and_then(|v| v.as_str())
         .or_else(|| {
-            op.operation.get("alsoKnownAs")
+            op.operation
+                .get("alsoKnownAs")
                 .and_then(|v| v.as_array())
                 .and_then(|arr| arr.first())
                 .and_then(|v| v.as_str())
                 .map(|s| s.trim_start_matches("at://"))
         });
-    
-    let pds = op.operation.get("services")
+
+    let pds = op
+        .operation
+        .get("services")
         .and_then(|v| v.as_object())
         .and_then(|services| services.get("atproto_pds"))
         .and_then(|v| v.as_object())
         .and_then(|pds| pds.get("endpoint"))
         .and_then(|v| v.as_str());
-    
+
     // Display formatted output
     println!("═══════════════════════════════════════════════════════════════");
     println!("                    Operation {}", global_pos);
     println!("═══════════════════════════════════════════════════════════════\n");
-    
+
     println!("Location");
     println!("────────");
     println!("  Bundle:          {:06}", bundle_num);
     println!("  Position:        {}", op_index);
     println!("  Global position: {}\n", global_pos);
-    
+
     println!("Identity");
     println!("────────");
     println!("  DID:             {}", op.did);
@@ -145,14 +149,14 @@ pub fn cmd_op_show(
     } else {
         println!();
     }
-    
+
     println!("Timestamp");
     println!("─────────");
     println!("  Created:         {}", op.created_at);
     // Would calculate age here with proper datetime parsing
     // println!("  Age:             {}\n", format_duration(age));
     println!();
-    
+
     println!("Status");
     println!("──────");
     let status = if op.nullified {
@@ -161,44 +165,44 @@ pub fn cmd_op_show(
         "✓ Active"
     };
     println!("  {}\n", status);
-    
+
     // Performance metrics (when not quiet)
     if !quiet {
         let total_time = load_duration + parse_duration;
         let json_size = serde_json::to_string(&op).map(|s| s.len()).unwrap_or(0);
-        
+
         println!("Performance");
         println!("───────────");
         println!("  Load time:       {:?}", load_duration);
         println!("  Parse time:      {:?}", parse_duration);
         println!("  Total time:      {:?}", total_time);
-        
+
         if json_size > 0 {
             println!("  Data size:       {} bytes", json_size);
             let mb_per_sec = (json_size as f64) / load_duration.as_secs_f64() / (1024.0 * 1024.0);
             println!("  Load speed:      {:.2} MB/s", mb_per_sec);
         }
-        
+
         println!();
     }
-    
+
     // Operation details
     if !op.nullified {
         println!("Details");
         println!("───────");
         println!("  Type:            {}", op_type);
-        
+
         if let Some(h) = handle {
             println!("  Handle:          {}", h);
         }
-        
+
         if let Some(p) = pds {
             println!("  PDS:             {}", p);
         }
-        
+
         println!();
     }
-    
+
     // Show full JSON when not quiet
     if !quiet {
         println!("Raw JSON");
@@ -206,51 +210,48 @@ pub fn cmd_op_show(
         let json = serde_json::to_string_pretty(&op)?;
         println!("{}\n", json);
     }
-    
+
     Ok(())
 }
 
-pub fn cmd_op_find(
-    dir: PathBuf,
-    cid: String,
-    quiet: bool,
-) -> Result<()> {
+pub fn cmd_op_find(dir: PathBuf, cid: String, quiet: bool) -> Result<()> {
     let manager = BundleManager::new(dir)?;
     let last_bundle = manager.get_last_bundle();
-    
+
     if !quiet {
         log::info!("Searching {} bundles for CID: {}\n", last_bundle, cid);
     }
-    
+
     for bundle_num in 1..=last_bundle {
         let result = match manager.load_bundle(bundle_num, LoadOptions::default()) {
             Ok(r) => r,
             Err(_) => continue,
         };
-        
+
         for (i, op) in result.operations.iter().enumerate() {
             let cid_matches = op.cid.as_ref().map_or(false, |c| c == &cid);
-            
+
             if cid_matches {
-                let global_pos = ((bundle_num - 1) as u64 * constants::BUNDLE_SIZE as u64) + i as u64;
-                
+                let global_pos =
+                    ((bundle_num - 1) as u64 * constants::BUNDLE_SIZE as u64) + i as u64;
+
                 println!("Found: bundle {:06}, position {}", bundle_num, i);
                 println!("Global position: {}\n", global_pos);
-                
+
                 println!("  DID:        {}", op.did);
                 println!("  Created:    {}", op.created_at);
-                
+
                 let status = if op.nullified {
                     "✗ Nullified"
                 } else {
                     "✓ Active"
                 };
                 println!("  Status:     {}", status);
-                
+
                 return Ok(());
             }
         }
-        
+
         // Progress indicator every 100 bundles
         if !quiet && bundle_num % 100 == 0 {
             eprint!("Searched through bundle {:06}...\r", bundle_num);
@@ -258,12 +259,11 @@ pub fn cmd_op_find(
             std::io::stderr().flush()?;
         }
     }
-    
+
     if !quiet {
         log::error!("\nCID not found: {}", cid);
         log::info!("(Searched {} bundles)", last_bundle);
     }
-    
+
     anyhow::bail!("CID not found");
 }
-

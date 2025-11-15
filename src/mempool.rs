@@ -2,11 +2,11 @@
 use crate::constants;
 use crate::operations::Operation;
 use anyhow::{Result, bail};
+use chrono::{DateTime, Utc};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
-use chrono::{DateTime, Utc};
 
 /// Mempool stores operations waiting to be bundled
 /// Operations must be strictly chronological
@@ -34,7 +34,11 @@ impl Mempool {
         min_timestamp: DateTime<Utc>,
         verbose: bool,
     ) -> Result<Self> {
-        let filename = format!("{}{:06}.jsonl", constants::MEMPOOL_FILE_PREFIX, target_bundle);
+        let filename = format!(
+            "{}{:06}.jsonl",
+            constants::MEMPOOL_FILE_PREFIX,
+            target_bundle
+        );
         let file = bundle_dir.join(filename);
 
         let mut mempool = Self {
@@ -66,7 +70,8 @@ impl Mempool {
         }
 
         // Build existing CID set
-        let mut existing_cids: HashSet<String> = self.operations
+        let mut existing_cids: HashSet<String> = self
+            .operations
             .iter()
             .filter_map(|op| op.cid.clone())
             .collect();
@@ -427,12 +432,14 @@ impl Mempool {
         };
 
         if count > 0 {
-            stats.first_time = self.operations.first().and_then(|op| {
-                self.parse_timestamp(&op.created_at).ok()
-            });
-            stats.last_time = self.operations.last().and_then(|op| {
-                self.parse_timestamp(&op.created_at).ok()
-            });
+            stats.first_time = self
+                .operations
+                .first()
+                .and_then(|op| self.parse_timestamp(&op.created_at).ok());
+            stats.last_time = self
+                .operations
+                .last()
+                .and_then(|op| self.parse_timestamp(&op.created_at).ok());
 
             // Calculate size and unique DIDs
             let mut total_size = 0;

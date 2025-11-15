@@ -6,12 +6,12 @@ use crate::resolver::{build_did_state, format_audit_log};
 use crate::server::config::ServerConfig;
 use anyhow::Result;
 use axum::{
+    Router,
     body::Body,
     extract::{Path, State},
     http::{HeaderMap, HeaderValue, StatusCode, Uri},
     response::IntoResponse,
     routing::get,
-    Router,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -55,10 +55,7 @@ pub fn create_router(
     router = router.route("/{*path}", get(handle_did_routing_guard));
 
     router
-        .layer(
-            ServiceBuilder::new()
-                .layer(CorsLayer::permissive())
-        )
+        .layer(ServiceBuilder::new().layer(CorsLayer::permissive()))
         .with_state(ServerState {
             manager,
             config,
@@ -77,7 +74,7 @@ async fn handle_root(
     let uptime = state.start_time.elapsed();
 
     let mut response = String::new();
-    
+
     // ASCII art (simplified version)
     response.push_str("\n                        plcbundle server\n\n");
     response.push_str("*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*\n");
@@ -108,16 +105,26 @@ async fn handle_root(
         response.push_str(&format!("  Bundle count:  {}\n", bundle_count));
 
         if let Some(last_meta) = index.get_bundle(last_bundle) {
-            response.push_str(&format!("  Last bundle:   {} ({})\n", 
-                last_bundle, 
-                last_meta.end_time.split('T').next().unwrap_or("")));
+            response.push_str(&format!(
+                "  Last bundle:   {} ({})\n",
+                last_bundle,
+                last_meta.end_time.split('T').next().unwrap_or("")
+            ));
         }
 
-        response.push_str(&format!("  Range:         {:06} - {:06}\n", first_bundle, last_bundle));
-        response.push_str(&format!("  Total size:    {:.2} MB\n", total_size as f64 / (1000.0 * 1000.0)));
-        response.push_str(&format!("  Uncompressed:  {:.2} MB ({:.2}x)\n",
+        response.push_str(&format!(
+            "  Range:         {:06} - {:06}\n",
+            first_bundle, last_bundle
+        ));
+        response.push_str(&format!(
+            "  Total size:    {:.2} MB\n",
+            total_size as f64 / (1000.0 * 1000.0)
+        ));
+        response.push_str(&format!(
+            "  Uncompressed:  {:.2} MB ({:.2}x)\n",
             total_uncompressed as f64 / (1000.0 * 1000.0),
-            total_uncompressed as f64 / total_size as f64));
+            total_uncompressed as f64 / total_size as f64
+        ));
 
         if let Some(first_meta) = index.get_bundle(first_bundle) {
             response.push_str(&format!("\n  Root: {}\n", first_meta.hash));
@@ -131,25 +138,39 @@ async fn handle_root(
         if let Ok(mempool_stats) = state.manager.get_mempool_stats() {
             response.push_str("\nMempool\n");
             response.push_str("━━━━━━━\n");
-            response.push_str(&format!("  Target bundle:     {}\n", mempool_stats.target_bundle));
-            response.push_str(&format!("  Operations:        {} / {}\n", mempool_stats.count, constants::BUNDLE_SIZE));
+            response.push_str(&format!(
+                "  Target bundle:     {}\n",
+                mempool_stats.target_bundle
+            ));
+            response.push_str(&format!(
+                "  Operations:        {} / {}\n",
+                mempool_stats.count,
+                constants::BUNDLE_SIZE
+            ));
 
             if mempool_stats.count > 0 {
                 let progress = (mempool_stats.count as f64 / constants::BUNDLE_SIZE as f64) * 100.0;
                 response.push_str(&format!("  Progress:          {:.1}%\n", progress));
 
                 let bar_width = 50;
-                let filled = ((bar_width as f64) * (mempool_stats.count as f64 / constants::BUNDLE_SIZE as f64)) as usize;
-                let bar = "█".repeat(filled.min(bar_width)) + &"░".repeat(bar_width.saturating_sub(filled));
+                let filled = ((bar_width as f64)
+                    * (mempool_stats.count as f64 / constants::BUNDLE_SIZE as f64))
+                    as usize;
+                let bar = "█".repeat(filled.min(bar_width))
+                    + &"░".repeat(bar_width.saturating_sub(filled));
                 response.push_str(&format!("  [{}]\n", bar));
 
                 if let Some(first_time) = mempool_stats.first_time {
-                    response.push_str(&format!("  First op:          {}\n", 
-                        first_time.format("%Y-%m-%d %H:%M:%S")));
+                    response.push_str(&format!(
+                        "  First op:          {}\n",
+                        first_time.format("%Y-%m-%d %H:%M:%S")
+                    ));
                 }
                 if let Some(last_time) = mempool_stats.last_time {
-                    response.push_str(&format!("  Last op:           {}\n", 
-                        last_time.format("%Y-%m-%d %H:%M:%S")));
+                    response.push_str(&format!(
+                        "  Last op:           {}\n",
+                        last_time.format("%Y-%m-%d %H:%M:%S")
+                    ));
                 }
             } else {
                 response.push_str("  (empty)\n");
@@ -168,8 +189,14 @@ async fn handle_root(
     response.push_str("Server Stats\n");
     response.push_str("━━━━━━━━━━━━\n");
     response.push_str(&format!("  Version:           {}\n", state.config.version));
-    response.push_str(&format!("  Sync mode:         {}\n", state.config.sync_mode));
-    response.push_str(&format!("  WebSocket:         {}\n", state.config.enable_websocket));
+    response.push_str(&format!(
+        "  Sync mode:         {}\n",
+        state.config.sync_mode
+    ));
+    response.push_str(&format!(
+        "  WebSocket:         {}\n",
+        state.config.enable_websocket
+    ));
     if let Some(handle_resolver) = state.manager.get_handle_resolver_base_url() {
         response.push_str(&format!("  Handle Resolver:   {}\n", handle_resolver));
     } else {
@@ -181,15 +208,19 @@ async fn handle_root(
     let base_url = if let Some(host) = headers.get("host") {
         if let Ok(host_str) = host.to_str() {
             // Check if request is HTTPS (from X-Forwarded-Proto or X-Forwarded-Ssl)
-            let scheme = if headers.get("x-forwarded-proto")
+            let scheme = if headers
+                .get("x-forwarded-proto")
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s == "https")
-                .unwrap_or(false) {
+                .unwrap_or(false)
+            {
                 "https"
-            } else if headers.get("x-forwarded-ssl")
+            } else if headers
+                .get("x-forwarded-ssl")
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s == "on")
-                .unwrap_or(false) {
+                .unwrap_or(false)
+            {
                 "https"
             } else {
                 "http"
@@ -234,7 +265,10 @@ async fn handle_root(
     response.push_str("\nExamples\n");
     response.push_str("━━━━━━━━\n");
     response.push_str(&format!("  curl {}/bundle/1\n", base_url));
-    response.push_str(&format!("  curl {}/data/42 -o 000042.jsonl.zst\n", base_url));
+    response.push_str(&format!(
+        "  curl {}/data/42 -o 000042.jsonl.zst\n",
+        base_url
+    ));
     response.push_str(&format!("  curl {}/jsonl/1\n", base_url));
     response.push_str(&format!("  curl {}/op/0\n", base_url));
 
@@ -259,13 +293,14 @@ async fn handle_root(
     response.push_str("https://tangled.org/@atscan.net/plcbundle\n");
 
     let mut headers = HeaderMap::new();
-    headers.insert("Content-Type", HeaderValue::from_static("text/plain; charset=utf-8"));
+    headers.insert(
+        "Content-Type",
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
     (StatusCode::OK, headers, response).into_response()
 }
 
-async fn handle_index_json(
-    State(state): State<ServerState>,
-) -> impl IntoResponse {
+async fn handle_index_json(State(state): State<ServerState>) -> impl IntoResponse {
     let index = state.manager.get_index();
     (StatusCode::OK, axum::Json(index)).into_response()
 }
@@ -297,7 +332,8 @@ async fn handle_bundle_data(
     let file_result = tokio::task::spawn_blocking({
         let manager = Arc::clone(&state.manager);
         move || manager.stream_bundle_raw(number)
-    }).await;
+    })
+    .await;
 
     match file_result {
         Ok(Ok(std_file)) => {
@@ -308,8 +344,11 @@ async fn handle_bundle_data(
 
             let mut headers = HeaderMap::new();
             headers.insert("Content-Type", HeaderValue::from_static("application/zstd"));
-            headers.insert("Content-Disposition",
-                HeaderValue::from_str(&format!("attachment; filename={:06}.jsonl.zst", number)).unwrap());
+            headers.insert(
+                "Content-Disposition",
+                HeaderValue::from_str(&format!("attachment; filename={:06}.jsonl.zst", number))
+                    .unwrap(),
+            );
 
             (StatusCode::OK, headers, body).into_response()
         }
@@ -329,13 +368,11 @@ async fn handle_bundle_data(
                     .into_response()
             }
         }
-        Err(e) => {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(json!({"error": format!("Task join error: {}", e)})),
-            )
-                .into_response()
-        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(json!({"error": format!("Task join error: {}", e)})),
+        )
+            .into_response(),
     }
 }
 
@@ -354,13 +391,21 @@ async fn handle_bundle_jsonl(
             reader.read_to_end(&mut buf)?;
             Ok::<Vec<u8>, anyhow::Error>(buf)
         }
-    }).await {
+    })
+    .await
+    {
         Ok(Ok(data)) => {
             let mut headers = HeaderMap::new();
-            headers.insert("Content-Type", HeaderValue::from_static("application/x-ndjson"));
-            headers.insert("Content-Disposition", 
-                HeaderValue::from_str(&format!("attachment; filename={:06}.jsonl", number)).unwrap());
-            
+            headers.insert(
+                "Content-Type",
+                HeaderValue::from_static("application/x-ndjson"),
+            );
+            headers.insert(
+                "Content-Disposition",
+                HeaderValue::from_str(&format!("attachment; filename={:06}.jsonl", number))
+                    .unwrap(),
+            );
+
             (StatusCode::OK, headers, data).into_response()
         }
         Ok(Err(e)) => {
@@ -417,7 +462,8 @@ async fn handle_operation(
     let json_result = tokio::task::spawn_blocking({
         let manager = Arc::clone(&state.manager);
         move || manager.get_operation_raw(bundle_num, position)
-    }).await;
+    })
+    .await;
 
     match json_result {
         Ok(Ok(json)) => {
@@ -429,11 +475,28 @@ async fn handle_operation(
             let mut headers = HeaderMap::new();
             headers.insert("X-Bundle-Number", HeaderValue::from(bundle_num));
             headers.insert("X-Position", HeaderValue::from(position));
-            headers.insert("X-Global-Position", HeaderValue::from_str(&global_pos.to_string()).unwrap());
-            headers.insert("X-Pointer", HeaderValue::from_str(&format!("{}:{}", bundle_num, position)).unwrap());
-            headers.insert("X-Load-Time-Ms", HeaderValue::from_str(&format!("{:.3}", load_duration.as_secs_f64() * 1000.0)).unwrap());
-            headers.insert("X-Total-Time-Ms", HeaderValue::from_str(&format!("{:.3}", total_duration.as_secs_f64() * 1000.0)).unwrap());
-            headers.insert("Cache-Control", HeaderValue::from_static("public, max-age=31536000, immutable"));
+            headers.insert(
+                "X-Global-Position",
+                HeaderValue::from_str(&global_pos.to_string()).unwrap(),
+            );
+            headers.insert(
+                "X-Pointer",
+                HeaderValue::from_str(&format!("{}:{}", bundle_num, position)).unwrap(),
+            );
+            headers.insert(
+                "X-Load-Time-Ms",
+                HeaderValue::from_str(&format!("{:.3}", load_duration.as_secs_f64() * 1000.0))
+                    .unwrap(),
+            );
+            headers.insert(
+                "X-Total-Time-Ms",
+                HeaderValue::from_str(&format!("{:.3}", total_duration.as_secs_f64() * 1000.0))
+                    .unwrap(),
+            );
+            headers.insert(
+                "Cache-Control",
+                HeaderValue::from_static("public, max-age=31536000, immutable"),
+            );
             headers.insert("Content-Type", HeaderValue::from_static("application/json"));
 
             (StatusCode::OK, headers, json).into_response()
@@ -453,19 +516,15 @@ async fn handle_operation(
                     .into_response()
             }
         }
-        Err(e) => {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(json!({"error": format!("Task join error: {}", e)})),
-            )
-                .into_response()
-        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(json!({"error": format!("Task join error: {}", e)})),
+        )
+            .into_response(),
     }
 }
 
-async fn handle_status(
-    State(state): State<ServerState>,
-) -> impl IntoResponse {
+async fn handle_status(State(state): State<ServerState>) -> impl IntoResponse {
     let index = state.manager.get_index();
     let start_time = state.start_time;
     let uptime = start_time.elapsed().as_secs();
@@ -535,8 +594,14 @@ async fn handle_status(
             let did_index = manager.get_did_index();
             did_index.read().unwrap().get_stats()
         }
-    }).await.unwrap_or_default();
-    if did_stats.get("exists").and_then(|v| v.as_bool()).unwrap_or(false) {
+    })
+    .await
+    .unwrap_or_default();
+    if did_stats
+        .get("exists")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         let did_index_status = json!({
             "enabled": state.config.enable_resolver,
             "exists": true,
@@ -564,9 +629,7 @@ async fn handle_status(
     (StatusCode::OK, axum::Json(response)).into_response()
 }
 
-async fn handle_mempool(
-    State(state): State<ServerState>,
-) -> impl IntoResponse {
+async fn handle_mempool(State(state): State<ServerState>) -> impl IntoResponse {
     if !state.config.sync_mode {
         return (
             StatusCode::NOT_FOUND,
@@ -586,7 +649,10 @@ async fn handle_mempool(
                 }
             }
             let mut headers = HeaderMap::new();
-            headers.insert("Content-Type", HeaderValue::from_static("application/x-ndjson"));
+            headers.insert(
+                "Content-Type",
+                HeaderValue::from_static("application/x-ndjson"),
+            );
             (StatusCode::OK, headers, jsonl).into_response()
         }
         Err(e) => (
@@ -597,11 +663,9 @@ async fn handle_mempool(
     }
 }
 
-async fn handle_privacy(
-    State(state): State<ServerState>,
-) -> impl IntoResponse {
+async fn handle_privacy(State(state): State<ServerState>) -> impl IntoResponse {
     let origin_url = state.manager.get_plc_origin();
-    
+
     // Extract domain from origin URL
     let origin_domain = if let Some(url) = origin_url.strip_prefix("https://") {
         url.trim_end_matches('/')
@@ -610,15 +674,15 @@ async fn handle_privacy(
     } else {
         origin_url.trim_end_matches('/')
     };
-    
+
     // Generate operator contact placeholder
     let operator_contact = format!("admin@{}", origin_domain);
-    
+
     // Get current date in YYYY-MM-DD format
     let current_date = chrono::Utc::now().format("%Y-%m-%d");
-    
+
     let privacy_notice = format!(
-r#"Privacy Notice - plcbundle Instance
+        r#"Privacy Notice - plcbundle Instance
 
 Last Updated: {}
 
@@ -706,16 +770,19 @@ About plcbundle: https://tangled.org/@atscan.net/plcbundle
 
 ================================================================================
 Configuration: Replace placeholder with actual contact (email, handle)
-"#, current_date, operator_contact, origin_domain, origin_domain);
-    
+"#,
+        current_date, operator_contact, origin_domain, origin_domain
+    );
+
     let mut headers = HeaderMap::new();
-    headers.insert("Content-Type", HeaderValue::from_static("text/plain; charset=utf-8"));
+    headers.insert(
+        "Content-Type",
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
     (StatusCode::OK, headers, privacy_notice)
 }
 
-async fn handle_debug_memory(
-    State(state): State<ServerState>,
-) -> impl IntoResponse {
+async fn handle_debug_memory(State(state): State<ServerState>) -> impl IntoResponse {
     // Get DID index stats for memory info (avoid holding lock in async context)
     let did_stats = tokio::task::spawn_blocking({
         let manager = Arc::clone(&state.manager);
@@ -723,11 +790,19 @@ async fn handle_debug_memory(
             let did_index = manager.get_did_index();
             did_index.read().unwrap().get_stats()
         }
-    }).await.unwrap_or_default();
-    
-    let cached_shards = did_stats.get("cached_shards").and_then(|v| v.as_i64()).unwrap_or(0);
-    let cache_limit = did_stats.get("cache_limit").and_then(|v| v.as_i64()).unwrap_or(0);
-    
+    })
+    .await
+    .unwrap_or_default();
+
+    let cached_shards = did_stats
+        .get("cached_shards")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let cache_limit = did_stats
+        .get("cache_limit")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+
     let response = format!(
         "Memory Stats:\n  (Not fully implemented - using sysinfo would require additional dependency)\n\nDID Index:\n  Cached shards: {}/{}\n",
         cached_shards, cache_limit
@@ -737,9 +812,7 @@ async fn handle_debug_memory(
     (StatusCode::OK, headers, response)
 }
 
-async fn handle_debug_didindex(
-    State(state): State<ServerState>,
-) -> impl IntoResponse {
+async fn handle_debug_didindex(State(state): State<ServerState>) -> impl IntoResponse {
     // Avoid holding lock in async context
     let stats = tokio::task::spawn_blocking({
         let manager = Arc::clone(&state.manager);
@@ -747,13 +820,13 @@ async fn handle_debug_didindex(
             let did_index = manager.get_did_index();
             did_index.read().unwrap().get_stats()
         }
-    }).await.unwrap_or_default();
+    })
+    .await
+    .unwrap_or_default();
     (StatusCode::OK, axum::Json(json!(stats))).into_response()
 }
 
-async fn handle_debug_resolver(
-    State(state): State<ServerState>,
-) -> impl IntoResponse {
+async fn handle_debug_resolver(State(state): State<ServerState>) -> impl IntoResponse {
     if !state.config.enable_resolver {
         return (
             StatusCode::NOT_FOUND,
@@ -766,57 +839,72 @@ async fn handle_debug_resolver(
     (StatusCode::OK, axum::Json(json!(resolver_stats))).into_response()
 }
 
-async fn handle_did_routing_guard(
-    State(state): State<ServerState>,
-    uri: Uri,
-) -> impl IntoResponse {
+async fn handle_did_routing_guard(State(state): State<ServerState>, uri: Uri) -> impl IntoResponse {
     // Only handle if resolver is enabled, otherwise return 404
     if !state.config.enable_resolver {
-        return (StatusCode::NOT_FOUND, axum::Json(json!({"error": "not found"}))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            axum::Json(json!({"error": "not found"})),
+        )
+            .into_response();
     }
     handle_did_routing(State(state), uri).await.into_response()
 }
 
-async fn handle_did_routing(
-    State(state): State<ServerState>,
-    uri: Uri,
-) -> impl IntoResponse {
+async fn handle_did_routing(State(state): State<ServerState>, uri: Uri) -> impl IntoResponse {
     let path = uri.path().trim_start_matches('/');
-    
+
     // Ignore common browser files
     if is_common_browser_file(path) {
-        return (StatusCode::NOT_FOUND, axum::Json(json!({"error": "not found"}))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            axum::Json(json!({"error": "not found"})),
+        )
+            .into_response();
     }
 
     // Split path into parts
     let parts: Vec<&str> = path.split('/').collect();
     if parts.is_empty() {
-        return (StatusCode::NOT_FOUND, axum::Json(json!({"error": "not found"}))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            axum::Json(json!({"error": "not found"})),
+        )
+            .into_response();
     }
 
     let input = parts[0];
 
     // Quick validation
     if !is_valid_did_or_handle(input) {
-        return (StatusCode::NOT_FOUND, axum::Json(json!({"error": "not found"}))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            axum::Json(json!({"error": "not found"})),
+        )
+            .into_response();
     }
 
     // Route to appropriate handler
     if parts.len() == 1 {
-        handle_did_document(State(state), input).await.into_response()
+        handle_did_document(State(state), input)
+            .await
+            .into_response()
     } else if parts[1] == "data" {
         handle_did_data(State(state), input).await.into_response()
     } else if parts.len() == 3 && parts[1] == "log" && parts[2] == "audit" {
-        handle_did_audit_log(State(state), input).await.into_response()
+        handle_did_audit_log(State(state), input)
+            .await
+            .into_response()
     } else {
-        (StatusCode::NOT_FOUND, axum::Json(json!({"error": "not found"}))).into_response()
+        (
+            StatusCode::NOT_FOUND,
+            axum::Json(json!({"error": "not found"})),
+        )
+            .into_response()
     }
 }
 
-async fn handle_did_document(
-    State(state): State<ServerState>,
-    input: &str,
-) -> impl IntoResponse {
+async fn handle_did_document(State(state): State<ServerState>, input: &str) -> impl IntoResponse {
     // Resolve handle to DID (use async version)
     let (did, handle_resolve_time) = match state.manager.resolve_handle_or_did_async(input).await {
         Ok((d, t)) => (d, t),
@@ -839,7 +927,11 @@ async fn handle_did_document(
         }
     };
 
-    let resolved_handle = if handle_resolve_time > 0 { Some(input.to_string()) } else { None };
+    let resolved_handle = if handle_resolve_time > 0 {
+        Some(input.to_string())
+    } else {
+        None
+    };
 
     // Resolve DID
     // Note: resolve_did_with_stats performs file I/O (get_operation), so we need spawn_blocking
@@ -847,7 +939,9 @@ async fn handle_did_document(
         let manager = Arc::clone(&state.manager);
         let did = did.clone();
         move || manager.resolve_did_with_stats(&did)
-    }).await {
+    })
+    .await
+    {
         Ok(Ok(r)) => r,
         Ok(Err(e)) => {
             if e.to_string().contains("deactivated") {
@@ -884,8 +978,10 @@ async fn handle_did_document(
     headers.insert("X-DID", HeaderValue::from_str(&did).unwrap());
     if let Some(handle) = resolved_handle {
         headers.insert("X-Handle-Resolved", HeaderValue::from_str(&handle).unwrap());
-        headers.insert("X-Handle-Resolution-Time-Ms", 
-            HeaderValue::from_str(&format!("{:.3}", handle_resolve_time as f64 / 1000.0)).unwrap());
+        headers.insert(
+            "X-Handle-Resolution-Time-Ms",
+            HeaderValue::from_str(&format!("{:.3}", handle_resolve_time as f64 / 1000.0)).unwrap(),
+        );
         headers.insert("X-Request-Type", HeaderValue::from_static("handle"));
     } else {
         headers.insert("X-Request-Type", HeaderValue::from_static("did"));
@@ -893,18 +989,23 @@ async fn handle_did_document(
     headers.insert("X-Resolution-Source", HeaderValue::from_static("bundle"));
     headers.insert("X-Bundle-Number", HeaderValue::from(result.bundle_number));
     headers.insert("X-Bundle-Position", HeaderValue::from(result.position));
-    headers.insert("X-Resolution-Time-Ms", 
-        HeaderValue::from_str(&format!("{:.3}", result.total_time.as_secs_f64() * 1000.0)).unwrap());
-    headers.insert("Content-Type", HeaderValue::from_static("application/did+ld+json"));
-    headers.insert("Cache-Control", HeaderValue::from_static("public, max-age=300, stale-while-revalidate=600"));
+    headers.insert(
+        "X-Resolution-Time-Ms",
+        HeaderValue::from_str(&format!("{:.3}", result.total_time.as_secs_f64() * 1000.0)).unwrap(),
+    );
+    headers.insert(
+        "Content-Type",
+        HeaderValue::from_static("application/did+ld+json"),
+    );
+    headers.insert(
+        "Cache-Control",
+        HeaderValue::from_static("public, max-age=300, stale-while-revalidate=600"),
+    );
 
     (StatusCode::OK, headers, axum::Json(result.document)).into_response()
 }
 
-async fn handle_did_data(
-    State(state): State<ServerState>,
-    input: &str,
-) -> impl IntoResponse {
+async fn handle_did_data(State(state): State<ServerState>, input: &str) -> impl IntoResponse {
     // Resolve handle to DID
     let did = match state.manager.resolve_handle_or_did_async(input).await {
         Ok((d, _)) => d,
@@ -922,7 +1023,8 @@ async fn handle_did_data(
         let manager = Arc::clone(&state.manager);
         let did = did.clone();
         move || manager.get_did_operations(&did)
-    }).await;
+    })
+    .await;
 
     let operations = match operations_result {
         Ok(Ok(ops)) => ops,
@@ -971,10 +1073,7 @@ async fn handle_did_data(
     }
 }
 
-async fn handle_did_audit_log(
-    State(state): State<ServerState>,
-    input: &str,
-) -> impl IntoResponse {
+async fn handle_did_audit_log(State(state): State<ServerState>, input: &str) -> impl IntoResponse {
     // Resolve handle to DID
     let did = match state.manager.resolve_handle_or_did_async(input).await {
         Ok((d, _)) => d,
@@ -1018,10 +1117,17 @@ async fn handle_did_audit_log(
 }
 
 fn is_common_browser_file(path: &str) -> bool {
-    let common_files = ["favicon.ico", "robots.txt", "sitemap.xml", 
-        "apple-touch-icon.png", ".well-known"];
-    let common_extensions = [".ico", ".png", ".jpg", ".jpeg", ".gif", ".svg",
-        ".css", ".js", ".woff", ".woff2", ".ttf", ".eot", ".xml", ".txt", ".html"];
+    let common_files = [
+        "favicon.ico",
+        "robots.txt",
+        "sitemap.xml",
+        "apple-touch-icon.png",
+        ".well-known",
+    ];
+    let common_extensions = [
+        ".ico", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".css", ".js", ".woff", ".woff2", ".ttf",
+        ".eot", ".xml", ".txt", ".html",
+    ];
 
     for file in &common_files {
         if path == *file || path.starts_with(file) {
@@ -1060,10 +1166,12 @@ fn is_valid_did_or_handle(input: &str) -> bool {
 
     // Must not have invalid characters
     for c in input.chars() {
-        if !((c >= 'a' && c <= 'z') ||
-            (c >= 'A' && c <= 'Z') ||
-            (c >= '0' && c <= '9') ||
-            c == '.' || c == '-') {
+        if !((c >= 'a' && c <= 'z')
+            || (c >= 'A' && c <= 'Z')
+            || (c >= '0' && c <= '9')
+            || c == '.'
+            || c == '-')
+        {
             return false;
         }
     }
@@ -1074,8 +1182,11 @@ fn is_valid_did_or_handle(input: &str) -> bool {
     }
 
     // Must not start or end with dot or hyphen
-    if input.starts_with('.') || input.ends_with('.') ||
-        input.starts_with('-') || input.ends_with('-') {
+    if input.starts_with('.')
+        || input.ends_with('.')
+        || input.starts_with('-')
+        || input.ends_with('-')
+    {
         return false;
     }
 
@@ -1088,9 +1199,11 @@ fn parse_operation_pointer(pointer: &str) -> Result<(u32, usize)> {
         let bundle_str = &pointer[..colon_pos];
         let pos_str = &pointer[colon_pos + 1..];
 
-        let bundle_num: u32 = bundle_str.parse()
+        let bundle_num: u32 = bundle_str
+            .parse()
             .map_err(|_| anyhow::anyhow!("Invalid bundle number: {}", bundle_str))?;
-        let position: usize = pos_str.parse()
+        let position: usize = pos_str
+            .parse()
             .map_err(|_| anyhow::anyhow!("Invalid position: {}", pos_str))?;
 
         if bundle_num < 1 {
@@ -1101,8 +1214,9 @@ fn parse_operation_pointer(pointer: &str) -> Result<(u32, usize)> {
     }
 
     // Parse as global position
-    let global_pos: u64 = pointer.parse()
-        .map_err(|_| anyhow::anyhow!("Invalid position: must be number or 'bundle:position' format"))?;
+    let global_pos: u64 = pointer.parse().map_err(|_| {
+        anyhow::anyhow!("Invalid position: must be number or 'bundle:position' format")
+    })?;
 
     if global_pos < constants::BUNDLE_SIZE as u64 {
         // Small numbers are shorthand for bundle 1
@@ -1115,4 +1229,3 @@ fn parse_operation_pointer(pointer: &str) -> Result<(u32, usize)> {
 
     Ok((bundle_num.max(1), position))
 }
-

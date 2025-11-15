@@ -40,7 +40,7 @@ impl PLCClient {
     fn record_request(&self) {
         let now = Instant::now();
         let mut timestamps = self.request_timestamps.lock().unwrap();
-        
+
         // Remove timestamps older than the rate limit period
         // If checked_sub fails (shouldn't happen in practice), use now as cutoff (counts all)
         let cutoff = now.checked_sub(self.rate_limit_period).unwrap_or(now);
@@ -51,7 +51,7 @@ impl PLCClient {
                 break;
             }
         }
-        
+
         timestamps.push_back(now);
     }
 
@@ -59,17 +59,13 @@ impl PLCClient {
     fn count_requests_in_period(&self) -> usize {
         let now = Instant::now();
         let timestamps = self.request_timestamps.lock().unwrap();
-        
+
         // If checked_sub fails (shouldn't happen in practice), use now as cutoff (counts all)
         let cutoff = now.checked_sub(self.rate_limit_period).unwrap_or(now);
         timestamps.iter().filter(|&&ts| ts >= cutoff).count()
     }
 
-    pub async fn fetch_operations(
-        &self,
-        after: &str,
-        count: usize,
-    ) -> Result<Vec<PLCOperation>> {
+    pub async fn fetch_operations(&self, after: &str, count: usize) -> Result<Vec<PLCOperation>> {
         self.fetch_operations_with_retry(after, count, 5).await
     }
 
@@ -104,7 +100,12 @@ impl PLCClient {
                         let rate_limit = constants::DEFAULT_RATE_LIMIT;
                         eprintln!(
                             "[Sync] Rate limited by PLC directory ({} requests in last {:?}, limit: {}), waiting {:?} before retry {}/{}",
-                            requests_in_period, self.rate_limit_period, rate_limit, retry_after, attempt, max_retries
+                            requests_in_period,
+                            self.rate_limit_period,
+                            rate_limit,
+                            retry_after,
+                            attempt,
+                            max_retries
                         );
                         tokio::time::sleep(retry_after).await;
                         continue;
@@ -114,7 +115,10 @@ impl PLCClient {
                     if attempt < max_retries {
                         eprintln!(
                             "[Sync] Request failed (attempt {}/{}): {}, retrying in {:?}",
-                            attempt, max_retries, last_err.as_ref().unwrap(), backoff
+                            attempt,
+                            max_retries,
+                            last_err.as_ref().unwrap(),
+                            backoff
                         );
                         tokio::time::sleep(backoff).await;
                         backoff *= 2; // Exponential backoff
@@ -130,11 +134,7 @@ impl PLCClient {
         )
     }
 
-    async fn do_fetch_operations(
-        &self,
-        after: &str,
-        count: usize,
-    ) -> Result<Vec<PLCOperation>> {
+    async fn do_fetch_operations(&self, after: &str, count: usize) -> Result<Vec<PLCOperation>> {
         let url = format!("{}/export", self.base_url);
         let response = self
             .client
@@ -170,7 +170,7 @@ impl PLCClient {
                     // Re-serializing would change key order/whitespace and break hash verification.
                     op.raw_json = Some(line.to_string());
                     operations.push(op);
-                },
+                }
                 Err(e) => eprintln!("Warning: failed to parse operation: {}", e),
             }
         }
@@ -183,7 +183,7 @@ impl PLCClient {
 /// Returns the duration to wait before retrying, capped at 60 seconds maximum
 fn parse_retry_after(response: &reqwest::Response) -> Duration {
     const MAX_RETRY_SECONDS: u64 = 60;
-    
+
     if let Some(retry_after_header) = response.headers().get("retry-after") {
         if let Ok(retry_after_str) = retry_after_header.to_str() {
             // Try parsing as seconds (integer) - most common format
@@ -219,7 +219,7 @@ impl RateLimiter {
         // Start with 0 permits to prevent initial burst
         let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
         let sem_clone = semaphore.clone();
-        
+
         // Calculate refill rate: period / requests_per_period
         // For 72 req/min: 60 seconds / 72 = 0.833 seconds per request
         let refill_rate = period / requests_per_period as u32;
@@ -232,7 +232,7 @@ impl RateLimiter {
             if sem_clone.available_permits() < requests_per_period {
                 sem_clone.add_permits(1);
             }
-            
+
             // Then refill at steady rate
             loop {
                 tokio::time::sleep(refill_rate_clone).await;
@@ -399,7 +399,7 @@ pub struct SyncStats {
 /// Trait for logging sync events
 pub trait SyncLogger: Send + Sync {
     fn on_sync_start(&self, interval: Duration);
-    
+
     fn on_bundle_created(
         &self,
         bundle_num: u32,
@@ -414,7 +414,7 @@ pub trait SyncLogger: Send + Sync {
         unique_dids: u32,
         size_bytes: u64,
     );
-    
+
     fn on_caught_up(
         &self,
         next_bundle: u32,
@@ -422,9 +422,14 @@ pub trait SyncLogger: Send + Sync {
         new_ops: usize,
         fetch_duration_ms: u64,
     );
-    
-    fn on_initial_sync_complete(&self, total_bundles: u32, mempool_count: usize, interval: Duration);
-    
+
+    fn on_initial_sync_complete(
+        &self,
+        total_bundles: u32,
+        mempool_count: usize,
+        interval: Duration,
+    );
+
     fn on_error(&self, error: &str);
 
     /// Get a reference to self as Any for downcasting
@@ -475,7 +480,7 @@ impl SyncLogger for ServerLogger {
             eprintln!("[Sync] Sync loop interval: {:?}", interval);
         }
     }
-    
+
     fn on_bundle_created(
         &self,
         bundle_num: u32,
@@ -498,10 +503,20 @@ impl SyncLogger for ServerLogger {
             format!("{:.0}KB", size_kb)
         };
 
-        eprintln!("[INFO] → Bundle {:06} | {} | {} dids | {} | fetch: {:.2}s ({} reqs) | save: {}ms | index: {}ms | {}",
-            bundle_num, hash, unique_dids, size_str, fetch_secs, fetch_requests, bundle_save_ms, index_ms, age);
+        eprintln!(
+            "[INFO] → Bundle {:06} | {} | {} dids | {} | fetch: {:.2}s ({} reqs) | save: {}ms | index: {}ms | {}",
+            bundle_num,
+            hash,
+            unique_dids,
+            size_str,
+            fetch_secs,
+            fetch_requests,
+            bundle_save_ms,
+            index_ms,
+            age
+        );
     }
-    
+
     fn on_caught_up(
         &self,
         next_bundle: u32,
@@ -510,22 +525,37 @@ impl SyncLogger for ServerLogger {
         fetch_duration_ms: u64,
     ) {
         if new_ops > 0 {
-            eprintln!("[Sync] ✓ Bundle {:06} | mempool: {} ({:+}) | time: {}ms",
-                next_bundle, mempool_count, new_ops as i32, fetch_duration_ms);
+            eprintln!(
+                "[Sync] ✓ Bundle {:06} | mempool: {} ({:+}) | time: {}ms",
+                next_bundle, mempool_count, new_ops as i32, fetch_duration_ms
+            );
         } else {
-            eprintln!("[Sync] ✓ Bundle {:06} | mempool: {} | time: {}ms",
-                next_bundle, mempool_count, fetch_duration_ms);
+            eprintln!(
+                "[Sync] ✓ Bundle {:06} | mempool: {} | time: {}ms",
+                next_bundle, mempool_count, fetch_duration_ms
+            );
         }
     }
-    
-    fn on_initial_sync_complete(&self, total_bundles: u32, mempool_count: usize, _interval: Duration) {
-        eprintln!("[Sync] ✓ Initial sync complete ({} bundles synced)", total_bundles);
+
+    fn on_initial_sync_complete(
+        &self,
+        total_bundles: u32,
+        mempool_count: usize,
+        _interval: Duration,
+    ) {
+        eprintln!(
+            "[Sync] ✓ Initial sync complete ({} bundles synced)",
+            total_bundles
+        );
         if mempool_count > 0 {
             eprintln!("[Sync] ✓ Mempool: {} operations", mempool_count);
         }
-        eprintln!("[Sync] Now monitoring for new operations (interval: {:?})...", self.interval);
+        eprintln!(
+            "[Sync] Now monitoring for new operations (interval: {:?})...",
+            self.interval
+        );
     }
-    
+
     fn on_error(&self, error: &str) {
         eprintln!("[Sync] Error during sync: {}", error);
     }
@@ -550,7 +580,7 @@ impl SyncLogger for CliLogger {
     fn on_sync_start(&self, _interval: Duration) {
         // CLI doesn't show sync start message
     }
-    
+
     fn on_bundle_created(
         &self,
         _bundle_num: u32,
@@ -567,7 +597,7 @@ impl SyncLogger for CliLogger {
     ) {
         // CLI doesn't show individual bundle creation
     }
-    
+
     fn on_caught_up(
         &self,
         _next_bundle: u32,
@@ -577,11 +607,16 @@ impl SyncLogger for CliLogger {
     ) {
         // CLI doesn't show caught up events
     }
-    
-    fn on_initial_sync_complete(&self, _total_bundles: u32, _mempool_count: usize, _interval: Duration) {
+
+    fn on_initial_sync_complete(
+        &self,
+        _total_bundles: u32,
+        _mempool_count: usize,
+        _interval: Duration,
+    ) {
         // CLI doesn't show initial sync complete
     }
-    
+
     fn on_error(&self, error: &str) {
         if !self.quiet {
             eprintln!("Error: {}", error);
@@ -639,7 +674,7 @@ impl SyncManager {
         if let Some(callback) = &self.event_callback {
             callback(event);
         }
-        
+
         // Then, call logger if provided
         if let Some(logger) = &self.logger {
             match event {
@@ -676,18 +711,17 @@ impl SyncManager {
                     new_ops,
                     fetch_duration_ms,
                 } => {
-                    logger.on_caught_up(
-                        *next_bundle,
-                        *mempool_count,
-                        *new_ops,
-                        *fetch_duration_ms,
-                    );
+                    logger.on_caught_up(*next_bundle, *mempool_count, *new_ops, *fetch_duration_ms);
                 }
                 SyncEvent::InitialSyncComplete {
                     total_bundles,
                     mempool_count,
                 } => {
-                    logger.on_initial_sync_complete(*total_bundles, *mempool_count, self.config.interval);
+                    logger.on_initial_sync_complete(
+                        *total_bundles,
+                        *mempool_count,
+                        self.config.interval,
+                    );
                 }
                 SyncEvent::Error { error } => {
                     logger.on_error(error);
@@ -855,9 +889,14 @@ impl SyncManager {
                     });
 
                     // Check max bundles limit
-                    if self.config.max_bundles > 0 && total_synced as usize >= self.config.max_bundles {
+                    if self.config.max_bundles > 0
+                        && total_synced as usize >= self.config.max_bundles
+                    {
                         if self.config.verbose {
-                            eprintln!("[Sync] Reached max bundles limit ({})", self.config.max_bundles);
+                            eprintln!(
+                                "[Sync] Reached max bundles limit ({})",
+                                self.config.max_bundles
+                            );
                         }
                         break;
                     }
@@ -978,21 +1017,22 @@ impl SyncManager {
                         LAST_ERROR_TIME_SECS.store(now, Ordering::Relaxed);
 
                         // Calculate backoff with exponential increase (cap at 5 minutes)
-                        let backoff_secs = std::cmp::min(
-                            2u64.pow((error_count - 1).min(8)),
-                            300
-                        );
+                        let backoff_secs = std::cmp::min(2u64.pow((error_count - 1).min(8)), 300);
 
                         if self.config.verbose || error_count == 1 {
-                            eprintln!("[Sync] Retryable error (attempt {}): {}",
-                                error_count, error_msg);
+                            eprintln!(
+                                "[Sync] Retryable error (attempt {}): {}",
+                                error_count, error_msg
+                            );
                             eprintln!("[Sync] Retrying in {} seconds...", backoff_secs);
                         }
 
                         // Too many consecutive errors - give up
                         if error_count >= 10 {
-                            eprintln!("[Sync] Too many consecutive errors ({}) - shutting down",
-                                error_count);
+                            eprintln!(
+                                "[Sync] Too many consecutive errors ({}) - shutting down",
+                                error_count
+                            );
 
                             if let Some(ref shutdown_tx) = self.config.shutdown_tx {
                                 let _ = shutdown_tx.send(true);

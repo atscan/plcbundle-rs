@@ -1,10 +1,10 @@
+use super::utils::format_number;
 use anyhow::Result;
 use clap::Args;
 use plcbundle::BundleManager;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::Instant;
-use std::io::{Read, Write};
-use super::utils::format_number;
 
 #[derive(Args)]
 pub struct BenchCommand {
@@ -109,7 +109,13 @@ pub fn run(cmd: BenchCommand, dir: PathBuf) -> Result<()> {
     let manager = BundleManager::new(dir.clone())?;
 
     // Determine which benchmarks to run
-    let run_all = cmd.all || (!cmd.op_read && !cmd.did_lookup && !cmd.bundle_load && !cmd.decompress && !cmd.did_resolve && !cmd.sequential);
+    let run_all = cmd.all
+        || (!cmd.op_read
+            && !cmd.did_lookup
+            && !cmd.bundle_load
+            && !cmd.decompress
+            && !cmd.did_resolve
+            && !cmd.sequential);
 
     // Get repository info
     let last_bundle = manager.get_last_bundle();
@@ -131,27 +137,63 @@ pub fn run(cmd: BenchCommand, dir: PathBuf) -> Result<()> {
 
     // All benchmarks now use random data from across the repository
     if run_all || cmd.bundle_load {
-        results.push(bench_bundle_load(&manager, last_bundle, cmd.iterations, cmd.warmup, cmd.interactive)?);
+        results.push(bench_bundle_load(
+            &manager,
+            last_bundle,
+            cmd.iterations,
+            cmd.warmup,
+            cmd.interactive,
+        )?);
     }
 
     if run_all || cmd.decompress {
-        results.push(bench_bundle_decompress(&manager, last_bundle, cmd.iterations, cmd.warmup, cmd.interactive)?);
+        results.push(bench_bundle_decompress(
+            &manager,
+            last_bundle,
+            cmd.iterations,
+            cmd.warmup,
+            cmd.interactive,
+        )?);
     }
 
     if run_all || cmd.op_read {
-        results.push(bench_operation_read(&manager, last_bundle, cmd.iterations, cmd.warmup, cmd.interactive)?);
+        results.push(bench_operation_read(
+            &manager,
+            last_bundle,
+            cmd.iterations,
+            cmd.warmup,
+            cmd.interactive,
+        )?);
     }
 
     if run_all || cmd.did_lookup {
-        results.push(bench_did_index_lookup(&manager, last_bundle, cmd.iterations, cmd.warmup, cmd.interactive)?);
+        results.push(bench_did_index_lookup(
+            &manager,
+            last_bundle,
+            cmd.iterations,
+            cmd.warmup,
+            cmd.interactive,
+        )?);
     }
 
     if run_all || cmd.did_resolve {
-        results.push(bench_did_resolution(&manager, last_bundle, cmd.iterations, cmd.warmup, cmd.interactive)?);
+        results.push(bench_did_resolution(
+            &manager,
+            last_bundle,
+            cmd.iterations,
+            cmd.warmup,
+            cmd.interactive,
+        )?);
     }
 
     if cmd.sequential {
-        results.push(bench_sequential_access(&manager, last_bundle, cmd.iterations.min(50), cmd.warmup, cmd.interactive)?);
+        results.push(bench_sequential_access(
+            &manager,
+            last_bundle,
+            cmd.iterations.min(50),
+            cmd.warmup,
+            cmd.interactive,
+        )?);
     }
 
     // Output results
@@ -206,11 +248,18 @@ fn bench_bundle_load(
 
     for (i, &bundle_num) in bundles.iter().enumerate() {
         if interactive && i % 10 == 0 {
-            eprint!("\r  Progress: {}/{} ({:.0}%)", i, iterations, (i as f64 / iterations as f64) * 100.0);
+            eprint!(
+                "\r  Progress: {}/{} ({:.0}%)",
+                i,
+                iterations,
+                (i as f64 / iterations as f64) * 100.0
+            );
             std::io::stderr().flush().ok();
         }
 
-        let bundle_path = manager.directory().join(format!("{:06}.jsonl.zst", bundle_num));
+        let bundle_path = manager
+            .directory()
+            .join(format!("{:06}.jsonl.zst", bundle_num));
         if let Ok(metadata) = std::fs::metadata(&bundle_path) {
             total_bytes += metadata.len();
         }
@@ -224,14 +273,18 @@ fn bench_bundle_load(
         eprintln!("\r  Progress: {}/{} (100%)", iterations, iterations);
     }
 
-    let unique_bundles = bundles.iter().collect::<std::collections::HashSet<_>>().len();
+    let unique_bundles = bundles
+        .iter()
+        .collect::<std::collections::HashSet<_>>()
+        .len();
     let avg_size = total_bytes / iterations as u64;
 
     let mut result = calculate_stats("Bundle Load (full)", iterations, timings);
     result.avg_size_bytes = Some(avg_size);
     result.total_bytes = Some(total_bytes);
     result.bundles_accessed = Some(unique_bundles);
-    result.throughput_mbs = Some((total_bytes as f64 / 1024.0 / 1024.0) / (result.total_ms / 1000.0));
+    result.throughput_mbs =
+        Some((total_bytes as f64 / 1024.0 / 1024.0) / (result.total_ms / 1000.0));
     Ok(result)
 }
 
@@ -252,7 +305,9 @@ fn bench_bundle_decompress(
 
     // Warmup
     for i in 0..warmup.min(10) {
-        let bundle_path = manager.directory().join(format!("{:06}.jsonl.zst", bundles[i % bundles.len()]));
+        let bundle_path = manager
+            .directory()
+            .join(format!("{:06}.jsonl.zst", bundles[i % bundles.len()]));
         if bundle_path.exists() {
             let file = std::fs::File::open(&bundle_path)?;
             let mut decoder = zstd::Decoder::new(file)?;
@@ -267,11 +322,18 @@ fn bench_bundle_decompress(
 
     for (i, &bundle_num) in bundles.iter().enumerate() {
         if interactive && i % 10 == 0 {
-            eprint!("\r  Progress: {}/{} ({:.0}%)", i, iterations, (i as f64 / iterations as f64) * 100.0);
+            eprint!(
+                "\r  Progress: {}/{} ({:.0}%)",
+                i,
+                iterations,
+                (i as f64 / iterations as f64) * 100.0
+            );
             std::io::stderr().flush().ok();
         }
 
-        let bundle_path = manager.directory().join(format!("{:06}.jsonl.zst", bundle_num));
+        let bundle_path = manager
+            .directory()
+            .join(format!("{:06}.jsonl.zst", bundle_num));
         if !bundle_path.exists() {
             continue;
         }
@@ -292,14 +354,18 @@ fn bench_bundle_decompress(
         eprintln!("\r  Progress: {}/{} (100%)", iterations, iterations);
     }
 
-    let unique_bundles = bundles.iter().collect::<std::collections::HashSet<_>>().len();
+    let unique_bundles = bundles
+        .iter()
+        .collect::<std::collections::HashSet<_>>()
+        .len();
     let avg_size = total_bytes / timings.len() as u64;
 
     let mut result = calculate_stats("Bundle Decompression", timings.len(), timings);
     result.avg_size_bytes = Some(avg_size);
     result.total_bytes = Some(total_bytes);
     result.bundles_accessed = Some(unique_bundles);
-    result.throughput_mbs = Some((total_bytes as f64 / 1024.0 / 1024.0) / (result.total_ms / 1000.0));
+    result.throughput_mbs =
+        Some((total_bytes as f64 / 1024.0 / 1024.0) / (result.total_ms / 1000.0));
     Ok(result)
 }
 
@@ -346,7 +412,12 @@ fn bench_operation_read(
     let mut timings = Vec::with_capacity(iterations);
     for i in 0..iterations {
         if interactive && i % 10 == 0 {
-            eprint!("\r  Progress: {}/{} ({:.0}%)", i, iterations, (i as f64 / iterations as f64) * 100.0);
+            eprint!(
+                "\r  Progress: {}/{} ({:.0}%)",
+                i,
+                iterations,
+                (i as f64 / iterations as f64) * 100.0
+            );
             std::io::stderr().flush().ok();
         }
 
@@ -366,7 +437,11 @@ fn bench_operation_read(
         eprintln!("\r  Progress: {}/{} (100%)", iterations, iterations);
     }
 
-    let unique_bundles = bundle_op_counts.iter().map(|(b, _)| b).collect::<std::collections::HashSet<_>>().len();
+    let unique_bundles = bundle_op_counts
+        .iter()
+        .map(|(b, _)| b)
+        .collect::<std::collections::HashSet<_>>()
+        .len();
     let mut result = calculate_stats("Operation Read", iterations, timings);
     result.bundles_accessed = Some(unique_bundles);
     Ok(result)
@@ -375,37 +450,17 @@ fn bench_operation_read(
 /// Benchmark DID index lookup from random DIDs across repository
 fn bench_did_index_lookup(
     manager: &BundleManager,
-    last_bundle: u32,
+    _last_bundle: u32,
     iterations: usize,
     warmup: usize,
     interactive: bool,
 ) -> Result<BenchmarkResult> {
-    use plcbundle::LoadOptions;
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
     if interactive {
         eprintln!("[Benchmark] DID Index Lookup...");
     }
 
-    let bundles = generate_random_bundles(last_bundle, iterations);
-
-    // Collect random DIDs from random bundles
-    let mut dids = Vec::with_capacity(iterations);
-    for &bundle_num in &bundles {
-        if let Ok(bundle) = manager.load_bundle(bundle_num, LoadOptions::default()) {
-            if !bundle.operations.is_empty() {
-                // Get random operation from bundle
-                let mut hasher = DefaultHasher::new();
-                bundle_num.hash(&mut hasher);
-                let idx = (hasher.finish() % bundle.operations.len() as u64) as usize;
-                dids.push(bundle.operations[idx].did.clone());
-            }
-        }
-        if dids.len() >= iterations {
-            break;
-        }
-    }
+    let sample_count = iterations.max(warmup.min(10)).max(1);
+    let dids = manager.sample_random_dids(sample_count, None)?;
 
     if dids.is_empty() {
         anyhow::bail!("No DIDs found in repository");
@@ -415,14 +470,22 @@ fn bench_did_index_lookup(
 
     // Warmup
     for i in 0..warmup.min(10) {
-        let _ = did_index.read().unwrap().get_did_locations(&dids[i % dids.len()])?;
+        let _ = did_index
+            .read()
+            .unwrap()
+            .get_did_locations(&dids[i % dids.len()])?;
     }
 
     // Benchmark - different DID each iteration
     let mut timings = Vec::with_capacity(iterations);
     for i in 0..iterations {
         if interactive && i % 10 == 0 {
-            eprint!("\r  Progress: {}/{} ({:.0}%)", i, iterations, (i as f64 / iterations as f64) * 100.0);
+            eprint!(
+                "\r  Progress: {}/{} ({:.0}%)",
+                i,
+                iterations,
+                (i as f64 / iterations as f64) * 100.0
+            );
             std::io::stderr().flush().ok();
         }
 
@@ -442,37 +505,17 @@ fn bench_did_index_lookup(
 /// Benchmark DID resolution from random DIDs: index lookup → operations → W3C document
 fn bench_did_resolution(
     manager: &BundleManager,
-    last_bundle: u32,
+    _last_bundle: u32,
     iterations: usize,
     warmup: usize,
     interactive: bool,
 ) -> Result<BenchmarkResult> {
-    use plcbundle::LoadOptions;
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
     if interactive {
         eprintln!("[Benchmark] DID Resolution (index→document)...");
     }
 
-    let bundles = generate_random_bundles(last_bundle, iterations);
-
-    // Collect random DIDs from random bundles
-    let mut dids = Vec::with_capacity(iterations);
-    for &bundle_num in &bundles {
-        if let Ok(bundle) = manager.load_bundle(bundle_num, LoadOptions::default()) {
-            if !bundle.operations.is_empty() {
-                // Get random operation from bundle
-                let mut hasher = DefaultHasher::new();
-                bundle_num.hash(&mut hasher);
-                let idx = (hasher.finish() % bundle.operations.len() as u64) as usize;
-                dids.push(bundle.operations[idx].did.clone());
-            }
-        }
-        if dids.len() >= iterations {
-            break;
-        }
-    }
+    let sample_count = iterations.max(warmup.min(10)).max(1);
+    let dids = manager.sample_random_dids(sample_count, None)?;
 
     if dids.is_empty() {
         anyhow::bail!("No DIDs found in repository");
@@ -488,7 +531,12 @@ fn bench_did_resolution(
     let mut timings = Vec::with_capacity(iterations);
     for i in 0..iterations {
         if interactive && i % 10 == 0 {
-            eprint!("\r  Progress: {}/{} ({:.0}%)", i, iterations, (i as f64 / iterations as f64) * 100.0);
+            eprint!(
+                "\r  Progress: {}/{} ({:.0}%)",
+                i,
+                iterations,
+                (i as f64 / iterations as f64) * 100.0
+            );
             std::io::stderr().flush().ok();
         }
 
@@ -502,7 +550,11 @@ fn bench_did_resolution(
         eprintln!("\r  Progress: {}/{} (100%)", iterations, iterations);
     }
 
-    Ok(calculate_stats("DID Resolution (index→document)", iterations, timings))
+    Ok(calculate_stats(
+        "DID Resolution (index→document)",
+        iterations,
+        timings,
+    ))
 }
 
 fn calculate_stats(name: &str, iterations: usize, mut timings: Vec<f64>) -> BenchmarkResult {
@@ -522,10 +574,14 @@ fn calculate_stats(name: &str, iterations: usize, mut timings: Vec<f64>) -> Benc
     let p99_ms = timings[p99_idx.min(timings.len() - 1)];
 
     // Calculate standard deviation
-    let variance: f64 = timings.iter().map(|&x| {
-        let diff = x - avg_ms;
-        diff * diff
-    }).sum::<f64>() / iterations as f64;
+    let variance: f64 = timings
+        .iter()
+        .map(|&x| {
+            let diff = x - avg_ms;
+            diff * diff
+        })
+        .sum::<f64>()
+        / iterations as f64;
     let stddev_ms = variance.sqrt();
 
     let ops_per_sec = 1000.0 / avg_ms;
@@ -582,12 +638,19 @@ fn bench_sequential_access(
 
     for i in 0..count {
         if interactive && i % 5 == 0 {
-            eprint!("\r  Progress: {}/{} ({:.0}%)", i, count, (i as f64 / count as f64) * 100.0);
+            eprint!(
+                "\r  Progress: {}/{} ({:.0}%)",
+                i,
+                count,
+                (i as f64 / count as f64) * 100.0
+            );
             std::io::stderr().flush().ok();
         }
 
         let bundle_num = start_bundle + i as u32;
-        let bundle_path = manager.directory().join(format!("{:06}.jsonl.zst", bundle_num));
+        let bundle_path = manager
+            .directory()
+            .join(format!("{:06}.jsonl.zst", bundle_num));
         if let Ok(metadata) = std::fs::metadata(&bundle_path) {
             total_bytes += metadata.len();
         }
@@ -605,7 +668,8 @@ fn bench_sequential_access(
     let mut result = calculate_stats("Sequential Bundle Access", count, timings);
     result.bundles_accessed = Some(count);
     result.total_bytes = Some(total_bytes);
-    result.throughput_mbs = Some((total_bytes as f64 / 1024.0 / 1024.0) / (result.total_ms / 1000.0));
+    result.throughput_mbs =
+        Some((total_bytes as f64 / 1024.0 / 1024.0) / (result.total_ms / 1000.0));
     result.cache_hits = Some((end_stats.cache_hits - start_stats.cache_hits) as usize);
     result.cache_misses = Some((end_stats.cache_misses - start_stats.cache_misses) as usize);
 
@@ -631,9 +695,16 @@ fn print_human_results(results: &[BenchmarkResult]) {
 
     for result in results {
         println!("{}:", result.name);
-        println!("  Iterations:    {}", format_number(result.iterations as u64));
+        println!(
+            "  Iterations:    {}",
+            format_number(result.iterations as u64)
+        );
         println!("  Total Time:    {:.2} ms", result.total_ms);
-        println!("  Average:       {}  ({:.0} ops/sec)", format_time(result.avg_ms), result.ops_per_sec);
+        println!(
+            "  Average:       {}  ({:.0} ops/sec)",
+            format_time(result.avg_ms),
+            result.ops_per_sec
+        );
 
         if let Some(size) = result.avg_size_bytes {
             println!("  Bundle Size:   {:.2} MB", size as f64 / 1024.0 / 1024.0);
