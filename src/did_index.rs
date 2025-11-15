@@ -274,20 +274,39 @@ impl Manager {
     where
         F: Fn(usize, usize),
     {
+        use std::time::Instant;
+
+        let total_start = Instant::now();
+        log::info!("Starting DID index build from scratch for {} bundles", bundles.len());
+
         fs::create_dir_all(&self.shard_dir)?;
 
         // Pass 1: Accumulate entries in memory per shard
         // Use HashMap to avoid file descriptor limits
         let mut shard_entries: HashMap<u8, Vec<(String, OpLocation)>> = HashMap::new();
+        let mut total_operations = 0usize;
+        let mut total_valid_dids = 0usize;
+        let mut flush_count = 0usize;
+
+        let pass1_start = Instant::now();
+        log::debug!("[DID Index] Pass 1: Accumulating entries in memory...");
 
         for (idx, (bundle_num, operations)) in bundles.iter().enumerate() {
+            let bundle_start = Instant::now();
             progress(idx + 1, bundles.len());
+
+            let ops_in_bundle = operations.len();
+            total_operations += ops_in_bundle;
+            let mut valid_dids_in_bundle = 0usize;
 
             for (position, (did, nullified)) in operations.iter().enumerate() {
                 let identifier = match extract_identifier(did) {
                     Ok(id) => id,
                     Err(_) => continue,
                 };
+
+                valid_dids_in_bundle += 1;
+                total_valid_dids += 1;
 
                 let shard_num = self.calculate_shard(&identifier);
                 let loc = OpLocation::new(*bundle_num as u16, position as u16, *nullified);
@@ -298,35 +317,123 @@ impl Manager {
                     .push((identifier, loc));
             }
 
-            // Write to disk every 100 bundles to avoid excessive memory usage
-            if idx % 100 == 0 && idx > 0 {
+            let bundle_duration = bundle_start.elapsed();
+            log::debug!(
+                "[DID Index] Processed bundle {:06}: {} ops ({} valid DIDs) in {:.3}ms",
+                bundle_num, ops_in_bundle, valid_dids_in_bundle, bundle_duration.as_secs_f64() * 1000.0
+            );
+
+            // Write to disk every 10 bundles to avoid excessive memory usage
+            if idx % 10 == 0 && idx > 0 {
+                let flush_start = Instant::now();
+                let mem_before = shard_entries.values().map(|v| v.len()).sum::<usize>();
+
                 self.flush_shard_entries(&mut shard_entries)?;
+                flush_count += 1;
+
+                let flush_duration = flush_start.elapsed();
+                log::info!(
+                    "[DID Index] Flushed {} entries to disk (flush #{}) in {:.3}s",
+                    mem_before, flush_count, flush_duration.as_secs_f64()
+                );
             }
         }
 
+        let pass1_duration = pass1_start.elapsed();
+        log::info!(
+            "[DID Index] Pass 1 complete: {} bundles, {} operations, {} valid DIDs in {:.3}s ({:.0} ops/sec)",
+            bundles.len(), total_operations, total_valid_dids,
+            pass1_duration.as_secs_f64(),
+            total_operations as f64 / pass1_duration.as_secs_f64()
+        );
+
         // Flush any remaining entries
-        self.flush_shard_entries(&mut shard_entries)?;
+        let final_flush_start = Instant::now();
+        let remaining = shard_entries.values().map(|v| v.len()).sum::<usize>();
+        if remaining > 0 {
+            log::debug!("[DID Index] Final flush: {} remaining entries", remaining);
+            self.flush_shard_entries(&mut shard_entries)?;
+            log::debug!("[DID Index] Final flush took {:.3}s", final_flush_start.elapsed().as_secs_f64());
+        }
 
         // Pass 2: Sort and write final shards
+        log::info!("[DID Index] Pass 2: Consolidating {} shards...", DID_SHARD_COUNT);
+        let pass2_start = Instant::now();
         let mut total_dids = 0i64;
+        let mut shards_with_data = 0usize;
+        let mut total_shard_size = 0u64;
+
         for shard_num in 0..DID_SHARD_COUNT {
+            let shard_start = Instant::now();
             let count = self.consolidate_shard(shard_num as u8)?;
-            total_dids += count;
+
+            if count > 0 {
+                shards_with_data += 1;
+                total_dids += count;
+
+                // Get shard file size
+                let shard_path = self.shard_dir.join(format!("{:02x}.idx", shard_num));
+                if let Ok(metadata) = fs::metadata(&shard_path) {
+                    let size = metadata.len();
+                    total_shard_size += size;
+
+                    let shard_duration = shard_start.elapsed();
+                    log::debug!(
+                        "[DID Index] Consolidated shard {:02x}: {} DIDs, {} bytes in {:.3}ms",
+                        shard_num, count, size, shard_duration.as_secs_f64() * 1000.0
+                    );
+                }
+            }
+
+            // Log progress every 32 shards
+            if (shard_num + 1) % 32 == 0 {
+                log::debug!(
+                    "[DID Index] Consolidation progress: {}/{} shards ({:.1}%)",
+                    shard_num + 1, DID_SHARD_COUNT,
+                    (shard_num + 1) as f64 / DID_SHARD_COUNT as f64 * 100.0
+                );
+            }
         }
+
+        let pass2_duration = pass2_start.elapsed();
+        log::info!(
+            "[DID Index] Pass 2 complete: {} shards with data, {} total DIDs, {:.2} MB total size in {:.3}s",
+            shards_with_data, total_dids,
+            total_shard_size as f64 / 1024.0 / 1024.0,
+            pass2_duration.as_secs_f64()
+        );
 
         // Update config
         let last_bundle = bundles.last().map(|(n, _)| *n as i32).unwrap_or(0);
         self.update_config(total_dids, last_bundle)?;
+
+        let total_duration = total_start.elapsed();
+        log::info!(
+            "[DID Index] ✓ Build complete: {} DIDs indexed across {} bundles in {:.3}s (avg {:.0} DIDs/sec)",
+            total_dids, bundles.len(), total_duration.as_secs_f64(),
+            total_dids as f64 / total_duration.as_secs_f64()
+        );
 
         Ok(())
     }
 
     // Flush accumulated shard entries to temporary files
     fn flush_shard_entries(&self, shard_entries: &mut HashMap<u8, Vec<(String, OpLocation)>>) -> Result<()> {
+        use std::time::Instant;
+
+        let start = Instant::now();
+        let mut total_entries = 0usize;
+        let mut shards_flushed = 0usize;
+        let mut total_bytes = 0usize;
+
         for (shard_num, entries) in shard_entries.drain() {
             if entries.is_empty() {
                 continue;
             }
+
+            let entry_count = entries.len();
+            total_entries += entry_count;
+            shards_flushed += 1;
 
             let tmp_path = self.shard_dir.join(format!("{:02x}.tmp", shard_num));
             let mut file = fs::OpenOptions::new()
@@ -337,8 +444,26 @@ impl Manager {
             for (identifier, loc) in entries {
                 file.write_all(identifier.as_bytes())?;
                 file.write_all(&loc.as_u32().to_le_bytes())?;
+                total_bytes += 28; // 24 bytes identifier + 4 bytes location
             }
+
+            log::debug!(
+                "[DID Index] Flushed shard {:02x}: {} entries ({} bytes)",
+                shard_num, entry_count, entry_count * 28
+            );
         }
+
+        let duration = start.elapsed();
+        if total_entries > 0 {
+            log::debug!(
+                "[DID Index] Flush complete: {} entries across {} shards, {:.2} KB in {:.3}s ({:.0} entries/sec)",
+                total_entries, shards_flushed,
+                total_bytes as f64 / 1024.0,
+                duration.as_secs_f64(),
+                total_entries as f64 / duration.as_secs_f64()
+            );
+        }
+
         Ok(())
     }
 
@@ -348,8 +473,17 @@ impl Manager {
         bundle_num: u32,
         operations: Vec<(String, bool)>, // (did, nullified)
     ) -> Result<()> {
+        use std::time::Instant;
+
+        let start = Instant::now();
+        let total_ops = operations.len();
+
+        log::debug!("[DID Index] Updating index for bundle {:06} ({} operations)", bundle_num, total_ops);
+
         // Group by shard
+        let grouping_start = Instant::now();
         let mut shard_ops: HashMap<u8, HashMap<String, Vec<OpLocation>>> = HashMap::new();
+        let mut valid_dids = 0usize;
 
         for (position, (did, nullified)) in operations.iter().enumerate() {
             let identifier = match extract_identifier(did) {
@@ -357,6 +491,7 @@ impl Manager {
                 Err(_) => continue,
             };
 
+            valid_dids += 1;
             let shard_num = self.calculate_shard(&identifier);
             let loc = OpLocation::new(bundle_num as u16, position as u16, *nullified);
 
@@ -368,17 +503,46 @@ impl Manager {
                 .push(loc);
         }
 
+        let grouping_duration = grouping_start.elapsed();
+        log::debug!(
+            "[DID Index]   Grouped {} valid DIDs into {} shards in {:.3}ms",
+            valid_dids, shard_ops.len(), grouping_duration.as_secs_f64() * 1000.0
+        );
+
         // Update each shard
+        let update_start = Instant::now();
         let mut delta_dids = 0i64;
+
         for (shard_num, new_ops) in shard_ops {
-            delta_dids += self.update_shard(shard_num, new_ops)?;
+            let new_dids_in_shard = new_ops.len();
+            let delta = self.update_shard(shard_num, new_ops)?;
+            delta_dids += delta;
+
+            log::debug!(
+                "[DID Index]   Updated shard {:02x}: {} new entries, {} net new DIDs",
+                shard_num, new_dids_in_shard, delta
+            );
         }
 
+        let update_duration = update_start.elapsed();
+
         // Update config
+        let config_start = Instant::now();
         let config = self.config.read().unwrap();
         let new_total = config.total_dids + delta_dids;
         drop(config);
         self.update_config(new_total, bundle_num as i32)?;
+        let config_duration = config_start.elapsed();
+
+        let total_duration = start.elapsed();
+        log::debug!(
+            "[DID Index] ✓ Bundle {:06} indexed: {} ops → {} DIDs (+{} new) in {:.3}ms (group={:.1}ms, update={:.1}ms, config={:.1}ms)",
+            bundle_num, total_ops, new_total, delta_dids,
+            total_duration.as_secs_f64() * 1000.0,
+            grouping_duration.as_secs_f64() * 1000.0,
+            update_duration.as_secs_f64() * 1000.0,
+            config_duration.as_secs_f64() * 1000.0
+        );
 
         Ok(())
     }
@@ -654,8 +818,10 @@ impl Manager {
     }
 
     fn consolidate_shard(&self, shard_num: u8) -> Result<i64> {
+        use std::time::Instant;
+
         let temp_path = self.shard_dir.join(format!("{:02x}.tmp", shard_num));
-        
+
         let data = match fs::read(&temp_path) {
             Ok(d) => d,
             Err(_) => return Ok(0),
@@ -666,7 +832,10 @@ impl Manager {
             return Ok(0);
         }
 
+        let start = Instant::now();
+
         // Parse entries (28 bytes each)
+        let parse_start = Instant::now();
         let entry_count = data.len() / 28;
         let mut entries: Vec<(String, OpLocation)> = Vec::with_capacity(entry_count);
 
@@ -682,67 +851,126 @@ impl Manager {
             let loc = OpLocation::from_u32(u32::from_le_bytes(loc_bytes));
             entries.push((identifier, loc));
         }
+        let parse_duration = parse_start.elapsed();
 
         // Sort by identifier
+        let sort_start = Instant::now();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
+        let sort_duration = sort_start.elapsed();
 
         // Group by DID
+        let group_start = Instant::now();
         let mut builder = ShardBuilder::new();
         for (id, loc) in entries {
             builder.add(id, loc);
         }
+        let group_duration = group_start.elapsed();
+        let unique_dids = builder.entries.len();
 
         // Write final shard
+        let write_start = Instant::now();
         self.write_shard(shard_num, &builder)?;
+        let write_duration = write_start.elapsed();
 
         fs::remove_file(temp_path).ok();
+
+        let total_duration = start.elapsed();
+
+        if entry_count > 0 {
+            log::debug!(
+                "[DID Index] Shard {:02x} consolidate: {} entries → {} DIDs in {:.3}ms (parse={:.1}ms, sort={:.1}ms, group={:.1}ms, write={:.1}ms)",
+                shard_num, entry_count, unique_dids,
+                total_duration.as_secs_f64() * 1000.0,
+                parse_duration.as_secs_f64() * 1000.0,
+                sort_duration.as_secs_f64() * 1000.0,
+                group_duration.as_secs_f64() * 1000.0,
+                write_duration.as_secs_f64() * 1000.0
+            );
+        }
 
         Ok(builder.entries.len() as i64)
     }
 
     fn update_shard(&self, shard_num: u8, new_ops: HashMap<String, Vec<OpLocation>>) -> Result<i64> {
+        use std::time::Instant;
+
+        let start = Instant::now();
         let shard_path = self.shard_dir.join(format!("{:02x}.idx", shard_num));
         let mut builder = ShardBuilder::new();
 
         // Read existing shard
-        if shard_path.exists() {
+        let read_start = Instant::now();
+        let existing_dids = if shard_path.exists() {
             let data = fs::read(&shard_path)?;
             if data.len() >= 32 {
                 self.parse_shard_data(&data, &mut builder)?;
             }
-        }
+            builder.entries.len()
+        } else {
+            0
+        };
+        let read_duration = read_start.elapsed();
 
         let before_count = builder.entries.len();
+        let new_dids_count = new_ops.len();
+
+        // Merge new operations
+        let merge_start = Instant::now();
         builder.merge(new_ops);
+        let merge_duration = merge_start.elapsed();
         let after_count = builder.entries.len();
 
         // Write updated shard
+        let write_start = Instant::now();
         self.write_shard(shard_num, &builder)?;
+        let write_duration = write_start.elapsed();
 
         // Invalidate cache
+        let cache_start = Instant::now();
         self.shard_cache.write().unwrap().remove(&shard_num);
+        let cache_duration = cache_start.elapsed();
 
-        Ok((after_count - before_count) as i64)
+        let total_duration = start.elapsed();
+        let delta = (after_count - before_count) as i64;
+
+        log::debug!(
+            "[DID Index] Shard {:02x} update: {} existing + {} new → {} total (+{} net) in {:.3}ms (read={:.1}ms, merge={:.1}ms, write={:.1}ms, cache={:.1}ms)",
+            shard_num, existing_dids, new_dids_count, after_count, delta,
+            total_duration.as_secs_f64() * 1000.0,
+            read_duration.as_secs_f64() * 1000.0,
+            merge_duration.as_secs_f64() * 1000.0,
+            write_duration.as_secs_f64() * 1000.0,
+            cache_duration.as_secs_f64() * 1000.0
+        );
+
+        Ok(delta)
     }
 
     fn write_shard(&self, shard_num: u8, builder: &ShardBuilder) -> Result<()> {
+        use std::time::Instant;
+
+        let start = Instant::now();
+
         // Ensure shard directory exists
         if !self.shard_dir.exists() {
             fs::create_dir_all(&self.shard_dir)?;
         }
-        
+
         let shard_path = self.shard_dir.join(format!("{:02x}.idx", shard_num));
-        
+
         if builder.entries.is_empty() {
             fs::write(&shard_path, &[])?;
             return Ok(());
         }
 
         // Sort identifiers
+        let sort_start = Instant::now();
         let mut identifiers: Vec<&String> = builder.entries.keys().collect();
         identifiers.sort();
+        let sort_duration = sort_start.elapsed();
 
         // Build prefix index
+        let prefix_start = Instant::now();
         let mut prefix_index = [0xFFFFFFFFu32; 256];
         for (i, id) in identifiers.iter().enumerate() {
             if !id.is_empty() {
@@ -752,22 +980,28 @@ impl Manager {
                 }
             }
         }
+        let prefix_duration = prefix_start.elapsed();
 
         // Calculate offsets
+        let offset_start = Instant::now();
         let offset_table_start = 1056;
         let data_start = offset_table_start + (identifiers.len() * 4);
         let mut offsets = Vec::with_capacity(identifiers.len());
         let mut current_offset = data_start;
+        let mut total_locations = 0usize;
 
         for id in &identifiers {
             offsets.push(current_offset);
             let locations = &builder.entries[*id];
+            total_locations += locations.len();
             current_offset += DID_IDENTIFIER_LEN + 2 + (locations.len() * 4);
         }
+        let offset_duration = offset_start.elapsed();
 
-        // Write file
+        // Build buffer
+        let buffer_start = Instant::now();
         let mut buf = Vec::with_capacity(current_offset);
-        
+
         // Header (32 bytes)
         buf.extend_from_slice(DIDINDEX_MAGIC);
         buf.extend_from_slice(&DIDINDEX_VERSION.to_le_bytes());
@@ -794,8 +1028,26 @@ impl Manager {
                 buf.extend_from_slice(&loc.as_u32().to_le_bytes());
             }
         }
+        let buffer_duration = buffer_start.elapsed();
 
+        // Write to disk
+        let write_start = Instant::now();
         fs::write(&shard_path, &buf)?;
+        let write_duration = write_start.elapsed();
+
+        let total_duration = start.elapsed();
+
+        log::debug!(
+            "[DID Index] Write shard {:02x}: {} DIDs, {} locations, {} bytes in {:.3}ms (sort={:.1}ms, prefix={:.1}ms, offsets={:.1}ms, buffer={:.1}ms, disk={:.1}ms)",
+            shard_num, builder.entries.len(), total_locations, buf.len(),
+            total_duration.as_secs_f64() * 1000.0,
+            sort_duration.as_secs_f64() * 1000.0,
+            prefix_duration.as_secs_f64() * 1000.0,
+            offset_duration.as_secs_f64() * 1000.0,
+            buffer_duration.as_secs_f64() * 1000.0,
+            write_duration.as_secs_f64() * 1000.0
+        );
+
         Ok(())
     }
 

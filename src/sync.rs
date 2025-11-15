@@ -319,7 +319,7 @@ impl Default for SyncConfig {
             max_bundles: 0,
             verbose: false,
             enable_did_batching: false,
-            did_batch_size: 100,
+            did_batch_size: 10,  // Update DID index every 10 bundles during initial sync
             shutdown_rx: None,
         }
     }

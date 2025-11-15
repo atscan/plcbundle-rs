@@ -854,17 +854,28 @@ impl BundleManager {
     /// IMPORTANT: This method performs heavy blocking I/O and should be called from async
     /// contexts using spawn_blocking to avoid freezing the async runtime (and HTTP server).
     pub fn batch_update_did_index(&self, start_bundle: u32, end_bundle: u32) -> Result<()> {
+        use std::time::Instant;
+
         if start_bundle > end_bundle {
             return Ok(());
         }
 
+        let total_start = Instant::now();
+        let bundle_count = end_bundle - start_bundle + 1;
+
         if *self.verbose.lock().unwrap() {
-            log::info!("Batch updating DID index for bundles {:06} to {:06}...", start_bundle, end_bundle);
+            log::info!("Batch updating DID index for bundles {:06} to {:06}... ({} bundles)",
+                start_bundle, end_bundle, bundle_count);
         }
 
+        // Load all bundles
+        let load_start = Instant::now();
         let mut bundles_data = Vec::new();
+        let mut total_operations = 0usize;
+
         for bundle_num in start_bundle..=end_bundle {
             if let Ok(result) = self.load_bundle(bundle_num, LoadOptions::default()) {
+                total_operations += result.operations.len();
                 let operations: Vec<(String, bool)> = result.operations
                     .iter()
                     .map(|op| (op.did.clone(), op.nullified))
@@ -872,18 +883,37 @@ impl BundleManager {
                 bundles_data.push((bundle_num, operations));
             }
         }
+        let load_duration = load_start.elapsed();
 
         if bundles_data.is_empty() {
             return Ok(());
         }
 
+        log::debug!(
+            "[Batch DID Index] Loaded {} bundles ({} operations) in {:.3}s ({:.0} ops/sec)",
+            bundles_data.len(), total_operations,
+            load_duration.as_secs_f64(),
+            total_operations as f64 / load_duration.as_secs_f64()
+        );
+
         // Update DID index for each bundle
+        let update_start = Instant::now();
         for (bundle_num, operations) in bundles_data {
             self.did_index.write().unwrap().update_for_bundle(bundle_num, operations)?;
         }
+        let update_duration = update_start.elapsed();
+
+        let total_duration = total_start.elapsed();
 
         if *self.verbose.lock().unwrap() {
-            log::info!("✓ DID index updated for bundles {:06} to {:06}", start_bundle, end_bundle);
+            log::info!(
+                "✓ DID index updated for bundles {:06} to {:06} in {:.3}s (load={:.1}s, update={:.1}s, {:.0} ops/sec overall)",
+                start_bundle, end_bundle,
+                total_duration.as_secs_f64(),
+                load_duration.as_secs_f64(),
+                update_duration.as_secs_f64(),
+                total_operations as f64 / total_duration.as_secs_f64()
+            );
         }
 
         Ok(())
@@ -1144,7 +1174,7 @@ impl BundleManager {
         self.clear_mempool()?;
 
         // Save bundle to disk with timing breakdown
-        // During initial sync, skip DID index updates (will be done in batches every 100 bundles)
+        // During initial sync, skip DID index updates (will be done in batches every 10 bundles)
         let save_start = Instant::now();
         let (serialize_time, compress_time, hash_time, did_index_time, index_write_time) =
             self.save_bundle_with_timing(next_bundle_num, operations, skip_did_index).await?;
@@ -1152,9 +1182,13 @@ impl BundleManager {
 
         // Show timing breakdown in verbose mode only
         if *self.verbose.lock().unwrap() {
-            log::debug!("  Save timing: serialize={:.1}ms, compress={:.1}ms, hash={:.1}ms, did_index={:.1}ms, index_write={:.1}ms, total={:.1}ms",
-                serialize_time.as_millis(), compress_time.as_millis(), hash_time.as_millis(),
-                did_index_time.as_millis(), index_write_time.as_millis(), save_duration.as_millis());
+            log::debug!("  Save timing: serialize={:.3}ms, compress={:.3}ms, hash={:.3}ms, did_index={:.3}ms, index_write={:.3}ms, total={:.1}ms",
+                serialize_time.as_secs_f64() * 1000.0,
+                compress_time.as_secs_f64() * 1000.0,
+                hash_time.as_secs_f64() * 1000.0,
+                did_index_time.as_secs_f64() * 1000.0,
+                index_write_time.as_secs_f64() * 1000.0,
+                save_duration.as_secs_f64() * 1000.0);
         }
 
         log::debug!("Adding bundle {} to index", next_bundle_num);
@@ -1189,8 +1223,8 @@ impl BundleManager {
             log::info!("→ Bundle {:06} | {} | fetch: {:.3}s ({} reqs) | {}",
                 next_bundle_num, short_hash, fetch_total_duration.as_secs_f64(),
                 fetch_num, age_str);
-            log::debug!("Bundle done = {}, finish duration = {}ms",
-                next_bundle_num, save_duration.as_millis());
+            log::debug!("Bundle done = {}, finish duration = {:.3}ms",
+                next_bundle_num, save_duration.as_secs_f64() * 1000.0);
         }
 
         Ok(SyncResult::BundleCreated {
