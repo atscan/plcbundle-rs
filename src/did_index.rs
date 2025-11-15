@@ -1115,12 +1115,6 @@ impl Manager {
         }
     }
 
-    fn load_shard(&self, shard_num: u8) -> Result<Arc<Shard>> {
-        // Use the new method but ignore cache info
-        let (shard, _) = self.load_shard_with_cache_info(shard_num)?;
-        Ok(shard)
-    }
-
     fn evict_lru(&self, cache: &mut HashMap<u8, Arc<Shard>>) {
         if let Some((oldest_key, _)) = cache
             .iter()

@@ -423,15 +423,13 @@ impl SyncLogger for ServerLogger {
         age: &str,
         fetch_duration_ms: u64,
         save_duration_ms: u64,
-        total_duration_ms: u64,
+        _total_duration_ms: u64,
         fetch_requests: usize,
     ) {
         let fetch_secs = fetch_duration_ms as f64 / 1000.0;
-        let total_secs = total_duration_ms as f64 / 1000.0;
-        let save_secs = save_duration_ms as f64 / 1000.0;
         
-        eprintln!("[INFO] → Bundle {:06} | {} | fetch: {:.3}s ({} reqs) | save: {:.1}s | total: {:.3}s | {}",
-            bundle_num, hash, fetch_secs, fetch_requests, save_secs, total_secs, age);
+        eprintln!("[INFO] → Bundle {:06} | {} | fetch: {:.3}s ({} reqs) | save: {}ms | {}",
+            bundle_num, hash, fetch_secs, fetch_requests, save_duration_ms, age);
     }
     
     fn on_caught_up(
