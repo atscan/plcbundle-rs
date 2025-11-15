@@ -2190,7 +2190,7 @@ fn unix_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
-        .as_secs()
+        .as_nanos() as u64
 }
 
 #[cfg(test)]
