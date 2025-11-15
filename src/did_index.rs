@@ -583,44 +583,52 @@ impl Manager {
             log::debug!("[DID Index] Final flush took {:.3}s", final_flush_start.elapsed().as_secs_f64());
         }
 
-        // Pass 2: Sort and write final shards
-        log::info!("[DID Index] Pass 2: Consolidating {} shards...", DID_SHARD_COUNT);
+        // Pass 2: Sort and write final shards (in parallel)
+        log::info!("[DID Index] Pass 2: Consolidating {} shards in parallel...", DID_SHARD_COUNT);
         let pass2_start = Instant::now();
+
+        // Process all shards in parallel using Rayon
+        use rayon::prelude::*;
+
+        let results: Vec<_> = (0..DID_SHARD_COUNT)
+            .into_par_iter()
+            .map(|shard_num| {
+                let shard_start = Instant::now();
+                let count = self.consolidate_shard(shard_num as u8)?;
+
+                let size = if count > 0 {
+                    let shard_path = self.shard_dir.join(format!("{:02x}.idx", shard_num));
+                    if let Ok(metadata) = fs::metadata(&shard_path) {
+                        let size = metadata.len();
+                        let shard_duration = shard_start.elapsed();
+                        log::debug!(
+                            "[DID Index] Consolidated shard {:02x}: {} DIDs, {} bytes in {:.3}ms",
+                            shard_num, count, size, shard_duration.as_secs_f64() * 1000.0
+                        );
+                        size
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                };
+
+                Ok::<_, anyhow::Error>((count, size))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // Aggregate results
         let mut total_dids = 0i64;
         let mut shards_with_data = 0usize;
         let mut total_shard_size = 0u64;
         let mut per_shard_counts = vec![0u32; DID_SHARD_COUNT];
 
-        for shard_num in 0..DID_SHARD_COUNT {
-            let shard_start = Instant::now();
-            let count = self.consolidate_shard(shard_num as u8)?;
-
-            if count > 0 {
-                per_shard_counts[shard_num] = count as u32;
+        for (shard_num, (count, size)) in results.iter().enumerate() {
+            if *count > 0 {
+                per_shard_counts[shard_num] = *count as u32;
                 shards_with_data += 1;
                 total_dids += count;
-
-                // Get shard file size
-                let shard_path = self.shard_dir.join(format!("{:02x}.idx", shard_num));
-                if let Ok(metadata) = fs::metadata(&shard_path) {
-                    let size = metadata.len();
-                    total_shard_size += size;
-
-                    let shard_duration = shard_start.elapsed();
-                    log::debug!(
-                        "[DID Index] Consolidated shard {:02x}: {} DIDs, {} bytes in {:.3}ms",
-                        shard_num, count, size, shard_duration.as_secs_f64() * 1000.0
-                    );
-                }
-            }
-
-            // Log progress every 32 shards
-            if (shard_num + 1) % 32 == 0 {
-                log::debug!(
-                    "[DID Index] Consolidation progress: {}/{} shards ({:.1}%)",
-                    shard_num + 1, DID_SHARD_COUNT,
-                    (shard_num + 1) as f64 / DID_SHARD_COUNT as f64 * 100.0
-                );
+                total_shard_size += size;
             }
         }
 
