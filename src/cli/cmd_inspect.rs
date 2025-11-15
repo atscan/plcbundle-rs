@@ -53,6 +53,14 @@ struct InspectResult {
     file_size: u64,
     has_metadata_frame: bool,
 
+    // Embedded metadata (from skippable frame)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    embedded_metadata: Option<EmbeddedMetadataInfo>,
+
+    // Index metadata (from plc_bundles.json)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    index_metadata: Option<IndexMetadataInfo>,
+
     // Basic stats
     total_ops: usize,
     nullified_ops: usize,
@@ -94,6 +102,36 @@ struct InspectResult {
     min_op_size: usize,
     max_op_size: usize,
     total_op_size: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct EmbeddedMetadataInfo {
+    format: String,
+    origin: String,
+    bundle_number: u32,
+    created_by: String,
+    created_at: String,
+    operation_count: usize,
+    did_count: usize,
+    frame_count: usize,
+    frame_size: usize,
+    start_time: String,
+    end_time: String,
+    content_hash: String,
+    parent_hash: Option<String>,
+    frame_offsets: Vec<i64>,
+    metadata_frame_size: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+struct IndexMetadataInfo {
+    hash: String,
+    parent: String,
+    cursor: String,
+    compressed_hash: String,
+    compressed_size: u64,
+    uncompressed_size: u64,
+    compression_ratio: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -153,17 +191,60 @@ pub fn run(cmd: InspectCommand, dir: PathBuf) -> Result<()> {
     // Analyze operations
     let analysis = analyze_operations(&operations, &cmd)?;
 
-    // Check for metadata frame
-    let has_metadata = if let Some(num) = bundle_num {
-        manager.get_bundle_metadata(num)?.is_some()
+    // Extract metadata information using BundleManager API
+    let (embedded_metadata, index_metadata, has_metadata) = if let Some(num) = bundle_num {
+        // Get embedded metadata from skippable frame via BundleManager
+        let embedded = manager.get_embedded_metadata(num)?;
+        let index = manager.get_bundle_metadata(num)?;
+
+        let embedded_info = embedded.as_ref().map(|meta| {
+            let metadata_frame_size = meta.frame_offsets.last().map(|&last_offset| {
+                file_size as i64 - last_offset
+            }).filter(|&size| size > 0).map(|s| s as u64);
+
+            EmbeddedMetadataInfo {
+                format: meta.format.clone(),
+                origin: meta.origin.clone(),
+                bundle_number: meta.bundle_number,
+                created_by: meta.created_by.clone(),
+                created_at: meta.created_at.clone(),
+                operation_count: meta.operation_count,
+                did_count: meta.did_count,
+                frame_count: meta.frame_count,
+                frame_size: meta.frame_size,
+                start_time: meta.start_time.clone(),
+                end_time: meta.end_time.clone(),
+                content_hash: meta.content_hash.clone(),
+                parent_hash: meta.parent_hash.clone(),
+                frame_offsets: meta.frame_offsets.clone(),
+                metadata_frame_size,
+            }
+        });
+
+        let index_info = index.as_ref().map(|meta| {
+            let compression_ratio = (1.0 - meta.compressed_size as f64 / meta.uncompressed_size as f64) * 100.0;
+            IndexMetadataInfo {
+                hash: meta.hash.clone(),
+                parent: meta.parent.clone(),
+                cursor: meta.cursor.clone(),
+                compressed_hash: meta.compressed_hash.clone(),
+                compressed_size: meta.compressed_size,
+                uncompressed_size: meta.uncompressed_size,
+                compression_ratio,
+            }
+        });
+
+        (embedded_info, index_info, embedded.is_some())
     } else {
-        false
+        (None, None, false)
     };
 
     let result = InspectResult {
         file_path: file_path.display().to_string(),
         file_size,
         has_metadata_frame: has_metadata,
+        embedded_metadata,
+        index_metadata,
         total_ops: analysis.total_ops,
         nullified_ops: analysis.nullified_ops,
         active_ops: analysis.active_ops,
@@ -490,8 +571,8 @@ fn display_human(
     result: &InspectResult,
     operations: &[Operation],
     cmd: &InspectCommand,
-    bundle_num: Option<u32>,
-    manager: &BundleManager,
+    _bundle_num: Option<u32>,
+    _manager: &BundleManager,
 ) -> Result<()> {
     println!();
     println!("═══════════════════════════════════════════════════════════════");
@@ -502,22 +583,90 @@ fn display_human(
     println!("📁 File Information");
     println!("───────────────────");
     println!("  Path:                {}", result.file_path);
-    println!("  Size:                {}", format_bytes(result.file_size));
-    println!("  Has metadata frame:  {}\n", result.has_metadata_frame);
+    println!("  Has metadata frame:  {}", result.has_metadata_frame);
+
+    // Show size information from index if available
+    if let Some(ref index_meta) = result.index_metadata {
+        println!("\n  Size:");
+        println!("    File size:         {}", format_bytes(result.file_size));
+        println!("    Uncompressed:      {}", format_bytes(index_meta.uncompressed_size));
+        println!("    Compressed:        {}", format_bytes(index_meta.compressed_size));
+        println!("    Compression:       {:.1}%", index_meta.compression_ratio);
+        println!("    Compressed hash:   {}", index_meta.compressed_hash);
+    } else {
+        println!("  File size:           {}", format_bytes(result.file_size));
+    }
+    println!();
 
     // Embedded metadata (if available and not skipped)
     if !cmd.skip_metadata && result.has_metadata_frame {
-        if let Some(num) = bundle_num {
-            if let Some(meta) = manager.get_bundle_metadata(num)? {
-                println!("📋 Embedded Metadata");
-                println!("────────────────────");
-                println!("  Bundle Number:       {:06}", meta.bundle_number);
-                println!("  Operations:          {}", format_number(meta.operation_count as usize));
-                println!("  Unique DIDs:         {}", format_number(meta.did_count as usize));
-                println!("  Timespan:            {} → {}", meta.start_time, meta.end_time);
-                println!("  Content hash:        {}", &meta.content_hash);
-                println!();
+        if let Some(ref meta) = result.embedded_metadata {
+            println!("📋 Embedded Metadata (Skippable Frame)");
+            println!("───────────────────────────────────────");
+            println!("  Format:              {}", meta.format);
+            println!("  Origin:              {}", meta.origin);
+            println!("  Bundle Number:       {:06}", meta.bundle_number);
+
+            if !meta.created_by.is_empty() {
+                println!("  Created by:          {}", meta.created_by);
             }
+            println!("  Created at:          {}", meta.created_at);
+
+            println!("\n  Content:");
+            println!("    Operations:        {}", format_number(meta.operation_count));
+            println!("    Unique DIDs:       {}", format_number(meta.did_count));
+            println!("    Frames:            {} × {} ops", meta.frame_count, format_number(meta.frame_size));
+            println!("    Timespan:          {} → {}", meta.start_time, meta.end_time);
+
+            let duration_ms = if let (Ok(start), Ok(end)) = (
+                DateTime::parse_from_rfc3339(&meta.start_time),
+                DateTime::parse_from_rfc3339(&meta.end_time)
+            ) {
+                end.signed_duration_since(start).num_seconds()
+            } else {
+                0
+            };
+            println!("    Duration:          {}", format_duration(duration_ms));
+
+            println!("\n  Integrity:");
+            println!("    Content hash:      {}", meta.content_hash);
+            if let Some(ref parent) = meta.parent_hash {
+                if !parent.is_empty() {
+                    println!("    Parent hash:       {}", parent);
+                }
+            }
+
+            // Index metadata for chain info
+            if let Some(ref index_meta) = result.index_metadata {
+                println!("\n  Chain:");
+                println!("    Chain hash:        {}", index_meta.hash);
+                if !index_meta.parent.is_empty() {
+                    println!("    Parent:            {}", index_meta.parent);
+                }
+                if !index_meta.cursor.is_empty() {
+                    println!("    Cursor:            {}", index_meta.cursor);
+                }
+            }
+
+            if !meta.frame_offsets.is_empty() {
+                println!("\n  Frame Index:");
+                println!("    {} frame offsets (embedded)", meta.frame_offsets.len());
+
+                if let Some(metadata_size) = meta.metadata_frame_size {
+                    println!("    Metadata size:     {}", format_bytes(metadata_size));
+                }
+
+                // Show compact list of first few offsets
+                if meta.frame_offsets.len() <= 10 {
+                    println!("    Offsets:           {:?}", meta.frame_offsets);
+                } else {
+                    println!("    First offsets:     {:?} ... ({} more)",
+                        &meta.frame_offsets[..5],
+                        meta.frame_offsets.len() - 5);
+                }
+            }
+
+            println!();
         }
     }
 

@@ -850,15 +850,18 @@ impl BundleManager {
     }
 
     /// Batch update DID index for a range of bundles (for initial sync optimization)
+    ///
+    /// IMPORTANT: This method performs heavy blocking I/O and should be called from async
+    /// contexts using spawn_blocking to avoid freezing the async runtime (and HTTP server).
     pub fn batch_update_did_index(&self, start_bundle: u32, end_bundle: u32) -> Result<()> {
         if start_bundle > end_bundle {
             return Ok(());
         }
-        
+
         if *self.verbose.lock().unwrap() {
             log::info!("Batch updating DID index for bundles {:06} to {:06}...", start_bundle, end_bundle);
         }
-        
+
         let mut bundles_data = Vec::new();
         for bundle_num in start_bundle..=end_bundle {
             if let Ok(result) = self.load_bundle(bundle_num, LoadOptions::default()) {
@@ -869,21 +872,34 @@ impl BundleManager {
                 bundles_data.push((bundle_num, operations));
             }
         }
-        
+
         if bundles_data.is_empty() {
             return Ok(());
         }
-        
+
         // Update DID index for each bundle
         for (bundle_num, operations) in bundles_data {
             self.did_index.write().unwrap().update_for_bundle(bundle_num, operations)?;
         }
-        
+
         if *self.verbose.lock().unwrap() {
             log::info!("✓ DID index updated for bundles {:06} to {:06}", start_bundle, end_bundle);
         }
-        
+
         Ok(())
+    }
+
+    /// Async wrapper for batch_update_did_index that runs in a blocking task
+    ///
+    /// This prevents blocking the async runtime (and HTTP server) during heavy I/O operations.
+    pub async fn batch_update_did_index_async(&self, start_bundle: u32, end_bundle: u32) -> Result<()> {
+        let manager = self.clone_for_arc();
+
+        tokio::task::spawn_blocking(move || {
+            manager.batch_update_did_index(start_bundle, end_bundle)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Batch DID index update task failed: {}", e))?
     }
 
     /// Fetch and save next bundle from PLC directory
@@ -1853,10 +1869,24 @@ impl BundleManager {
         Ok(())
     }
 
-    /// Get bundle metadata
+    /// Get bundle metadata from index
     pub fn get_bundle_metadata(&self, bundle_num: u32) -> Result<Option<crate::index::BundleMetadata>> {
         let index = self.index.read().unwrap();
         Ok(index.get_bundle(bundle_num).cloned())
+    }
+
+    /// Get embedded metadata from bundle's skippable frame
+    pub fn get_embedded_metadata(&self, bundle_num: u32) -> Result<Option<crate::bundle_format::BundleMetadata>> {
+        let bundle_path = self.directory.join(format!("{:06}.jsonl.zst", bundle_num));
+
+        if !bundle_path.exists() {
+            return Ok(None);
+        }
+
+        match crate::bundle_format::extract_metadata_from_file(&bundle_path) {
+            Ok(meta) => Ok(Some(meta)),
+            Err(_) => Ok(None), // Bundle may not have embedded metadata
+        }
     }
 
     /// Delete bundle files from disk

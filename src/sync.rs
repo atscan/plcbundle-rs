@@ -761,9 +761,10 @@ impl SyncManager {
                         pending_did_index_count += 1;
 
                         // Update DID index every N bundles during initial sync
+                        // Use async version to avoid blocking the runtime (and HTTP server)
                         if pending_did_index_count >= self.config.did_batch_size {
                             let end_bundle = bundle_num;
-                            if let Err(e) = self.manager.batch_update_did_index(pending_did_index_start, end_bundle) {
+                            if let Err(e) = self.manager.batch_update_did_index_async(pending_did_index_start, end_bundle).await {
                                 self.handle_event(&SyncEvent::Error {
                                     error: format!("Failed to batch update DID index: {}", e),
                                 });
@@ -853,10 +854,11 @@ impl SyncManager {
                         is_initial_sync = false;
 
                         // Update any remaining pending DID index bundles
+                        // Use async version to avoid blocking the runtime (and HTTP server)
                         if self.config.enable_did_batching && pending_did_index_count > 0 {
                             let last_bundle = self.manager.get_last_bundle();
                             if pending_did_index_start > 0 && last_bundle >= pending_did_index_start {
-                                if let Err(e) = self.manager.batch_update_did_index(pending_did_index_start, last_bundle) {
+                                if let Err(e) = self.manager.batch_update_did_index_async(pending_did_index_start, last_bundle).await {
                                     self.handle_event(&SyncEvent::Error {
                                         error: format!("Failed to batch update DID index: {}", e),
                                     });
