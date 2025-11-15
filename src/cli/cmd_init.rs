@@ -23,7 +23,13 @@ pub struct InitCommand {
 }
 
 pub fn run(cmd: InitCommand) -> Result<()> {
-    let dir = cmd.dir.canonicalize().unwrap_or(cmd.dir.clone());
+    // Get absolute path for display
+    let dir = if cmd.dir.is_absolute() {
+        cmd.dir.clone()
+    } else {
+        std::env::current_dir()?.join(&cmd.dir)
+    };
+
     let index_path = dir.join("plc_bundles.json");
 
     // Check if already initialized
@@ -72,10 +78,21 @@ pub fn run(cmd: InitCommand) -> Result<()> {
     let json = serde_json::to_string_pretty(&index)?;
     std::fs::write(&index_path, json)?;
 
-    println!("\n✓ Initialized PLC bundle repository");
+    // Check if user needs to cd to the directory
+    let current_dir = std::env::current_dir()?;
+    let need_cd = current_dir != dir;
+
+    println!("✓ Initialized PLC bundle repository");
     println!("  Location: {}", dir.display());
     println!("  Origin:   {}", plc_url);
     println!("  Index:    plc_bundles.json");
+
+    if need_cd {
+        println!("\n⚠ Warning: You initialized in a different directory");
+        println!("  Please run the following command first:");
+        println!("    cd {}", dir.display());
+    }
+
     println!("\nNext steps:");
     println!(
         "  {} sync           # Fetch bundles from PLC directory",
@@ -137,6 +154,7 @@ fn prompt_plc_directory_url() -> Result<String> {
     };
 
     println!("└");
+    println!("\n{}", "─".repeat(60)); // Add clear separator line
 
     Ok(url)
 }
