@@ -230,9 +230,17 @@ pub fn compress_operations_to_frames(operations: &[crate::operations::Operation]
         total_serialize_time += serialize_start.elapsed();
         total_uncompressed += frame_data.len() as u64;
 
-        // Compress frame
+        // Compress frame with content size in header and checksum
         let compress_start = Instant::now();
-        let compressed_frame = zstd::encode_all(frame_data.as_slice(), constants::ZSTD_COMPRESSION_LEVEL)?;
+        let mut compressed_frame = Vec::new();
+        {
+            let mut encoder = zstd::Encoder::new(&mut compressed_frame, constants::ZSTD_COMPRESSION_LEVEL)?;
+            encoder.set_pledged_src_size(Some(frame_data.len() as u64))?;
+            encoder.include_contentsize(true)?;
+            encoder.include_checksum(true)?;  // Enable XXH64 checksum
+            std::io::copy(&mut frame_data.as_slice(), &mut encoder)?;
+            encoder.finish()?;
+        }
         total_compress_time += compress_start.elapsed();
         
         // Record offset (relative to first data frame)
@@ -363,17 +371,56 @@ pub fn write_bundle_with_frames<W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
+    #[test]
+    fn test_zstd_content_size_and_checksum() {
+        // Test that our compression includes content size and checksum in frame header
+        let test_data = b"Test data for zstd compression with content size and checksum";
+
+        // NEW method: with content size and checksum
+        let mut compressed_new = Vec::new();
+        {
+            let mut encoder = zstd::Encoder::new(&mut compressed_new, 3).unwrap();
+            encoder.set_pledged_src_size(Some(test_data.len() as u64)).unwrap();
+            encoder.include_contentsize(true).unwrap();
+            encoder.include_checksum(true).unwrap();
+            std::io::copy(&mut &test_data[..], &mut encoder).unwrap();
+            encoder.finish().unwrap();
+        }
+
+        // OLD method: without content size or checksum (for comparison)
+        let compressed_old = zstd::encode_all(&test_data[..], 3).unwrap();
+
+        // Write both for comparison
+        let test_file_new = "/tmp/test_with_metadata.zst";
+        let test_file_old = "/tmp/test_without_metadata.zst";
+        std::fs::write(test_file_new, &compressed_new).unwrap();
+        std::fs::write(test_file_old, &compressed_old).unwrap();
+
+        // Both should decompress correctly
+        let decompressed_new = zstd::decode_all(&compressed_new[..]).unwrap();
+        let decompressed_old = zstd::decode_all(&compressed_old[..]).unwrap();
+        assert_eq!(&decompressed_new, test_data);
+        assert_eq!(&decompressed_old, test_data);
+
+        println!("✓ Created test files:");
+        println!("  With metadata (size+checksum): {}", test_file_new);
+        println!("  Without metadata:              {}", test_file_old);
+        println!();
+        println!("Compare with: zstd -l /tmp/test_with*.zst /tmp/test_without*.zst");
+        println!("Expected: New file should show 'Uncompressed' size and 'XXH64' check");
+    }
+
     #[test]
     fn test_skippable_frame_roundtrip() {
         let data = b"test data";
         let mut buffer = Vec::new();
-        
+
         write_skippable_frame(&mut buffer, SKIPPABLE_MAGIC_METADATA, data).unwrap();
-        
+
         let mut cursor = std::io::Cursor::new(&buffer);
         let (magic, read_data) = read_skippable_frame(&mut cursor).unwrap();
-        
+
         assert_eq!(magic, SKIPPABLE_MAGIC_METADATA);
         assert_eq!(read_data, data);
     }
