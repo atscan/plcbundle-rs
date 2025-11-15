@@ -126,9 +126,13 @@ fn run_server(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
     rt.block_on(run_server_async(cmd, dir))
 }
 
+
 #[cfg(feature = "server")]
 async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
     use std::net::SocketAddr;
+
+    // Print ASCII art banner at the very beginning
+    eprint!("{}\n", plcbundle::server::get_ascii_art_banner(env!("CARGO_PKG_VERSION")));
 
     // Initialize manager with handle resolver
     // Always use default resolver URL if not explicitly provided (DID endpoints always available)
