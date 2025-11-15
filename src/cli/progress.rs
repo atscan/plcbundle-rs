@@ -1,345 +1,160 @@
-use std::io::{self, IsTerminal, Write};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use indicatif::{ProgressBar as IndicatifProgressBar, ProgressStyle};
+use std::sync::Arc;
+use std::sync::Mutex;
 
-/// Progress bar for displaying operation progress
+/// Progress bar wrapper around indicatif for displaying operation progress
 pub struct ProgressBar {
-    total: usize,
-    current: Arc<Mutex<usize>>,
-    current_bytes: Arc<Mutex<u64>>,
-    start_time: Instant,
-    last_print: Arc<Mutex<Instant>>,
+    pb: IndicatifProgressBar,
     show_bytes: bool,
-    width: usize,
-    is_tty: bool,
-    last_line_print: Arc<Mutex<Instant>>,
-    message: Arc<Mutex<String>>, 
+    current_bytes: Arc<Mutex<u64>>,
+    total_bytes: u64,
 }
 
 impl ProgressBar {
     /// Create a new progress bar
     pub fn new(total: usize) -> Self {
-        let is_tty = io::stderr().is_terminal();
+        let pb = IndicatifProgressBar::new(total as u64);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} | {per_sec:.1}/s | {msg} | ETA: {eta}")
+                .unwrap()
+                .progress_chars("█▓▒░ "),
+        );
+        
         Self {
-            total,
-            current: Arc::new(Mutex::new(0)),
-            current_bytes: Arc::new(Mutex::new(0)),
-            start_time: Instant::now(),
-            last_print: Arc::new(Mutex::new(Instant::now())),
-            last_line_print: Arc::new(Mutex::new(Instant::now())),
+            pb,
             show_bytes: false,
-            width: 40,
-            is_tty,
-            message: Arc::new(Mutex::new(String::new())),
+            current_bytes: Arc::new(Mutex::new(0)),
+            total_bytes: 0,
         }
     }
 
     /// Create a progress bar with byte tracking
-    pub fn with_bytes(total: usize, _total_bytes: u64) -> Self {
-        let is_tty = io::stderr().is_terminal();
+    pub fn with_bytes(total: usize, total_bytes: u64) -> Self {
+        let pb = IndicatifProgressBar::new(total as u64);
+        
+        // Custom template that shows MB/s calculated from our tracked bytes
+        // We'll calculate MB/s manually and include it in the message
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} | {msg} | ETA: {eta}")
+                .unwrap()
+                .progress_chars("█▓▒░ "),
+        );
+        
         Self {
-            total,
-            current: Arc::new(Mutex::new(0)),
-            current_bytes: Arc::new(Mutex::new(0)),
-            start_time: Instant::now(),
-            last_print: Arc::new(Mutex::new(Instant::now())),
-            last_line_print: Arc::new(Mutex::new(Instant::now())),
+            pb,
             show_bytes: true,
-            width: 40,
-            is_tty,
-            message: Arc::new(Mutex::new(String::new())),
-        }
-    }
-
-    /// Create a progress bar with auto-estimated bytes
-    #[allow(dead_code)]
-    pub fn with_bytes_auto(total: usize, _avg_bytes_per_item: u64) -> Self {
-        let is_tty = io::stderr().is_terminal();
-        Self {
-            total,
-            current: Arc::new(Mutex::new(0)),
             current_bytes: Arc::new(Mutex::new(0)),
-            start_time: Instant::now(),
-            last_print: Arc::new(Mutex::new(Instant::now())),
-            last_line_print: Arc::new(Mutex::new(Instant::now())),
-            show_bytes: true,
-            width: 40,
-            is_tty,
-            message: Arc::new(Mutex::new(String::new())),
+            total_bytes,
         }
     }
 
     /// Set current progress
     pub fn set(&self, current: usize) {
-        let mut cur = self.current.lock().unwrap();
-        *cur = current;
-        drop(cur);
-        self.print();
+        self.pb.set_position(current as u64);
     }
 
     /// Set progress with exact byte tracking
     pub fn set_with_bytes(&self, current: usize, bytes: u64) {
-        let mut cur = self.current.lock().unwrap();
-        *cur = current;
-        drop(cur);
+        self.pb.set_position(current as u64);
         let mut bytes_guard = self.current_bytes.lock().unwrap();
         *bytes_guard = bytes;
+        let current_msg = self.pb.message().to_string();
         drop(bytes_guard);
-        self.print();
+        
+        // Update message to include MB/s, preserving user message if present
+        let elapsed = self.pb.elapsed().as_secs_f64();
+        let bytes_guard = self.current_bytes.lock().unwrap();
+        let bytes = *bytes_guard;
+        drop(bytes_guard);
+        
+        let mb_per_sec = if elapsed > 0.0 {
+            (bytes as f64 / 1_000_000.0) / elapsed
+        } else {
+            0.0
+        };
+        
+        // Extract user message (everything after " | " if present)
+        let user_msg = if let Some(pos) = current_msg.find(" | ") {
+            &current_msg[pos + 3..]
+        } else {
+            ""
+        };
+        
+        let new_msg = if user_msg.is_empty() {
+            format!("{:.1} MB/s", mb_per_sec)
+        } else {
+            format!("{:.1} MB/s | {}", mb_per_sec, user_msg)
+        };
+        self.pb.set_message(new_msg);
     }
 
     /// Add bytes to current progress
     #[allow(dead_code)]
     pub fn add_bytes(&self, increment: usize, bytes: u64) {
-        let mut cur = self.current.lock().unwrap();
-        *cur += increment;
-        drop(cur);
+        self.pb.inc(increment as u64);
         let mut bytes_guard = self.current_bytes.lock().unwrap();
         *bytes_guard += bytes;
+        let current_msg = self.pb.message().to_string();
         drop(bytes_guard);
-        self.print();
+        
+        // Update message to include MB/s, preserving user message if present
+        let elapsed = self.pb.elapsed().as_secs_f64();
+        let bytes_guard = self.current_bytes.lock().unwrap();
+        let bytes = *bytes_guard;
+        drop(bytes_guard);
+        
+        let mb_per_sec = if elapsed > 0.0 {
+            (bytes as f64 / 1_000_000.0) / elapsed
+        } else {
+            0.0
+        };
+        
+        // Extract user message (everything after " | " if present)
+        let user_msg = if let Some(pos) = current_msg.find(" | ") {
+            &current_msg[pos + 3..]
+        } else {
+            ""
+        };
+        
+        let new_msg = if user_msg.is_empty() {
+            format!("{:.1} MB/s", mb_per_sec)
+        } else {
+            format!("{:.1} MB/s | {}", mb_per_sec, user_msg)
+        };
+        self.pb.set_message(new_msg);
     }
 
+
     pub fn set_message<S: Into<String>>(&self, msg: S) {
-        let mut m = self.message.lock().unwrap();
-        *m = msg.into();
+        let msg_str: String = msg.into();
+        if self.show_bytes {
+            // If showing bytes, prepend MB/s to the message
+            let elapsed = self.pb.elapsed().as_secs_f64();
+            let bytes_guard = self.current_bytes.lock().unwrap();
+            let bytes = *bytes_guard;
+            drop(bytes_guard);
+            
+            let mb_per_sec = if elapsed > 0.0 {
+                (bytes as f64 / 1_000_000.0) / elapsed
+            } else {
+                0.0
+            };
+            
+            let new_msg = if msg_str.is_empty() {
+                format!("{:.1} MB/s", mb_per_sec)
+            } else {
+                format!("{:.1} MB/s | {}", mb_per_sec, msg_str)
+            };
+            self.pb.set_message(new_msg);
+        } else {
+            self.pb.set_message(msg_str);
+        }
     }
 
     /// Finish the progress bar
     pub fn finish(&self) {
-        let mut cur = self.current.lock().unwrap();
-        *cur = self.total;
-        drop(cur);
-        self.print();
-        eprintln!();
-    }
-
-    fn print(&self) {
-        let current = *self.current.lock().unwrap();
-        let current_bytes = *self.current_bytes.lock().unwrap();
-
-        if self.is_tty {
-            self.print_bar(current, current_bytes);
-        } else {
-            self.print_line(current, current_bytes);
-        }
-    }
-
-    fn print_bar(&self, current: usize, current_bytes: u64) {
-        let mut last_print = self.last_print.lock().unwrap();
-
-        // Throttle updates (max 10 per second)
-        if last_print.elapsed() < Duration::from_millis(100) && current < self.total {
-            return;
-        }
-        *last_print = Instant::now();
-        drop(last_print);
-
-        let percent = if self.total > 0 {
-            (current as f64 / self.total as f64) * 100.0
-        } else {
-            0.0
-        };
-
-        let filled = if self.total > 0 {
-            let calc = (self.width as f64 * current as f64) / self.total as f64;
-            (calc as usize).min(self.width)
-        } else {
-            0
-        };
-
-        let calc = if self.total > 0 {
-            (self.width as f64 * current as f64) / self.total as f64
-        } else {
-            0.0
-        };
-        let frac = calc - filled as f64;
-        let tip = if frac >= 0.75 {
-            "▓"
-        } else if frac >= 0.5 {
-            "▒"
-        } else if frac > 0.0 {
-            "░"
-        } else {
-            ""
-        };
-        let bar = if tip.is_empty() {
-            "█".repeat(filled) + &"░".repeat(self.width - filled)
-        } else {
-            let rem = self.width.saturating_sub(filled + 1);
-            "█".repeat(filled) + tip + &"░".repeat(rem)
-        };
-
-        let elapsed = self.start_time.elapsed();
-        let speed = if elapsed.as_secs_f64() > 0.0 {
-            current as f64 / elapsed.as_secs_f64()
-        } else {
-            0.0
-        };
-
-        let remaining = self.total.saturating_sub(current);
-        let eta = if speed > 0.0 && remaining > 0 {
-            Duration::from_secs_f64(remaining as f64 / speed)
-        } else {
-            Duration::ZERO
-        };
-
-        let is_complete = current >= self.total;
-
-        let spinner_frames = [
-            "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
-        ];
-        let elapsed_precise = format_elapsed(elapsed);
-        let frame = spinner_frames[((elapsed.as_millis() / 100) as usize) % spinner_frames.len()];
-        let msg = self.message.lock().unwrap().clone();
-
-        if self.show_bytes && current_bytes > 0 {
-            let mb_processed = current_bytes as f64 / 1_000_000.0;
-            let mb_per_sec = if elapsed.as_secs_f64() > 0.0 {
-                mb_processed / elapsed.as_secs_f64()
-            } else {
-                0.0
-            };
-
-            if is_complete {
-                eprint!(
-                    "\r  {} [{}] [{}] {:6.2}% | {}/{} | {:.1}/s | {:.1} MB/s{} | Done    ",
-                    frame,
-                    elapsed_precise,
-                    bar,
-                    percent,
-                    current,
-                    self.total,
-                    speed,
-                    mb_per_sec,
-                    if msg.is_empty() { String::new() } else { format!(" | {}", msg) }
-                );
-            } else {
-                eprint!(
-                    "\r  {} [{}] [{}] {:6.2}% | {}/{} | {:.1}/s | {:.1} MB/s{} | ETA: {} ",
-                    frame,
-                    elapsed_precise,
-                    bar,
-                    percent,
-                    current,
-                    self.total,
-                    speed,
-                    mb_per_sec,
-                    if msg.is_empty() { String::new() } else { format!(" | {}", msg) },
-                    format_eta(eta)
-                );
-            }
-        } else {
-            if is_complete {
-                eprint!(
-                    "\r  {} [{}] [{}] {:6.2}% | {}/{} | {:.1}/s{} | Done    ",
-                    frame,
-                    elapsed_precise,
-                    bar,
-                    percent,
-                    current,
-                    self.total,
-                    speed,
-                    if msg.is_empty() { String::new() } else { format!(" | {}", msg) }
-                );
-            } else {
-                eprint!(
-                    "\r  {} [{}] [{}] {:6.2}% | {}/{} | {:.1}/s{} | ETA: {} ",
-                    frame,
-                    elapsed_precise,
-                    bar,
-                    percent,
-                    current,
-                    self.total,
-                    speed,
-                    if msg.is_empty() { String::new() } else { format!(" | {}", msg) },
-                    format_eta(eta)
-                );
-            }
-        }
-        let _ = io::stderr().flush();
-    }
-
-    fn print_line(&self, current: usize, current_bytes: u64) {
-        let mut last_line_print = self.last_line_print.lock().unwrap();
-
-        // Throttle line updates (max 1 per second for logging, but always show completion)
-        let is_complete = current >= self.total;
-        if !is_complete && last_line_print.elapsed() < Duration::from_secs(1) {
-            return;
-        }
-        *last_line_print = Instant::now();
-        drop(last_line_print);
-
-        let percent = if self.total > 0 {
-            (current as f64 / self.total as f64) * 100.0
-        } else {
-            0.0
-        };
-
-        let elapsed = self.start_time.elapsed();
-        let speed = if elapsed.as_secs_f64() > 0.0 {
-            current as f64 / elapsed.as_secs_f64()
-        } else {
-            0.0
-        };
-
-        if self.show_bytes && current_bytes > 0 {
-            let mb_processed = current_bytes as f64 / 1_000_000.0;
-            let mb_per_sec = if elapsed.as_secs_f64() > 0.0 {
-                mb_processed / elapsed.as_secs_f64()
-            } else {
-                0.0
-            };
-            eprintln!(
-                "Progress: [{}] {:.1}% ({}/{} | {:.1}/s | {:.1} MB/s)",
-                format_elapsed(elapsed),
-                percent,
-                current,
-                self.total,
-                speed,
-                mb_per_sec
-            );
-        } else {
-            eprintln!(
-                "Progress: [{}] {:.1}% ({}/{} | {:.1}/s)",
-                format_elapsed(elapsed),
-                percent,
-                current,
-                self.total,
-                speed
-            );
-        }
-    }
-}
-
-fn format_eta(duration: Duration) -> String {
-    if duration.is_zero() {
-        return "0s".to_string();
-    }
-
-    let secs = duration.as_secs();
-    if secs < 60 {
-        format!("{}s", secs)
-    } else if secs < 3600 {
-        let mins = secs / 60;
-        let secs_remainder = secs % 60;
-        format!("{}m {}s", mins, secs_remainder)
-    } else {
-        let hours = secs / 3600;
-        let mins = (secs % 3600) / 60;
-        format!("{}h {}m", hours, mins)
-    }
-}
-
-fn format_elapsed(duration: Duration) -> String {
-    let secs = duration.as_secs();
-    let h = secs / 3600;
-    let m = (secs % 3600) / 60;
-    let s = secs % 60;
-    if h > 0 {
-        format!("{:02}:{:02}:{:02}", h, m, s)
-    } else {
-        format!("{:02}:{:02}", m, s)
+        self.pb.finish();
     }
 }

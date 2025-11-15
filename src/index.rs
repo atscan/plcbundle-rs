@@ -47,4 +47,33 @@ impl Index {
             .iter()
             .find(|b| b.bundle_number == bundle_number)
     }
+
+    /// Calculate total uncompressed size for a set of bundle numbers.
+    /// Optimizes by using the pre-calculated total when all bundles are selected.
+    ///
+    /// # Arguments
+    /// * `bundle_numbers` - Vector of bundle numbers to calculate size for
+    ///
+    /// # Returns
+    /// Total uncompressed size in bytes
+    pub fn total_uncompressed_size_for_bundles(&self, bundle_numbers: &[u32]) -> u64 {
+        // Check if we're querying all bundles (1 to last_bundle)
+        let is_all_bundles = !bundle_numbers.is_empty()
+            && bundle_numbers.len() == self.last_bundle as usize
+            && bundle_numbers.first() == Some(&1)
+            && bundle_numbers.last() == Some(&self.last_bundle);
+
+        if is_all_bundles {
+            // Use pre-calculated total from index
+            self.total_uncompressed_size_bytes
+        } else {
+            // Sum only the selected bundles
+            bundle_numbers
+                .iter()
+                .filter_map(|bundle_num| {
+                    self.get_bundle(*bundle_num).map(|meta| meta.uncompressed_size)
+                })
+                .sum()
+        }
+    }
 }

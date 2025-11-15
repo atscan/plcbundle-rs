@@ -282,7 +282,14 @@ fn rebuild_and_compare_index(
     // This avoids keeping all bundle data in memory simultaneously during loading.
     // We write each bundle to disk immediately after loading, freeing memory.
     log::info!("Pass 1: Streaming bundles to temporary files...");
-    let progress = ProgressBar::new(last_bundle as usize);
+    
+    // Calculate total uncompressed size for progress tracking
+    let index = manager.get_index();
+    let bundle_numbers: Vec<u32> = (1..=last_bundle).collect();
+    let total_uncompressed_size = index.total_uncompressed_size_for_bundles(&bundle_numbers);
+    
+    let progress = ProgressBar::with_bytes(last_bundle as usize, total_uncompressed_size);
+    let mut total_uncompressed_processed = 0u64;
 
     for bundle_num in 1..=last_bundle {
         let load_result = manager.load_bundle(bundle_num, LoadOptions::default())?;
@@ -300,7 +307,12 @@ fn rebuild_and_compare_index(
         let json_data = serde_json::to_string(&bundle_data)?;
         fs::write(&bundle_file, json_data)?;
 
-        progress.set(bundle_num as usize);
+        // Track uncompressed bytes processed
+        if let Some(meta) = index.get_bundle(bundle_num) {
+            total_uncompressed_processed += meta.uncompressed_size;
+        }
+        
+        progress.set_with_bytes(bundle_num as usize, total_uncompressed_processed);
     }
     progress.finish();
 

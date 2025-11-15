@@ -4,8 +4,11 @@ use plcbundle::BundleManager;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Instant;
 
+use super::progress::ProgressBar;
 use super::utils;
 // ExportFormat is defined in plcbundle-rs.rs
 // Access it via the parent module
@@ -114,8 +117,20 @@ pub fn cmd_export(
         log::info!("📤 Exporting operations...");
     }
 
+    // Calculate total uncompressed size for progress tracking
+    let total_uncompressed_size = index.total_uncompressed_size_for_bundles(&bundle_numbers);
+    
+    // Create progress bar tracking bundles processed
+    let pb = if quiet {
+        None
+    } else {
+        Some(ProgressBar::with_bytes(bundle_numbers.len(), total_uncompressed_size))
+    };
+
     let start = Instant::now();
     let mut exported_count = 0;
+    let mut bundles_processed = 0;
+    let mut bytes_written = Arc::new(Mutex::new(0u64));
     let mut output_buffer = String::with_capacity(1024 * 1024); // 1MB buffer
     const BATCH_SIZE: usize = 10000;
 
@@ -133,6 +148,12 @@ pub fn cmd_export(
             Ok(decoder) => decoder,
             Err(_) => {
                 // Bundle not found, skip it
+                bundles_processed += 1;
+                if let Some(ref pb) = pb {
+                    let bytes = bytes_written.lock().unwrap();
+                    pb.set_with_bytes(bundles_processed, *bytes);
+                    drop(bytes);
+                }
                 continue;
             }
         };
@@ -168,17 +189,23 @@ pub fn cmd_export(
 
                 // Flush buffer when it gets large
                 if output_buffer.len() >= 1024 * 1024 {
+                    let bytes = output_buffer.len();
                     writer.write_all(output_buffer.as_bytes())?;
+                    let mut bytes_guard = bytes_written.lock().unwrap();
+                    *bytes_guard += bytes as u64;
+                    drop(bytes_guard);
                     output_buffer.clear();
                 }
 
-                // Progress update
-                if !quiet && exported_count % BATCH_SIZE == 0 {
-                    eprint!(
-                        "\r   Exported: {} operations",
-                        utils::format_number(exported_count as u64)
-                    );
-                    io::stderr().flush()?;
+                // Progress update (operations count in message, but bundles in progress bar)
+                if let Some(ref pb) = pb {
+                    if exported_count % BATCH_SIZE == 0 || exported_count == 1 {
+                        let bytes = bytes_written.lock().unwrap();
+                        let total_bytes = *bytes + output_buffer.len() as u64;
+                        drop(bytes);
+                        pb.set_with_bytes(bundles_processed, total_bytes);
+                        pb.set_message(format!("{} operations", utils::format_number(exported_count as u64)));
+                    }
                 }
             }
         } else {
@@ -295,35 +322,63 @@ pub fn cmd_export(
 
                 // Flush buffer when it gets large
                 if output_buffer.len() >= 1024 * 1024 {
+                    let bytes = output_buffer.len();
                     writer.write_all(output_buffer.as_bytes())?;
+                    let mut bytes_guard = bytes_written.lock().unwrap();
+                    *bytes_guard += bytes as u64;
+                    drop(bytes_guard);
                     output_buffer.clear();
                 }
 
-                // Progress update
-                if !quiet && exported_count % BATCH_SIZE == 0 {
-                    eprint!(
-                        "\r   Exported: {} operations",
-                        utils::format_number(exported_count as u64)
-                    );
-                    io::stderr().flush()?;
+                // Progress update (operations count in message, but bundles in progress bar)
+                if let Some(ref pb) = pb {
+                    if exported_count % BATCH_SIZE == 0 || exported_count == 1 {
+                        let bytes = bytes_written.lock().unwrap();
+                        let total_bytes = *bytes + output_buffer.len() as u64;
+                        drop(bytes);
+                        pb.set_with_bytes(bundles_processed, total_bytes);
+                        pb.set_message(format!("{} operations", utils::format_number(exported_count as u64)));
+                    }
                 }
             }
+        }
+        
+        // Update progress after processing each bundle
+        bundles_processed += 1;
+        if let Some(ref pb) = pb {
+            let bytes = bytes_written.lock().unwrap();
+            let total_bytes = *bytes + output_buffer.len() as u64;
+            drop(bytes);
+            pb.set_with_bytes(bundles_processed, total_bytes);
+            pb.set_message(format!("{} operations", utils::format_number(exported_count as u64)));
         }
     }
 
     // Flush remaining buffer
     if !output_buffer.is_empty() {
+        let bytes = output_buffer.len();
         writer.write_all(output_buffer.as_bytes())?;
+        let mut bytes_guard = bytes_written.lock().unwrap();
+        *bytes_guard += bytes as u64;
+        drop(bytes_guard);
     }
     writer.flush()?;
 
+    // Final progress update
+    if let Some(ref pb) = pb {
+        let bytes = bytes_written.lock().unwrap();
+        pb.set_with_bytes(bundles_processed, *bytes);
+        drop(bytes);
+        pb.finish();
+    }
+
     if !quiet {
-        log::info!(
-            "\r   Exported: {} operations",
-            utils::format_number(exported_count as u64)
-        );
         let elapsed = start.elapsed();
         log::info!("✅ Complete in {}", HumanDuration(elapsed));
+        log::info!(
+            "   Exported: {} operations",
+            utils::format_number(exported_count as u64)
+        );
         if elapsed.as_secs_f64() > 0.0 {
             log::info!(
                 "   Throughput: {:.0} ops/sec",

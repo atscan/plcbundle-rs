@@ -1,11 +1,11 @@
 use anyhow::Result;
-use indicatif::{HumanDuration, ProgressBar, ProgressStyle};
 use plcbundle::*;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use super::progress::ProgressBar as CustomProgressBar;
 use super::utils;
 // QueryModeArg and OutputFormat are defined in plcbundle-rs.rs
 // Access them via the parent module
@@ -101,45 +101,60 @@ pub fn cmd_query(
         );
     }
 
+    // Calculate total uncompressed size for progress tracking
+    let total_uncompressed_size = index.total_uncompressed_size_for_bundles(&bundle_numbers);
+
     let pb = if quiet {
-        ProgressBar::hidden()
+        None
     } else {
-        let pb = ProgressBar::new(bundle_numbers.len() as u64);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template(
-                    "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}",
-                )?
-                .progress_chars("█▓▒░ "),
-        );
-        pb
+        Some(CustomProgressBar::with_bytes(
+            bundle_numbers.len(),
+            total_uncompressed_size,
+        ))
     };
 
     let start = Instant::now();
     let output = Arc::new(StdoutHandler::new(stats_only));
+    
+    // Track bundle count separately since callback gives increment, not total
+    let bundle_count = Arc::new(Mutex::new(0usize));
+    let pb_arc = if let Some(ref pb) = pb {
+        Some(Arc::new(Mutex::new(pb)))
+    } else {
+        None
+    };
 
     let stats = processor.process(
         &bundle_numbers,
         output,
-        Some(|_, stats: &Stats| {
-            if !quiet {
-                let elapsed = start.elapsed().as_secs_f64();
-                let ops_per_sec = if elapsed > 0.0 {
-                    stats.operations as f64 / elapsed
-                } else {
-                    0.0
-                };
-                pb.set_message(format!(
-                    "✓ {} matches | {:.1} ops/s",
-                    utils::format_number(stats.matches as u64),
-                    ops_per_sec
-                ));
-                pb.inc(1);
+        Some({
+            let pb_arc = pb_arc.clone();
+            let bundle_count = bundle_count.clone();
+            move |_increment, stats: &Stats| {
+                if let Some(ref pb_mutex) = pb_arc {
+                    let mut count = bundle_count.lock().unwrap();
+                    *count += 1;
+                    let current_bundles = *count;
+                    drop(count);
+                    
+                    let pb = pb_mutex.lock().unwrap();
+                    
+                    // Update progress with bundles processed and bytes
+                    pb.set_with_bytes(current_bundles, stats.total_bytes);
+                    
+                    // Set message with matches
+                    pb.set_message(format!(
+                        "✓ {} matches",
+                        utils::format_number(stats.matches as u64)
+                    ));
+                }
             }
         }),
     )?;
 
-    pb.finish_and_clear();
+    if let Some(ref pb) = pb {
+        pb.finish();
+    }
 
     let elapsed = start.elapsed();
     let match_pct = if stats.operations > 0 {
@@ -149,7 +164,7 @@ pub fn cmd_query(
     };
 
     if !quiet {
-        log::info!("\n✅ Complete in {}", HumanDuration(elapsed));
+        log::info!("\n✅ Complete in {:.2}s", elapsed.as_secs_f64());
         log::info!(
             "   Operations: {} ({:.2}% matched)",
             utils::format_number(stats.operations as u64),
