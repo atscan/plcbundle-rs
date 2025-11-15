@@ -279,6 +279,25 @@ pub struct DIDLookupStats {
     pub locations_found: usize,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct DIDLookupTimings {
+    pub extract_identifier: std::time::Duration,
+    pub calculate_shard: std::time::Duration,
+    pub load_shard: std::time::Duration,
+    pub search: std::time::Duration,
+    pub cache_hit: bool,
+    pub base_search_time: Option<std::time::Duration>,
+    pub delta_segment_times: Vec<(String, std::time::Duration)>,
+    pub merge_time: std::time::Duration,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SearchTimings {
+    base_time: Option<std::time::Duration>,
+    delta_times: Vec<(String, std::time::Duration)>,
+    merge_time: std::time::Duration,
+}
+
 impl DIDLookupStats {
     fn accumulate(&mut self, other: &DIDLookupStats) {
         self.shard_size += other.shard_size;
@@ -394,7 +413,7 @@ impl Manager {
 
         let identifier = extract_identifier(did)?;
         let shard_num = self.calculate_shard(&identifier);
-        let shard = self.load_shard(shard_num)?;
+        let (shard, _) = self.load_shard_with_cache_info(shard_num)?;
 
         shard.touch();
 
@@ -403,17 +422,73 @@ impl Manager {
     }
 
     // Get DID locations with detailed statistics
-    pub fn get_did_locations_with_stats(&self, did: &str) -> Result<(Vec<OpLocation>, DIDLookupStats, u8)> {
+    pub fn get_did_locations_with_stats(&self, did: &str) -> Result<(Vec<OpLocation>, DIDLookupStats, u8, DIDLookupTimings)> {
+        use std::time::Instant;
+        
         self.total_lookups.fetch_add(1, Ordering::Relaxed);
+        let mut timings = DIDLookupTimings::default();
 
+        let extract_start = Instant::now();
         let identifier = extract_identifier(did)?;
+        timings.extract_identifier = extract_start.elapsed();
+
+        let calc_start = Instant::now();
         let shard_num = self.calculate_shard(&identifier);
-        let shard = self.load_shard(shard_num)?;
+        timings.calculate_shard = calc_start.elapsed();
+
+        let load_start = Instant::now();
+        let (shard, cache_hit) = self.load_shard_with_cache_info(shard_num)?;
+        timings.load_shard = load_start.elapsed();
+        timings.cache_hit = cache_hit;
 
         shard.touch();
 
-        let (locations, stats) = self.search_shard_layers(&shard, &identifier);
-        Ok((locations, stats, shard_num))
+        let search_start = Instant::now();
+        let (locations, stats, search_timings) = self.search_shard_layers_with_timings(&shard, &identifier);
+        timings.search = search_start.elapsed();
+        timings.base_search_time = search_timings.base_time;
+        timings.delta_segment_times = search_timings.delta_times;
+        timings.merge_time = search_timings.merge_time;
+
+        Ok((locations, stats, shard_num, timings))
+    }
+
+    fn load_shard_with_cache_info(&self, shard_num: u8) -> Result<(Arc<Shard>, bool)> {
+        // Check cache
+        {
+            let cache = self.shard_cache.read().unwrap();
+            if let Some(shard) = cache.get(&shard_num) {
+                self.cache_hits.fetch_add(1, Ordering::Relaxed);
+                return Ok((Arc::clone(shard), true));
+            }
+        }
+
+        self.cache_misses.fetch_add(1, Ordering::Relaxed);
+
+        // Load from disk
+        let shard_path = self.shard_path(shard_num);
+        let mut shard = if shard_path.exists() {
+            Shard::load(shard_num, &shard_path)?
+        } else {
+            Shard::new_empty(shard_num)
+        };
+
+        let segments = self.load_shard_segments(shard_num)?;
+        shard = shard.with_segments(segments);
+        let shard = Arc::new(shard);
+
+        // Add to cache
+        {
+            let mut cache = self.shard_cache.write().unwrap();
+            cache.insert(shard_num, Arc::clone(&shard));
+            
+            // Evict if needed
+            if cache.len() > self.max_cache {
+                self.evict_lru(&mut cache);
+            }
+        }
+
+        Ok((shard, false))
     }
 
     // Build index from scratch
@@ -1041,40 +1116,8 @@ impl Manager {
     }
 
     fn load_shard(&self, shard_num: u8) -> Result<Arc<Shard>> {
-        // Check cache
-        {
-            let cache = self.shard_cache.read().unwrap();
-            if let Some(shard) = cache.get(&shard_num) {
-                self.cache_hits.fetch_add(1, Ordering::Relaxed);
-                return Ok(Arc::clone(shard));
-            }
-        }
-
-        self.cache_misses.fetch_add(1, Ordering::Relaxed);
-
-        // Load from disk
-        let shard_path = self.shard_path(shard_num);
-        let mut shard = if shard_path.exists() {
-            Shard::load(shard_num, &shard_path)?
-        } else {
-            Shard::new_empty(shard_num)
-        };
-
-        let segments = self.load_shard_segments(shard_num)?;
-        shard = shard.with_segments(segments);
-        let shard = Arc::new(shard);
-
-        // Add to cache
-        {
-            let mut cache = self.shard_cache.write().unwrap();
-            cache.insert(shard_num, Arc::clone(&shard));
-            
-            // Evict if needed
-            if cache.len() > self.max_cache {
-                self.evict_lru(&mut cache);
-            }
-        }
-
+        // Use the new method but ignore cache info
+        let (shard, _) = self.load_shard_with_cache_info(shard_num)?;
         Ok(shard)
     }
 
@@ -1089,25 +1132,46 @@ impl Manager {
     }
 
     fn search_shard_layers(&self, shard: &Shard, identifier: &str) -> (Vec<OpLocation>, DIDLookupStats) {
+        let (locations, stats, _) = self.search_shard_layers_with_timings(shard, identifier);
+        (locations, stats)
+    }
+
+    fn search_shard_layers_with_timings(&self, shard: &Shard, identifier: &str) -> (Vec<OpLocation>, DIDLookupStats, SearchTimings) {
+        use std::time::Instant;
         let mut combined = Vec::new();
         let mut aggregated = DIDLookupStats::default();
+        let mut search_timings = SearchTimings::default();
 
+        // Search base shard
         if let Some(base) = shard.base_data() {
+            let base_start = Instant::now();
             let (locations, stats) = self.search_shard_with_stats(base, identifier);
+            search_timings.base_time = Some(base_start.elapsed());
             combined.extend(locations);
             aggregated.accumulate(&stats);
         }
 
+        // Search delta segments
         for segment in shard.segments() {
+            let seg_start = Instant::now();
             let (locations, stats) = self.search_shard_with_stats(segment.data(), identifier);
+            let seg_time = seg_start.elapsed();
+            
+            let seg_name = segment.meta.file_name.clone();
+            search_timings.delta_times.push((seg_name, seg_time));
+            
             combined.extend(locations);
             aggregated.accumulate(&stats);
         }
 
+        // Merge and sort results
+        let merge_start = Instant::now();
         combined.sort_by_key(|loc| loc.as_u32());
+        search_timings.merge_time = merge_start.elapsed();
+        
         aggregated.locations_found = combined.len();
 
-        (combined, aggregated)
+        (combined, aggregated, search_timings)
     }
 
     fn search_shard_with_stats(&self, data: &[u8], identifier: &str) -> (Vec<OpLocation>, DIDLookupStats) {

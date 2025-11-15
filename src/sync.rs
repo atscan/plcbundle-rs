@@ -165,19 +165,27 @@ fn parse_retry_after(response: &reqwest::Response) -> Duration {
 }
 
 // Simple token bucket rate limiter
+// Prevents burst requests by starting with 0 permits and refilling at steady rate
 struct RateLimiter {
     semaphore: std::sync::Arc<tokio::sync::Semaphore>,
 }
 
 impl RateLimiter {
     fn new(requests_per_period: usize, period: Duration) -> Self {
-        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(requests_per_period));
+        // Start with 0 permits to prevent initial burst
+        // This ensures requests are properly spaced from the start
+        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
         let sem_clone = semaphore.clone();
+        
+        // Calculate refill rate: period / requests_per_period
+        // For 72 req/min: 60 seconds / 72 = 0.833 seconds per request
         let refill_rate = period / requests_per_period as u32;
 
+        // Spawn background task to refill permits at steady rate
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(refill_rate).await;
+                // Add one permit, but don't exceed the maximum capacity
                 if sem_clone.available_permits() < requests_per_period {
                     sem_clone.add_permits(1);
                 }
@@ -188,6 +196,8 @@ impl RateLimiter {
     }
 
     async fn wait(&self) {
+        // Wait for a permit to become available
+        // This will block until the refill task adds a permit
         let _ = self.semaphore.acquire().await;
     }
 }

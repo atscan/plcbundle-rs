@@ -607,7 +607,7 @@ fn analyze_chain_break(mismatches: &[HashMismatch], _local_range: &Option<(u32, 
 
 fn show_cursor_mismatches(mismatches: &[HashMismatch], verbose: bool) {
     eprintln!("\n⚠️  CURSOR MISMATCHES");
-    eprintln!("═══════════════════════════════════════════════════\n");
+    eprintln!("═══════════════════════════════════════════════════");
     eprintln!("  Cursor should match previous bundle's end_time per spec.\n");
     
     let display_count = if mismatches.len() > 10 && !verbose {
@@ -618,15 +618,12 @@ fn show_cursor_mismatches(mismatches: &[HashMismatch], verbose: bool) {
     
     for i in 0..display_count {
         let m = &mismatches[i];
-        eprintln!("  Bundle {:06}:", m.bundle_number);
-        eprintln!("    Cursor:");
-        eprintln!("      Local:  {}", m.local_cursor);
-        eprintln!("      Target: {}", m.target_cursor);
-        eprintln!();
+        let local = if m.local_cursor.is_empty() { "(empty)" } else { &m.local_cursor };
+        eprintln!("  {:06}: Local: {} → Target: {}", m.bundle_number, local, m.target_cursor);
     }
     
     if mismatches.len() > display_count {
-        eprintln!("  ... and {} more (use -v to show all)\n", mismatches.len() - display_count);
+        eprintln!("  ... and {} more (use -v to show all)", mismatches.len() - display_count);
     }
 }
 
@@ -649,7 +646,7 @@ fn show_missing_bundles(bundles: &[u32], verbose: bool) {
             eprintln!("  ... and {} more (use -v to show all)", bundles.len() - display_count);
         }
     } else {
-        display_bundle_ranges(bundles);
+        display_bundle_ranges(bundles, Some(bundles.len()));
     }
 }
 
@@ -672,36 +669,56 @@ fn show_extra_bundles(bundles: &[u32], verbose: bool) {
             eprintln!("  ... and {} more (use -v to show all)", bundles.len() - display_count);
         }
     } else {
-        display_bundle_ranges(bundles);
+        display_bundle_ranges(bundles, Some(bundles.len()));
     }
 }
 
-fn display_bundle_ranges(bundles: &[u32]) {
+fn display_bundle_ranges(bundles: &[u32], total_count: Option<usize>) {
     if bundles.is_empty() {
         return;
     }
     
     let mut range_start = bundles[0];
     let mut range_end = bundles[0];
+    let mut ranges = Vec::new();
     
     for i in 1..bundles.len() {
         if bundles[i] == range_end + 1 {
             range_end = bundles[i];
         } else {
-            if range_start == range_end {
-                eprintln!("  {:06}", range_start);
-            } else {
-                eprintln!("  {:06} - {:06}", range_start, range_end);
-            }
+            ranges.push((range_start, range_end));
             range_start = bundles[i];
             range_end = bundles[i];
         }
     }
     
-    if range_start == range_end {
-        eprintln!("  {:06}", range_start);
-    } else {
-        eprintln!("  {:06} - {:06}", range_start, range_end);
+    ranges.push((range_start, range_end));
+    
+    // Display all ranges except the last one
+    for i in 0..ranges.len().saturating_sub(1) {
+        let (start, end) = ranges[i];
+        if start == end {
+            eprintln!("  {:06}", start);
+        } else {
+            eprintln!("  {:06} - {:06}", start, end);
+        }
+    }
+    
+    // Display the last range with optional count
+    if let Some((start, end)) = ranges.last() {
+        if start == end {
+            if let Some(count) = total_count {
+                eprintln!("  {:06} ({} bundle{})", start, count, if count == 1 { "" } else { "s" });
+            } else {
+                eprintln!("  {:06}", start);
+            }
+        } else {
+            if let Some(count) = total_count {
+                eprintln!("  {:06} - {:06} ({} bundle{})", start, end, count, if count == 1 { "" } else { "s" });
+            } else {
+                eprintln!("  {:06} - {:06}", start, end);
+            }
+        }
     }
 }
 

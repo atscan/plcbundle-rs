@@ -53,12 +53,65 @@ pub fn cmd_did_resolve(dir: PathBuf, input: String, handle_resolver_url: Option<
     }
     
     if verbose {
+        // Convert handle resolution time to Duration
+        let handle_resolve_duration = std::time::Duration::from_millis(handle_resolve_time);
+        
         if handle_resolve_time > 0 {
-            log::info!("Handle resolution: {}ms", handle_resolve_time);
+            log::info!("Handle resolution: {:?}", handle_resolve_duration);
         }
-        log::info!("Index: {:?} | Load: {:?} | Total: {:?}",
-            result.index_time, result.load_time, result.total_time);
-        log::info!("Source: bundle {:06}, position {}\n", result.bundle_number, result.position);
+        
+        // Show detailed index lookup timings if available
+        if let Some(ref timings) = result.lookup_timings {
+            log::info!("Index Lookup Breakdown:");
+            log::info!("  Extract ID:    {:?}", timings.extract_identifier);
+            log::info!("  Calc shard:    {:?}", timings.calculate_shard);
+            log::info!("  Load shard:    {:?} ({})", 
+                timings.load_shard,
+                if timings.cache_hit { "cache hit" } else { "cache miss" });
+            
+            // Search breakdown
+            log::info!("  Search:");
+            if let Some(ref base_time) = timings.base_search_time {
+                log::info!("    Base shard:  {:?}", base_time);
+            }
+            if !timings.delta_segment_times.is_empty() {
+                let total_delta_time: std::time::Duration = timings.delta_segment_times.iter()
+                    .map(|(_, time)| *time)
+                    .sum();
+                log::info!("    Delta segs:  {:?} ({} segment{})", 
+                    total_delta_time,
+                    timings.delta_segment_times.len(),
+                    if timings.delta_segment_times.len() == 1 { "" } else { "s" });
+                
+                // Show individual delta segments if there are multiple or if verbose
+                if timings.delta_segment_times.len() > 1 || verbose {
+                    for (seg_name, seg_time) in &timings.delta_segment_times {
+                        log::info!("      - {}: {:?}", seg_name, seg_time);
+                    }
+                }
+            }
+            if timings.merge_time.as_nanos() > 0 {
+                log::info!("    Merge/sort:  {:?}", timings.merge_time);
+            }
+            log::info!("    Search total: {:?}", timings.search);
+            log::info!("  Index total:   {:?}", result.index_time);
+        } else {
+            log::info!("Index: {:?}", result.index_time);
+        }
+        
+        log::info!("Load operation: {:?}", result.load_time);
+        
+        // Calculate true total including handle resolution
+        let true_total = handle_resolve_duration + result.total_time;
+        log::info!("Total:          {:?} (handle: {:?} + did: {:?})", 
+            true_total, 
+            handle_resolve_duration, 
+            result.total_time);
+        
+        // Calculate global position: (bundle * BUNDLE_SIZE) + position
+        let global_pos = (result.bundle_number as u64 * plcbundle::constants::BUNDLE_SIZE as u64) + result.position as u64;
+        log::info!("Source: bundle {:06}, position {} (global: {})\n", 
+            result.bundle_number, result.position, global_pos);
     }
     
     // Output document (always to stdout)

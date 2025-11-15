@@ -65,6 +65,7 @@ pub struct ResolveResult {
     pub locations_found: usize,
     pub shard_num: u8,
     pub shard_stats: Option<did_index::DIDLookupStats>,
+    pub lookup_timings: Option<did_index::DIDLookupTimings>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -324,7 +325,7 @@ impl BundleManager {
         // Get all operations for this DID with timing
         let index_start = Instant::now();
         let did_index = self.did_index.read().unwrap();
-        let (locations, shard_stats, shard_num) = did_index.get_did_locations_with_stats(did)?;
+        let (locations, shard_stats, shard_num, lookup_timings) = did_index.get_did_locations_with_stats(did)?;
         let index_time = index_start.elapsed();
 
         if locations.is_empty() {
@@ -356,6 +357,7 @@ impl BundleManager {
             locations_found: locations.len(),
             shard_num,
             shard_stats: Some(shard_stats),
+            lookup_timings: Some(lookup_timings),
         })
     }
 

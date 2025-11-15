@@ -31,7 +31,8 @@ pub const FRAME_SIZE: usize = 100;
 // ============================================================================
 
 /// Default rate limit for PLC API requests (requests per minute)
-pub const DEFAULT_RATE_LIMIT: usize = 90;
+/// Set to 80% of quota (72 req/min) to provide safety margin and prevent rate limiting
+pub const DEFAULT_RATE_LIMIT: usize = 72;
 
 // ============================================================================
 // Timeout Constants (in seconds)
