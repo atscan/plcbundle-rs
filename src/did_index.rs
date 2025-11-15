@@ -721,11 +721,12 @@ impl Manager {
     }
 
     // Update index for new bundle (incremental)
+    // Returns whether any shards were compacted during the update
     pub fn update_for_bundle(
         &self,
         bundle_num: u32,
         operations: Vec<(String, bool)>, // (did, nullified)
-    ) -> Result<()> {
+    ) -> Result<bool> {
         use std::time::Instant;
 
         let start = Instant::now();
@@ -762,31 +763,51 @@ impl Manager {
             valid_dids, shard_ops.len(), grouping_duration.as_secs_f64() * 1000.0
         );
 
-        // Write delta segments per shard
+        // Write delta segments per shard (in parallel)
         let update_start = Instant::now();
+
+        use rayon::prelude::*;
+        let shard_updates: Vec<_> = shard_ops.into_iter().collect();
+
+        let results: Vec<_> = shard_updates
+            .into_par_iter()
+            .map(|(shard_num, new_ops)| {
+                let new_dids_in_shard = new_ops.len();
+                let meta_opt = self.write_delta_segment(shard_num, new_ops, bundle_num)?;
+
+                if let Some(meta) = &meta_opt {
+                    log::debug!(
+                        "[DID Index]   Delta segment {:02x}/#{:016x}: {} DIDs, {} locations",
+                        shard_num,
+                        meta.id,
+                        new_dids_in_shard,
+                        meta.location_count
+                    );
+                } else {
+                    log::debug!(
+                        "[DID Index]   Skipped shard {:02x}: no valid DIDs to append",
+                        shard_num
+                    );
+                }
+
+                let compacted = if meta_opt.is_some() {
+                    self.auto_compact_if_needed(shard_num)?
+                } else {
+                    false
+                };
+
+                Ok::<_, anyhow::Error>((meta_opt.is_some(), compacted))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
         let mut segments_written = 0usize;
         let mut shards_compacted = 0usize;
-
-        for (shard_num, new_ops) in shard_ops {
-            let new_dids_in_shard = new_ops.len();
-            if let Some(meta) = self.write_delta_segment(shard_num, new_ops, bundle_num)? {
+        for (written, compacted) in results {
+            if written {
                 segments_written += 1;
-                log::debug!(
-                    "[DID Index]   Delta segment {:02x}/#{:016x}: {} DIDs, {} locations",
-                    shard_num,
-                    meta.id,
-                    new_dids_in_shard,
-                    meta.location_count
-                );
-
-                if self.auto_compact_if_needed(shard_num)? {
-                    shards_compacted += 1;
-                }
-            } else {
-                log::debug!(
-                    "[DID Index]   Skipped shard {:02x}: no valid DIDs to append",
-                    shard_num
-                );
+            }
+            if compacted {
+                shards_compacted += 1;
             }
         }
 
@@ -810,7 +831,7 @@ impl Manager {
             update_duration.as_secs_f64() * 1000.0
         );
 
-        Ok(())
+        Ok(shards_compacted > 0)
     }
 
     // Get bundle numbers for a DID (convenience method)

@@ -26,6 +26,9 @@ pub enum SyncResult {
         fetch_requests: usize,
         hash: String,
         age: String,
+        did_index_compacted: bool,
+        unique_dids: u32,
+        size_bytes: u64,
     },
     /// Caught up to latest PLC data, mempool has partial operations
     CaughtUp {
@@ -903,7 +906,7 @@ impl BundleManager {
         // Update DID index for each bundle
         let update_start = Instant::now();
         for (bundle_num, operations) in bundles_data {
-            self.did_index.write().unwrap().update_for_bundle(bundle_num, operations)?;
+            let _ = self.did_index.write().unwrap().update_for_bundle(bundle_num, operations)?;
         }
         let update_duration = update_start.elapsed();
 
@@ -1178,7 +1181,7 @@ impl BundleManager {
         // Save bundle to disk with timing breakdown
         // Save bundle and update DID index (now fast with delta segments)
         let save_start = Instant::now();
-        let (serialize_time, compress_time, hash_time, did_index_time, index_write_time) =
+        let (serialize_time, compress_time, hash_time, did_index_time, index_write_time, did_index_compacted) =
             self.save_bundle_with_timing(next_bundle_num, operations).await?;
         let save_duration = save_start.elapsed();
 
@@ -1198,7 +1201,7 @@ impl BundleManager {
         log::debug!("Index saved, last bundle = {}", next_bundle_num);
 
         // Get bundle info for display
-        let (short_hash, age_str) = {
+        let (short_hash, age_str, unique_dids, size_bytes) = {
             let index = self.index.read().unwrap();
             let bundle_meta = index.get_bundle(next_bundle_num).unwrap();
             // Use chain hash (first 7 chars) for display
@@ -1212,7 +1215,7 @@ impl BundleManager {
             let age = now.signed_duration_since(created_time);
             let age_str = format_age(age);
 
-            (hash, age_str)
+            (hash, age_str, bundle_meta.did_count, bundle_meta.compressed_size)
         };
 
         // Get mempool count after clearing (should be 0, but check anyway)
@@ -1243,6 +1246,9 @@ impl BundleManager {
             fetch_requests: fetch_num,
             hash: short_hash,
             age: age_str,
+            did_index_compacted,
+            unique_dids,
+            size_bytes,
         })
     }
 
@@ -1279,7 +1285,7 @@ impl BundleManager {
     }
 
     /// Save bundle to disk with compression and index updates (with timing)
-    async fn save_bundle_with_timing(&self, bundle_num: u32, operations: Vec<Operation>) -> Result<(std::time::Duration, std::time::Duration, std::time::Duration, std::time::Duration, std::time::Duration)> {
+    async fn save_bundle_with_timing(&self, bundle_num: u32, operations: Vec<Operation>) -> Result<(std::time::Duration, std::time::Duration, std::time::Duration, std::time::Duration, std::time::Duration, bool)> {
         use std::time::Instant;
         use anyhow::Context;
         use std::collections::HashSet;
@@ -1526,8 +1532,8 @@ impl BundleManager {
             .iter()
             .map(|op| (op.did.clone(), op.nullified))
             .collect();
-        
-        self.did_index.write().unwrap().update_for_bundle(bundle_num, did_ops)?;
+
+        let did_index_compacted = self.did_index.write().unwrap().update_for_bundle(bundle_num, did_ops)?;
         let did_index_time = did_index_start.elapsed();
 
         // Update main index
@@ -1587,7 +1593,7 @@ impl BundleManager {
         .context("Index write task failed")??;
         let index_write_time = index_write_start.elapsed();
 
-        Ok((serialize_time, compress_time, hash_time, did_index_time, index_write_time))
+        Ok((serialize_time, compress_time, hash_time, did_index_time, index_write_time, did_index_compacted))
     }
     
     /// Save bundle to disk with compression and index updates (backwards compatibility)

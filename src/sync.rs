@@ -160,8 +160,8 @@ fn parse_retry_after(response: &reqwest::Response) -> Duration {
         }
     }
 
-    // Default to 5 minutes if no header or parsing fails
-    Duration::from_secs(300)
+    // Default to 60 seconds if no header or parsing fails
+    Duration::from_secs(60)
 }
 
 // Simple token bucket rate limiter
@@ -294,6 +294,9 @@ pub enum SyncEvent {
         index_ms: u64,
         total_duration_ms: u64,
         fetch_requests: usize,
+        did_index_compacted: bool,
+        unique_dids: u32,
+        size_bytes: u64,
     },
     CaughtUp {
         next_bundle: u32,
@@ -364,6 +367,9 @@ pub trait SyncLogger: Send + Sync {
         index_ms: u64,
         total_duration_ms: u64,
         fetch_requests: usize,
+        did_index_compacted: bool,
+        unique_dids: u32,
+        size_bytes: u64,
     );
     
     fn on_caught_up(
@@ -437,11 +443,20 @@ impl SyncLogger for ServerLogger {
         index_ms: u64,
         _total_duration_ms: u64,
         fetch_requests: usize,
+        did_index_compacted: bool,
+        unique_dids: u32,
+        size_bytes: u64,
     ) {
         let fetch_secs = fetch_duration_ms as f64 / 1000.0;
-        
-        eprintln!("[INFO] → Bundle {:06} | {} | fetch: {:.3}s ({} reqs) | save: {}ms | index: {}ms | {}",
-            bundle_num, hash, fetch_secs, fetch_requests, bundle_save_ms, index_ms, age);
+        let size_kb = size_bytes as f64 / 1024.0;
+        let size_str = if size_kb >= 1024.0 {
+            format!("{:.1}MB", size_kb / 1024.0)
+        } else {
+            format!("{:.0}KB", size_kb)
+        };
+
+        eprintln!("[INFO] → Bundle {:06} | {} | {} dids | {} | fetch: {:.2}s ({} reqs) | save: {}ms | index: {}ms | {}",
+            bundle_num, hash, unique_dids, size_str, fetch_secs, fetch_requests, bundle_save_ms, index_ms, age);
     }
     
     fn on_caught_up(
@@ -503,6 +518,9 @@ impl SyncLogger for CliLogger {
         _index_ms: u64,
         _total_duration_ms: u64,
         _fetch_requests: usize,
+        _did_index_compacted: bool,
+        _unique_dids: u32,
+        _size_bytes: u64,
     ) {
         // CLI doesn't show individual bundle creation
     }
@@ -591,6 +609,9 @@ impl SyncManager {
                     index_ms,
                     total_duration_ms,
                     fetch_requests,
+                    did_index_compacted,
+                    unique_dids,
+                    size_bytes,
                 } => {
                     logger.on_bundle_created(
                         *bundle_num,
@@ -601,6 +622,9 @@ impl SyncManager {
                         *index_ms,
                         *total_duration_ms,
                         *fetch_requests,
+                        *did_index_compacted,
+                        *unique_dids,
+                        *size_bytes,
                     );
                 }
                 SyncEvent::CaughtUp {
@@ -651,6 +675,9 @@ impl SyncManager {
                     fetch_requests,
                     hash,
                     age,
+                    did_index_compacted,
+                    unique_dids,
+                    size_bytes,
                 }) => {
                     synced += 1;
 
@@ -663,6 +690,9 @@ impl SyncManager {
                         index_ms,
                         total_duration_ms: duration_ms,
                         fetch_requests,
+                        did_index_compacted,
+                        unique_dids,
+                        size_bytes,
                     });
 
                     // Check if we've reached the limit
@@ -756,6 +786,9 @@ impl SyncManager {
                     fetch_requests,
                     hash,
                     age,
+                    did_index_compacted,
+                    unique_dids,
+                    size_bytes,
                 }) => {
                     total_synced += 1;
 
@@ -768,6 +801,9 @@ impl SyncManager {
                         index_ms,
                         total_duration_ms: duration_ms,
                         fetch_requests,
+                        did_index_compacted,
+                        unique_dids,
+                        size_bytes,
                     });
 
                     // Check max bundles limit
