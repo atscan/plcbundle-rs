@@ -63,8 +63,10 @@ pub fn run(cmd: VerifyCommand, dir: PathBuf) -> Result<()> {
     }
 
     if !cmd.verbose {
-        let full_path = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
-        eprintln!("\n📁 Working in: {}\n", full_path.display());
+        eprintln!(
+            "\n📁 Working in: {}\n",
+            super::utils::display_path(&dir).display()
+        );
     }
 
     // Determine what to verify
@@ -188,20 +190,13 @@ fn verify_chain(
     fast: bool,
     num_threads: usize,
 ) -> Result<()> {
-    let last_bundle = manager.get_last_bundle();
-
-    if last_bundle == 0 {
+    if super::utils::is_repository_empty(manager) {
         eprintln!("ℹ️  No bundles to verify");
         return Ok(());
     }
 
     // Get all bundle metadata
-    let mut bundles = Vec::new();
-    for i in 1..=last_bundle {
-        if let Ok(Some(meta)) = manager.get_bundle_metadata(i) {
-            bundles.push(meta);
-        }
-    }
+    let bundles = super::utils::get_all_bundle_metadata(manager);
 
     if bundles.is_empty() {
         eprintln!("ℹ️  No bundles to verify");

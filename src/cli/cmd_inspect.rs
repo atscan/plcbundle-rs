@@ -1,5 +1,5 @@
 // Inspect command - deep analysis of bundle contents
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::DateTime;
 use clap::Args;
 use plcbundle::constants;
@@ -170,10 +170,21 @@ pub fn run(cmd: InspectCommand, dir: PathBuf) -> Result<()> {
     // Resolve target to bundle number or file path
     let (bundle_num, file_path) = resolve_target(&cmd.target, &dir)?;
 
-    // Get file metadata
-    let metadata = std::fs::metadata(&file_path)
-        .context(format!("Failed to read file: {}", file_path.display()))?;
-    let file_size = metadata.len();
+    // Get file size - use bundle metadata if available, otherwise read from filesystem
+    let file_size = if let Some(num) = bundle_num {
+        // Use bundle metadata from index (avoids direct file access per RULES.md)
+        manager
+            .get_bundle_metadata(num)?
+            .map(|meta| meta.compressed_size)
+            .unwrap_or_else(|| {
+                // Fallback to filesystem if metadata not available
+                std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0)
+            })
+    } else {
+        // For arbitrary file paths, we still need filesystem access
+        // TODO: Add method to load from arbitrary path
+        anyhow::bail!("Loading from arbitrary paths not yet implemented");
+    };
 
     if !cmd.json {
         eprintln!("Inspecting: {}", file_path.display());

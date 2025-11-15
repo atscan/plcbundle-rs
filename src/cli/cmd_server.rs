@@ -231,12 +231,14 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
                 log::debug!("[Resolver] DID index is empty or missing");
             }
 
-            let last_bundle = manager.get_last_bundle();
             if cmd.verbose {
-                log::debug!("[Resolver] Last bundle number: {}", last_bundle);
+                log::debug!(
+                    "[Resolver] Last bundle number: {}",
+                    manager.get_last_bundle()
+                );
             }
 
-            if last_bundle == 0 {
+            if super::utils::is_repository_empty(&manager) {
                 eprintln!("⚠️  No bundles to index. DID resolution will not be available.");
                 eprintln!(
                     "    Sync bundles first with '{} sync' or '{} server --sync'",
@@ -247,6 +249,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
                     log::debug!("[Resolver] Skipping index build - no bundles available");
                 }
             } else {
+                let last_bundle = manager.get_last_bundle();
                 eprintln!("Building DID index...");
                 eprintln!("Indexing {} bundles\n", last_bundle);
 

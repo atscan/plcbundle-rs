@@ -118,10 +118,10 @@ pub fn run(cmd: BenchCommand, dir: PathBuf) -> Result<()> {
             && !cmd.sequential);
 
     // Get repository info
-    let last_bundle = manager.get_last_bundle();
-    if last_bundle == 0 {
+    if super::utils::is_repository_empty(&manager) {
         anyhow::bail!("No bundles found in repository");
     }
+    let last_bundle = manager.get_last_bundle();
 
     // Print benchmark header
     eprintln!("\n{}", "=".repeat(80));

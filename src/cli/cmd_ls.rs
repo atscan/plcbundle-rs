@@ -31,13 +31,7 @@ pub fn run(cmd: LsCommand, dir: PathBuf) -> Result<()> {
     let manager = BundleManager::new(dir)?;
 
     // Get all bundle metadata from the index
-    let last_bundle = manager.get_last_bundle();
-    let mut bundles = Vec::new();
-    for i in 1..=last_bundle {
-        if let Ok(Some(meta)) = manager.get_bundle_metadata(i) {
-            bundles.push(meta);
-        }
-    }
+    let bundles = super::utils::get_all_bundle_metadata(&manager);
 
     if bundles.is_empty() {
         return Ok(());

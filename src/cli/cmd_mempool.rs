@@ -49,7 +49,7 @@ pub enum MempoolSubcommand {
 }
 
 pub fn run(cmd: MempoolCommand) -> Result<()> {
-    let manager = BundleManager::new(cmd.dir.clone())?.with_verbose(cmd.verbose);
+    let manager = utils::create_manager(cmd.dir.clone(), cmd.verbose)?;
 
     match cmd.command {
         Some(MempoolSubcommand::Status { verbose }) => {

@@ -28,6 +28,52 @@ pub struct ServerState {
     pub start_time: Instant,
 }
 
+/// Helper to create a JSON error response
+fn json_error(status: StatusCode, message: &str) -> impl IntoResponse {
+    (status, axum::Json(json!({"error": message})))
+}
+
+/// Helper for "not found" errors
+fn not_found(message: &str) -> impl IntoResponse {
+    json_error(StatusCode::NOT_FOUND, message)
+}
+
+/// Helper for internal server errors
+fn internal_error(message: &str) -> impl IntoResponse {
+    json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+}
+
+/// Helper for task join errors
+fn task_join_error(e: impl std::fmt::Display) -> impl IntoResponse {
+    let msg = format!("Task join error: {}", e);
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        axum::Json(json!({"error": msg})),
+    )
+}
+
+/// Helper for bad request errors
+fn bad_request(message: &str) -> impl IntoResponse {
+    json_error(StatusCode::BAD_REQUEST, message)
+}
+
+/// Check if an error indicates "not found"
+fn is_not_found_error(e: &anyhow::Error) -> bool {
+    let msg = e.to_string();
+    msg.contains("not found") || msg.contains("not in index")
+}
+
+/// Create headers for bundle file download
+fn bundle_download_headers(content_type: &'static str, filename: &str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert("Content-Type", HeaderValue::from_static(content_type));
+    headers.insert(
+        "Content-Disposition",
+        HeaderValue::from_str(&format!("attachment; filename={}", filename)).unwrap(),
+    );
+    headers
+}
+
 pub fn create_router(
     manager: Arc<BundleManager>,
     config: ServerConfig,
@@ -344,16 +390,8 @@ async fn handle_bundle(
 ) -> impl IntoResponse {
     match state.manager.get_bundle_metadata(number) {
         Ok(Some(meta)) => (StatusCode::OK, axum::Json(meta)).into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            axum::Json(json!({"error": "Bundle not found"})),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            axum::Json(json!({"error": e.to_string()})),
-        )
-            .into_response(),
+        Ok(None) => not_found("Bundle not found").into_response(),
+        Err(e) => internal_error(&e.to_string()).into_response(),
     }
 }
 
@@ -375,37 +413,22 @@ async fn handle_bundle_data(
             let stream = ReaderStream::new(file);
             let body = Body::from_stream(stream);
 
-            let mut headers = HeaderMap::new();
-            headers.insert("Content-Type", HeaderValue::from_static("application/zstd"));
-            headers.insert(
-                "Content-Disposition",
-                HeaderValue::from_str(&format!("attachment; filename={:06}.jsonl.zst", number))
-                    .unwrap(),
+            let headers = bundle_download_headers(
+                "application/zstd",
+                &constants::bundle_filename(number),
             );
 
             (StatusCode::OK, headers, body).into_response()
         }
         Ok(Err(e)) => {
             // Handle errors from BundleManager
-            if e.to_string().contains("not found") || e.to_string().contains("not in index") {
-                (
-                    StatusCode::NOT_FOUND,
-                    axum::Json(json!({"error": "Bundle not found"})),
-                )
-                    .into_response()
+            if is_not_found_error(&e) {
+                not_found("Bundle not found").into_response()
             } else {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    axum::Json(json!({"error": e.to_string()})),
-                )
-                    .into_response()
+                internal_error(&e.to_string()).into_response()
             }
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            axum::Json(json!({"error": format!("Task join error: {}", e)})),
-        )
-            .into_response(),
+        Err(e) => task_join_error(e).into_response(),
     }
 }
 
@@ -428,39 +451,19 @@ async fn handle_bundle_jsonl(
     .await
     {
         Ok(Ok(data)) => {
-            let mut headers = HeaderMap::new();
-            headers.insert(
-                "Content-Type",
-                HeaderValue::from_static("application/x-ndjson"),
-            );
-            headers.insert(
-                "Content-Disposition",
-                HeaderValue::from_str(&format!("attachment; filename={:06}.jsonl", number))
-                    .unwrap(),
-            );
+            let filename = constants::bundle_filename(number).replace(".zst", "");
+            let headers = bundle_download_headers("application/x-ndjson", &filename);
 
             (StatusCode::OK, headers, data).into_response()
         }
         Ok(Err(e)) => {
-            if e.to_string().contains("not in index") || e.to_string().contains("not found") {
-                (
-                    StatusCode::NOT_FOUND,
-                    axum::Json(json!({"error": "Bundle not found"})),
-                )
-                    .into_response()
+            if is_not_found_error(&e) {
+                not_found("Bundle not found").into_response()
             } else {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    axum::Json(json!({"error": e.to_string()})),
-                )
-                    .into_response()
+                internal_error(&e.to_string()).into_response()
             }
         }
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            axum::Json(json!({"error": "Task join error"})),
-        )
-            .into_response(),
+        Err(_) => internal_error("Task join error").into_response(),
     }
 }
 
@@ -471,21 +474,11 @@ async fn handle_operation(
     // Parse pointer: "bundle:position" or global position
     let (bundle_num, position) = match parse_operation_pointer(&pointer) {
         Ok((b, p)) => (b, p),
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                axum::Json(json!({"error": e.to_string()})),
-            )
-                .into_response();
-        }
+        Err(e) => return bad_request(&e.to_string()).into_response(),
     };
 
     if position >= constants::BUNDLE_SIZE {
-        return (
-            StatusCode::BAD_REQUEST,
-            axum::Json(json!({"error": format!("Position must be 0-9999")})),
-        )
-            .into_response();
+        return bad_request("Position must be 0-9999").into_response();
     }
 
     let total_start = Instant::now();
@@ -535,25 +528,13 @@ async fn handle_operation(
             (StatusCode::OK, headers, json).into_response()
         }
         Ok(Err(e)) => {
-            if e.to_string().contains("not in index") || e.to_string().contains("not found") {
-                (
-                    StatusCode::NOT_FOUND,
-                    axum::Json(json!({"error": "Operation not found"})),
-                )
-                    .into_response()
+            if is_not_found_error(&e) {
+                not_found("Operation not found").into_response()
             } else {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    axum::Json(json!({"error": e.to_string()})),
-                )
-                    .into_response()
+                internal_error(&e.to_string()).into_response()
             }
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            axum::Json(json!({"error": format!("Task join error: {}", e)})),
-        )
-            .into_response(),
+        Err(e) => task_join_error(e).into_response(),
     }
 }
 
@@ -664,11 +645,7 @@ async fn handle_status(State(state): State<ServerState>) -> impl IntoResponse {
 
 async fn handle_mempool(State(state): State<ServerState>) -> impl IntoResponse {
     if !state.config.sync_mode {
-        return (
-            StatusCode::NOT_FOUND,
-            axum::Json(json!({"error": "Mempool only available in sync mode"})),
-        )
-            .into_response();
+        return not_found("Mempool only available in sync mode").into_response();
     }
 
     match state.manager.get_mempool_operations() {
@@ -688,11 +665,7 @@ async fn handle_mempool(State(state): State<ServerState>) -> impl IntoResponse {
             );
             (StatusCode::OK, headers, jsonl).into_response()
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            axum::Json(json!({"error": e.to_string()})),
-        )
-            .into_response(),
+        Err(e) => internal_error(&e.to_string()).into_response(),
     }
 }
 
@@ -742,11 +715,7 @@ async fn handle_debug_didindex(State(state): State<ServerState>) -> impl IntoRes
 
 async fn handle_debug_resolver(State(state): State<ServerState>) -> impl IntoResponse {
     if !state.config.enable_resolver {
-        return (
-            StatusCode::NOT_FOUND,
-            axum::Json(json!({"error": "Resolver not enabled"})),
-        )
-            .into_response();
+        return not_found("Resolver not enabled").into_response();
     }
 
     let resolver_stats = state.manager.get_resolver_stats();
@@ -756,11 +725,7 @@ async fn handle_debug_resolver(State(state): State<ServerState>) -> impl IntoRes
 async fn handle_did_routing_guard(State(state): State<ServerState>, uri: Uri) -> impl IntoResponse {
     // Only handle if resolver is enabled, otherwise return 404
     if !state.config.enable_resolver {
-        return (
-            StatusCode::NOT_FOUND,
-            axum::Json(json!({"error": "not found"})),
-        )
-            .into_response();
+        return not_found("not found").into_response();
     }
     handle_did_routing(State(state), uri).await.into_response()
 }
@@ -770,32 +735,20 @@ async fn handle_did_routing(State(state): State<ServerState>, uri: Uri) -> impl 
 
     // Ignore common browser files
     if is_common_browser_file(path) {
-        return (
-            StatusCode::NOT_FOUND,
-            axum::Json(json!({"error": "not found"})),
-        )
-            .into_response();
+        return not_found("not found").into_response();
     }
 
     // Split path into parts
     let parts: Vec<&str> = path.split('/').collect();
     if parts.is_empty() {
-        return (
-            StatusCode::NOT_FOUND,
-            axum::Json(json!({"error": "not found"})),
-        )
-            .into_response();
+        return not_found("not found").into_response();
     }
 
     let input = parts[0];
 
     // Quick validation
     if !is_valid_did_or_handle(input) {
-        return (
-            StatusCode::NOT_FOUND,
-            axum::Json(json!({"error": "not found"})),
-        )
-            .into_response();
+        return not_found("not found").into_response();
     }
 
     // Route to appropriate handler
@@ -810,11 +763,7 @@ async fn handle_did_routing(State(state): State<ServerState>, uri: Uri) -> impl 
             .await
             .into_response()
     } else {
-        (
-            StatusCode::NOT_FOUND,
-            axum::Json(json!({"error": "not found"})),
-        )
-            .into_response()
+        not_found("not found").into_response()
     }
 }
 
@@ -833,11 +782,7 @@ async fn handle_did_document(State(state): State<ServerState>, input: &str) -> i
                 )
                     .into_response();
             }
-            return (
-                StatusCode::BAD_REQUEST,
-                axum::Json(json!({"error": e.to_string()})),
-            )
-                .into_response();
+            return bad_request(&e.to_string()).into_response();
         }
     };
 
@@ -864,27 +809,13 @@ async fn handle_did_document(State(state): State<ServerState>, input: &str) -> i
                     axum::Json(json!({"error": "DID has been deactivated"})),
                 )
                     .into_response();
-            } else if e.to_string().contains("not found") {
-                return (
-                    StatusCode::NOT_FOUND,
-                    axum::Json(json!({"error": "DID not found"})),
-                )
-                    .into_response();
+            } else if is_not_found_error(&e) {
+                return not_found("DID not found").into_response();
             } else {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    axum::Json(json!({"error": e.to_string()})),
-                )
-                    .into_response();
+                return internal_error(&e.to_string()).into_response();
             }
         }
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(json!({"error": format!("Task join error: {}", e)})),
-            )
-                .into_response();
-        }
+        Err(e) => return task_join_error(e).into_response(),
     };
 
     // Set headers
@@ -923,13 +854,7 @@ async fn handle_did_data(State(state): State<ServerState>, input: &str) -> impl 
     // Resolve handle to DID
     let did = match state.manager.resolve_handle_or_did_async(input).await {
         Ok((d, _)) => d,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                axum::Json(json!({"error": e.to_string()})),
-            )
-                .into_response();
-        }
+        Err(e) => return bad_request(&e.to_string()).into_response(),
     };
 
     // Get DID operations (loads bundles which does file I/O, so use spawn_blocking)
@@ -942,28 +867,12 @@ async fn handle_did_data(State(state): State<ServerState>, input: &str) -> impl 
 
     let operations = match operations_result {
         Ok(Ok(ops)) => ops,
-        Ok(Err(e)) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(json!({"error": e.to_string()})),
-            )
-                .into_response();
-        }
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(json!({"error": format!("Task join error: {}", e)})),
-            )
-                .into_response();
-        }
+        Ok(Err(e)) => return internal_error(&e.to_string()).into_response(),
+        Err(e) => return task_join_error(e).into_response(),
     };
 
     if operations.is_empty() {
-        return (
-            StatusCode::NOT_FOUND,
-            axum::Json(json!({"error": "DID not found"})),
-        )
-            .into_response();
+        return not_found("DID not found").into_response();
     }
 
     // Build DID state
@@ -977,11 +886,7 @@ async fn handle_did_data(State(state): State<ServerState>, input: &str) -> impl 
                 )
                     .into_response()
             } else {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    axum::Json(json!({"error": e.to_string()})),
-                )
-                    .into_response()
+                internal_error(&e.to_string()).into_response()
             }
         }
     }
@@ -991,25 +896,13 @@ async fn handle_did_audit_log(State(state): State<ServerState>, input: &str) -> 
     // Resolve handle to DID
     let did = match state.manager.resolve_handle_or_did_async(input).await {
         Ok((d, _)) => d,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                axum::Json(json!({"error": e.to_string()})),
-            )
-                .into_response();
-        }
+        Err(e) => return bad_request(&e.to_string()).into_response(),
     };
 
     // Get DID operations (both bundled and mempool)
     let mut operations = match state.manager.get_did_operations(&did) {
         Ok(ops) => ops,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(json!({"error": e.to_string()})),
-            )
-                .into_response();
-        }
+        Err(e) => return internal_error(&e.to_string()).into_response(),
     };
 
     // Add mempool operations
@@ -1018,11 +911,7 @@ async fn handle_did_audit_log(State(state): State<ServerState>, input: &str) -> 
     }
 
     if operations.is_empty() {
-        return (
-            StatusCode::NOT_FOUND,
-            axum::Json(json!({"error": "DID not found"})),
-        )
-            .into_response();
+        return not_found("DID not found").into_response();
     }
 
     // Format audit log

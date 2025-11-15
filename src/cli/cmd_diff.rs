@@ -92,20 +92,15 @@ async fn diff_indexes(
     verbose: bool,
     binary_name: &str,
 ) -> Result<()> {
+    use super::utils::display_path;
+
     // Resolve "." to actual path (rule: always resolve dot to full path)
-    let local_path = if dir.as_os_str() == "." {
-        std::fs::canonicalize(".").unwrap_or_else(|_| dir.clone())
-    } else {
-        std::fs::canonicalize(dir).unwrap_or_else(|_| dir.clone())
-    };
+    let local_path = display_path(dir);
 
     // Resolve target "." as well (if it's a local path, not URL)
     let target_display =
         if target == "." && !target.starts_with("http://") && !target.starts_with("https://") {
-            std::fs::canonicalize(".")
-                .unwrap_or_else(|_| PathBuf::from(target))
-                .display()
-                .to_string()
+            display_path(&PathBuf::from(target)).display().to_string()
         } else {
             target.to_string()
         };

@@ -1,6 +1,7 @@
 // Shared utility functions for CLI commands
 
 use anyhow::Result;
+use plcbundle::BundleManager;
 use std::path::{Path, PathBuf};
 
 pub use plcbundle::format::{format_bytes, format_number};
@@ -66,4 +67,20 @@ pub fn get_num_workers(workers: usize, fallback: usize) -> usize {
     } else {
         workers
     }
+}
+
+/// Check if repository is empty (no bundles)
+pub fn is_repository_empty(manager: &BundleManager) -> bool {
+    manager.get_last_bundle() == 0
+}
+
+/// Create BundleManager with optional verbose flag
+pub fn create_manager(dir: PathBuf, verbose: bool) -> Result<BundleManager> {
+    Ok(BundleManager::new(dir)?.with_verbose(verbose))
+}
+
+/// Get all bundle metadata from the repository
+/// This is more efficient than iterating through bundle numbers
+pub fn get_all_bundle_metadata(manager: &BundleManager) -> Vec<plcbundle::index::BundleMetadata> {
+    manager.get_index().bundles
 }

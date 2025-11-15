@@ -58,7 +58,7 @@ pub struct MigrateCommand {
 }
 
 pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
-    let manager = BundleManager::new(dir.clone())?.with_verbose(cmd.verbose);
+    let manager = super::utils::create_manager(dir.clone(), cmd.verbose)?;
 
     // Auto-detect number of workers if 0
     let workers = super::utils::get_num_workers(cmd.workers, 4);

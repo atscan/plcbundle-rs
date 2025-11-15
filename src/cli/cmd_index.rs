@@ -20,12 +20,12 @@ pub fn cmd_index_build(dir: PathBuf, force: bool) -> Result<()> {
         return Ok(());
     }
 
-    let last_bundle = manager.get_last_bundle();
-    if last_bundle == 0 {
+    if super::utils::is_repository_empty(&manager) {
         log::info!("No bundles to index");
         return Ok(());
     }
 
+    let last_bundle = manager.get_last_bundle();
     log::info!("Building DID index...");
     log::info!("Indexing {} bundles\n", last_bundle);
 
@@ -80,8 +80,7 @@ pub fn cmd_index_repair(dir: PathBuf) -> Result<()> {
     }
 
     // Check if there are bundles to index
-    let last_bundle = manager.get_last_bundle();
-    if last_bundle == 0 {
+    if super::utils::is_repository_empty(&manager) {
         log::info!("No bundles to index");
         return Ok(());
     }

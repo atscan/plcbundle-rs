@@ -79,11 +79,11 @@ fn calculate_rollback_plan(manager: &BundleManager, cmd: &RollbackCommand) -> Re
         bail!("cannot use both --to and --last together");
     }
 
-    let last_bundle = manager.get_last_bundle();
-
-    if last_bundle == 0 {
+    if super::utils::is_repository_empty(&manager) {
         bail!("no bundles to rollback");
     }
+
+    let last_bundle = manager.get_last_bundle();
 
     // Calculate target bundle
     let target_bundle = if let Some(to) = cmd.to {
