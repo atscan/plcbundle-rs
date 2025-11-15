@@ -835,6 +835,11 @@ impl SyncManager {
                 }) => {
                     total_synced += 1;
 
+                    // Reset error counter on successful sync
+                    use std::sync::atomic::{AtomicU32, Ordering};
+                    static CONSECUTIVE_ERRORS: AtomicU32 = AtomicU32::new(0);
+                    CONSECUTIVE_ERRORS.store(0, Ordering::Relaxed);
+
                     self.handle_event(&SyncEvent::BundleCreated {
                         bundle_num,
                         hash,
@@ -948,14 +953,77 @@ impl SyncManager {
                         error: error_msg.clone(),
                     });
 
-                    // Trigger shutdown on error to terminate the application
-                    // This prevents the app from hanging when there's a persistent error
-                    // (e.g., corrupted DID index config, disk full, etc.)
-                    if let Some(ref shutdown_tx) = self.config.shutdown_tx {
-                        let _ = shutdown_tx.send(true);
-                    }
+                    // Determine if error is retryable
+                    let is_retryable = is_retryable_error(&error_msg);
 
-                    return Err(e);
+                    if is_retryable {
+                        // Retry transient errors with exponential backoff
+                        use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+                        static CONSECUTIVE_ERRORS: AtomicU32 = AtomicU32::new(0);
+                        static LAST_ERROR_TIME_SECS: AtomicU64 = AtomicU64::new(0);
+
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs();
+
+                        let last_error_secs = LAST_ERROR_TIME_SECS.load(Ordering::Relaxed);
+
+                        // Reset error count if last error was more than 5 minutes ago
+                        if last_error_secs > 0 && now - last_error_secs > 300 {
+                            CONSECUTIVE_ERRORS.store(0, Ordering::Relaxed);
+                        }
+
+                        let error_count = CONSECUTIVE_ERRORS.fetch_add(1, Ordering::Relaxed) + 1;
+                        LAST_ERROR_TIME_SECS.store(now, Ordering::Relaxed);
+
+                        // Calculate backoff with exponential increase (cap at 5 minutes)
+                        let backoff_secs = std::cmp::min(
+                            2u64.pow((error_count - 1).min(8)),
+                            300
+                        );
+
+                        if self.config.verbose || error_count == 1 {
+                            eprintln!("[Sync] Retryable error (attempt {}): {}",
+                                error_count, error_msg);
+                            eprintln!("[Sync] Retrying in {} seconds...", backoff_secs);
+                        }
+
+                        // Too many consecutive errors - give up
+                        if error_count >= 10 {
+                            eprintln!("[Sync] Too many consecutive errors ({}) - shutting down",
+                                error_count);
+
+                            if let Some(ref shutdown_tx) = self.config.shutdown_tx {
+                                let _ = shutdown_tx.send(true);
+                            }
+                            return Err(e);
+                        }
+
+                        // Wait with backoff, checking for shutdown
+                        let backoff_duration = Duration::from_secs(backoff_secs);
+                        if let Some(ref shutdown_rx) = self.config.shutdown_rx {
+                            let mut shutdown_rx = shutdown_rx.clone();
+                            tokio::select! {
+                                _ = sleep(backoff_duration) => {}
+                                _ = shutdown_rx.changed() => {
+                                    if *shutdown_rx.borrow() {
+                                        return Ok(());
+                                    }
+                                }
+                            }
+                        } else {
+                            sleep(backoff_duration).await;
+                        }
+                    } else {
+                        // Fatal error - shutdown immediately
+                        eprintln!("[Sync] Fatal error - shutting down: {}", error_msg);
+
+                        if let Some(ref shutdown_tx) = self.config.shutdown_tx {
+                            let _ = shutdown_tx.send(true);
+                        }
+                        return Err(e);
+                    }
                 }
             }
         }
@@ -967,6 +1035,63 @@ impl SyncManager {
 // ============================================================================
 // Helper Functions
 // ============================================================================
+
+/// Determine if an error is retryable
+fn is_retryable_error(error_msg: &str) -> bool {
+    let error_lower = error_msg.to_lowercase();
+
+    // Retryable errors (transient issues)
+    let retryable_patterns = [
+        "connection",
+        "timeout",
+        "network",
+        "temporary",
+        "unavailable",
+        "too many",
+        "rate limit",
+        "503",
+        "502",
+        "504",
+        "broken pipe",
+        "connection reset",
+        "dns",
+        "io error",
+        "interrupted",
+        "would block",
+    ];
+
+    // Fatal errors (permanent issues that won't be fixed by retrying)
+    let fatal_patterns = [
+        "no such file",
+        "permission denied",
+        "disk full",
+        "quota exceeded",
+        "corrupted",
+        "invalid",
+        "parse error",
+        "404",
+        "403",
+        "401",
+    ];
+
+    // Check for fatal patterns first
+    for pattern in &fatal_patterns {
+        if error_lower.contains(pattern) {
+            return false;
+        }
+    }
+
+    // Check for retryable patterns
+    for pattern in &retryable_patterns {
+        if error_lower.contains(pattern) {
+            return true;
+        }
+    }
+
+    // Default: retry unknown errors (conservative approach)
+    // This prevents the server from crashing on unexpected errors
+    true
+}
 
 #[cfg(test)]
 mod tests {
