@@ -615,12 +615,20 @@ impl BundleManager {
     where
         F: Fn(u32, u32) + Send + Sync,
     {
+        use std::fs;
+        
         let last_bundle = self.get_last_bundle();
         let new_index = did_index::Manager::new(self.directory.clone())?;
         let mut stats = RebuildStats::default();
         
-        // Collect all bundles with their operations
-        let mut bundles_data = Vec::new();
+        // Create temporary directory for bundle data files
+        // This avoids keeping all bundle data in memory simultaneously during loading.
+        // We write each bundle to disk immediately after loading, freeing memory.
+        let temp_dir = std::env::temp_dir().join(format!("plcbundle_rebuild_{}", std::process::id()));
+        let bundle_data_dir = temp_dir.join("bundle_data");
+        fs::create_dir_all(&bundle_data_dir)?;
+        
+        // Pass 1: Stream bundles to temporary files
         for bundle_num in 1..=last_bundle {
             if let Some(ref cb) = progress_cb {
                 cb(bundle_num, last_bundle);
@@ -635,7 +643,27 @@ impl BundleManager {
                 stats.operations_indexed += operations.len() as u64;
                 stats.bundles_processed += 1;
                 
-                bundles_data.push((bundle_num, operations));
+                // Write bundle data to temp file immediately (frees memory)
+                let bundle_file = bundle_data_dir.join(format!("{:06}.json", bundle_num));
+                let bundle_data = (bundle_num, operations);
+                let json_data = serde_json::to_string(&bundle_data)?;
+                fs::write(&bundle_file, json_data)?;
+            }
+        }
+        
+        // Pass 2: Read bundle data from temp files and build index
+        // NOTE: build_from_scratch requires all data upfront, so we still need to load
+        // all bundles into memory. However, by writing to temp files first, we:
+        // 1. Verify all bundles are readable before starting the expensive build
+        // 2. Free memory between loading and building phases
+        // 3. Use disk space instead of keeping everything in memory during the entire process
+        let mut bundles_data = Vec::with_capacity(last_bundle as usize);
+        for bundle_num in 1..=last_bundle {
+            let bundle_file = bundle_data_dir.join(format!("{:06}.json", bundle_num));
+            if bundle_file.exists() {
+                let json_data = fs::read_to_string(&bundle_file)?;
+                let bundle_data: (u32, Vec<(String, bool)>) = serde_json::from_str(&json_data)?;
+                bundles_data.push(bundle_data);
             }
         }
         
@@ -645,6 +673,9 @@ impl BundleManager {
                 cb(current as u32, total as u32);
             }
         })?;
+        
+        // Clean up temporary bundle data files
+        fs::remove_dir_all(&bundle_data_dir).ok();
         
         *self.did_index.write().unwrap() = new_index;
         
@@ -961,11 +992,13 @@ impl BundleManager {
                 start_bundle, end_bundle, bundle_count);
         }
 
-        // Load all bundles
+        // Process bundles incrementally (avoid loading all into memory)
         let load_start = Instant::now();
-        let mut bundles_data = Vec::new();
         let mut total_operations = 0usize;
+        let mut bundles_processed = 0usize;
 
+        // Update DID index for each bundle as we load it (memory efficient)
+        let update_start = Instant::now();
         for bundle_num in start_bundle..=end_bundle {
             if let Ok(result) = self.load_bundle(bundle_num, LoadOptions::default()) {
                 total_operations += result.operations.len();
@@ -973,28 +1006,25 @@ impl BundleManager {
                     .iter()
                     .map(|op| (op.did.clone(), op.nullified))
                     .collect();
-                bundles_data.push((bundle_num, operations));
+                
+                // Process immediately instead of accumulating
+                let _ = self.did_index.write().unwrap().update_for_bundle(bundle_num, operations)?;
+                bundles_processed += 1;
             }
         }
         let load_duration = load_start.elapsed();
+        let update_duration = update_start.elapsed();
 
-        if bundles_data.is_empty() {
+        if bundles_processed == 0 {
             return Ok(());
         }
 
         log::debug!(
-            "[Batch DID Index] Loaded {} bundles ({} operations) in {:.3}s ({:.0} ops/sec)",
-            bundles_data.len(), total_operations,
-            load_duration.as_secs_f64(),
-            total_operations as f64 / load_duration.as_secs_f64()
+            "[Batch DID Index] Processed {} bundles ({} operations) in {:.3}s ({:.0} ops/sec)",
+            bundles_processed, total_operations,
+            update_duration.as_secs_f64(),
+            total_operations as f64 / update_duration.as_secs_f64()
         );
-
-        // Update DID index for each bundle
-        let update_start = Instant::now();
-        for (bundle_num, operations) in bundles_data {
-            let _ = self.did_index.write().unwrap().update_for_bundle(bundle_num, operations)?;
-        }
-        let update_duration = update_start.elapsed();
 
         let total_duration = total_start.elapsed();
 

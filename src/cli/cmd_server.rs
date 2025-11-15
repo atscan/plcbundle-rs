@@ -13,6 +13,8 @@ use std::sync::Arc;
 #[cfg(feature = "server")]
 use tokio::signal;
 #[cfg(feature = "server")]
+use tokio::task::{JoinHandle, JoinSet};
+#[cfg(feature = "server")]
 use chrono::Utc;
 #[cfg(feature = "server")]
 use plcbundle::server::{Server, ServerConfig};
@@ -284,6 +286,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
 
     // Create shutdown notification channel for immediate cancellation
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let mut background_tasks: Vec<BackgroundTaskHandle> = Vec::new();
 
     // Setup immediate shutdown signal
     let shutdown_tx_clone = shutdown_tx.clone();
@@ -306,7 +309,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
         let shutdown_rx_sync = shutdown_rx.clone();
         let shutdown_tx_sync = shutdown_tx.clone();
 
-        tokio::spawn(async move {
+        let sync_handle = tokio::spawn(async move {
             use plcbundle::sync::{PLCClient, SyncManager, SyncConfig};
             
             // Create PLC client
@@ -337,6 +340,11 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
                 eprintln!("[Sync] Sync loop error: {}", e);
             }
         });
+        background_tasks.push(BackgroundTaskHandle {
+            name: "sync loop",
+            handle: sync_handle,
+            immediate_abort: false,
+        });
     }
 
     // Start handle resolver keep-alive ping task if resolver is enabled
@@ -344,8 +352,13 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
         if let Some(resolver) = manager.get_handle_resolver() {
             let verbose = cmd.verbose;
             let shutdown_rx_resolver = shutdown_rx.clone();
-            tokio::spawn(async move {
+            let resolver_handle = tokio::spawn(async move {
                 run_resolver_ping_loop(resolver, verbose, shutdown_rx_resolver).await;
+            });
+            background_tasks.push(BackgroundTaskHandle {
+                name: "resolver keep-alive",
+                handle: resolver_handle,
+                immediate_abort: true,
             });
         }
     }
@@ -363,6 +376,10 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
         .with_graceful_shutdown(shutdown_signal)
         .await
         .context("Server error")?;
+
+    // Ensure every background task sees the shutdown flag, even on non-signal exits
+    let _ = shutdown_tx.send(true);
+    wait_for_background_tasks(background_tasks).await;
 
     eprintln!("Server stopped");
     Ok(())
@@ -458,6 +475,108 @@ async fn run_resolver_ping_loop(
             }
         }
     }
+}
+
+#[cfg(feature = "server")]
+struct BackgroundTaskHandle {
+    name: &'static str,
+    handle: JoinHandle<()>,
+    immediate_abort: bool,
+}
+
+#[cfg(feature = "server")]
+async fn wait_for_background_tasks(tasks: Vec<BackgroundTaskHandle>) {
+    if tasks.is_empty() {
+        return;
+    }
+
+    let mut immediate_tasks = Vec::new();
+    let mut graceful_tasks = Vec::new();
+
+    for task in tasks {
+        if task.immediate_abort {
+            immediate_tasks.push(task);
+        } else {
+            graceful_tasks.push(task);
+        }
+    }
+
+    if !immediate_tasks.is_empty() {
+        eprintln!();
+        eprintln!("Stopping {} immediate background task(s)...", immediate_tasks.len());
+        for task in immediate_tasks {
+            let BackgroundTaskHandle { name, handle, .. } = task;
+            handle.abort();
+            match handle.await {
+                Ok(()) => eprintln!("✗ {} aborted", name),
+                Err(e) if e.is_cancelled() => eprintln!("✗ {} aborted", name),
+                Err(e) => eprintln!("⚠️  {} abort error: {}", name, e),
+            }
+        }
+    }
+
+    if graceful_tasks.is_empty() {
+        return;
+    }
+
+    let total = graceful_tasks.len();
+    let task_names: Vec<&'static str> = graceful_tasks.iter().map(|t| t.name).collect();
+
+    eprintln!();
+    eprintln!("Waiting for {} background task(s) to finish...", total);
+    eprintln!("Press Ctrl+C again to force-stop remaining tasks.");
+    for name in &task_names {
+        eprintln!("  • {}", name);
+    }
+
+    let mut join_set = JoinSet::new();
+    for task in graceful_tasks {
+        join_set.spawn(async move {
+            let name = task.name;
+            let result = task.handle.await;
+            (name, result)
+        });
+    }
+
+    let mut remaining = total;
+    let force_signal = signal::ctrl_c();
+    tokio::pin!(force_signal);
+
+    while remaining > 0 {
+        tokio::select! {
+            Some(join_result) = join_set.join_next() => {
+                remaining -= 1;
+                match join_result {
+                    Ok((name, Ok(()))) => eprintln!("✓ {} stopped", name),
+                    Ok((name, Err(e))) if e.is_cancelled() => eprintln!("✓ {} aborted", name),
+                    Ok((name, Err(e))) => eprintln!("⚠️  {} ended with error: {}", name, e),
+                    Err(e) => eprintln!("⚠️  Background task join error: {}", e),
+                }
+            }
+            res = &mut force_signal => {
+                match res {
+                    Ok(()) => {
+                        eprintln!("Force shutdown requested. Aborting remaining background tasks...");
+                    }
+                    Err(err) => {
+                        eprintln!("⚠️  Failed to listen for Ctrl+C for force shutdown: {}", err);
+                        continue;
+                    }
+                }
+
+                join_set.abort_all();
+                while let Some(join_result) = join_set.join_next().await {
+                    match join_result {
+                        Ok((name, _)) => eprintln!("✗ {} aborted", name),
+                        Err(e) => eprintln!("⚠️  Background task join error: {}", e),
+                    }
+                }
+                return;
+            }
+        }
+    }
+
+    eprintln!("All background tasks stopped.");
 }
 
 #[cfg(feature = "server")]

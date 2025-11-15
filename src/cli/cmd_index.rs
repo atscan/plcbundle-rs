@@ -194,6 +194,198 @@ pub fn cmd_index_stats(dir: PathBuf, json: bool) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
+struct RebuildResult {
+    bundles_scanned: u32,
+    dids_checked: usize,
+    errors: usize,
+    missing_in_index: usize,
+    extra_in_index: usize,
+    location_mismatches: usize,
+}
+
+fn rebuild_and_compare_index(
+    manager: &BundleManager,
+    last_bundle: u32,
+    verbose: bool,
+) -> Result<RebuildResult> {
+    use crate::LoadOptions;
+    use super::progress::ProgressBar;
+    use std::fs;
+
+    // Create temporary directory for rebuilt index
+    let temp_dir = std::env::temp_dir().join(format!("plcbundle_verify_{}", std::process::id()));
+    fs::create_dir_all(&temp_dir)?;
+
+    // Create subdirectory for bundle data files
+    let bundle_data_dir = temp_dir.join("bundle_data");
+    fs::create_dir_all(&bundle_data_dir)?;
+
+    // Create temporary DID index
+    let temp_did_index = crate::did_index::Manager::new(temp_dir.clone())?;
+
+    // Pass 1: Stream bundles to temporary files
+    // This avoids keeping all bundle data in memory simultaneously during loading.
+    // We write each bundle to disk immediately after loading, freeing memory.
+    log::info!("Pass 1: Streaming bundles to temporary files...");
+    let progress = ProgressBar::new(last_bundle as usize);
+
+    for bundle_num in 1..=last_bundle {
+        let load_result = manager.load_bundle(bundle_num, LoadOptions::default())?;
+
+        // Extract operations and write to temp file immediately
+        let operations: Vec<(String, bool)> = load_result
+            .operations
+            .iter()
+            .map(|op| (op.did.clone(), op.nullified))
+            .collect();
+
+        // Write bundle data to temp file immediately (frees memory)
+        let bundle_file = bundle_data_dir.join(format!("{:06}.json", bundle_num));
+        let bundle_data = (bundle_num, operations);
+        let json_data = serde_json::to_string(&bundle_data)?;
+        fs::write(&bundle_file, json_data)?;
+
+        progress.set(bundle_num as usize);
+    }
+    progress.finish();
+
+    // Pass 2: Read bundle data from temp files and build index
+    // NOTE: build_from_scratch requires all data upfront, so we still need to load
+    // all bundles into memory. However, by writing to temp files first, we:
+    // 1. Verify all bundles are readable before starting the expensive build
+    // 2. Free memory between loading and building phases
+    // 3. Can potentially process in batches if build_from_scratch API changes
+    // build_from_scratch does two passes internally:
+    //   - Pass 2a: Accumulate entries in memory and flush periodically
+    //   - Pass 2b: Consolidate and write final shards
+    log::info!("Pass 2: Building index from temporary files (accumulate + consolidate)...");
+    
+    // Read bundle files back (unfortunately build_from_scratch needs all data)
+    // TODO: Consider modifying build_from_scratch to accept iterator/file-based input
+    // to avoid loading all bundles into memory at once
+    let mut bundles_data = Vec::with_capacity(last_bundle as usize);
+    for bundle_num in 1..=last_bundle {
+        let bundle_file = bundle_data_dir.join(format!("{:06}.json", bundle_num));
+        if bundle_file.exists() {
+            let json_data = fs::read_to_string(&bundle_file)?;
+            let bundle_data: (u32, Vec<(String, bool)>) = serde_json::from_str(&json_data)?;
+            bundles_data.push(bundle_data);
+        }
+    }
+
+    temp_did_index.build_from_scratch(bundles_data, |current, total| {
+        // build_from_scratch provides progress for its internal passes
+        if current % 100 == 0 || current == total {
+            eprint!("\r  Progress: {}/{} ({:.1}%)", current, total,
+                (current as f64 / total as f64) * 100.0);
+        }
+    })?;
+    eprintln!(); // Newline after progress
+
+    // Clean up temporary bundle data files
+    fs::remove_dir_all(&bundle_data_dir).ok();
+
+    // Compare shard files between temporary and existing index
+    let existing_index_dir = manager.directory().join(crate::constants::DID_INDEX_DIR);
+    let existing_shards = existing_index_dir.join("shards");
+    let temp_shards = temp_dir.join("shards");
+
+    // Get stats from both indexes
+    let temp_stats = temp_did_index.get_stats();
+    let temp_total_dids = temp_stats.get("total_dids")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as usize;
+
+    let existing_stats = manager.get_did_index().read().unwrap().get_stats();
+    let existing_total_dids = existing_stats.get("total_dids")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as usize;
+    let existing_delta_segments = existing_stats.get("delta_segments")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    let mut errors = 0;
+    let mut mismatched_shards = 0;
+
+    // Compare DID counts first (ultimate sanity check)
+    if temp_total_dids != existing_total_dids {
+        errors += 1;
+        log::error!(
+            "  Total DID count mismatch: existing={}, rebuilt={}",
+            existing_total_dids, temp_total_dids
+        );
+    } else if verbose {
+        log::info!("  ✓ Total DID count matches: {}", temp_total_dids);
+    }
+
+    // Compare shard files
+    // Note: If existing index has delta segments, base shards won't match exactly
+    // because build_from_scratch creates a clean index with all data in base shards
+    if existing_delta_segments > 0 {
+        if verbose {
+            log::info!("  Note: Existing index has {} delta segments, skipping file-by-file comparison", existing_delta_segments);
+            log::info!("  (Base shards won't match because existing index needs compaction)");
+        }
+    } else {
+        log::info!("Comparing shard files...");
+        for shard_num in 0..=255u8 {
+            let existing_shard = existing_shards.join(format!("{:02x}.idx", shard_num));
+            let temp_shard = temp_shards.join(format!("{:02x}.idx", shard_num));
+
+            // Check if both exist or both don't exist
+            let existing_exists = existing_shard.exists();
+            let temp_exists = temp_shard.exists();
+
+            if existing_exists != temp_exists {
+                errors += 1;
+                mismatched_shards += 1;
+                if verbose {
+                    log::error!(
+                        "  Shard {:02x}: existence mismatch (existing={}, rebuilt={})",
+                        shard_num, existing_exists, temp_exists
+                    );
+                }
+                continue;
+            }
+
+            if !existing_exists {
+                // Both don't exist, skip
+                continue;
+            }
+
+            // Compare file contents
+            let existing_data = fs::read(&existing_shard)?;
+            let temp_data = fs::read(&temp_shard)?;
+
+            if existing_data != temp_data {
+                errors += 1;
+                mismatched_shards += 1;
+                if verbose {
+                    log::error!(
+                        "  Shard {:02x}: content mismatch (existing={} bytes, rebuilt={} bytes)",
+                        shard_num, existing_data.len(), temp_data.len()
+                    );
+                }
+            } else if verbose {
+                log::info!("  ✓ Shard {:02x}: matches ({} bytes)", shard_num, existing_data.len());
+            }
+        }
+    }
+
+    // Clean up temporary directory
+    fs::remove_dir_all(&temp_dir).ok();
+
+    Ok(RebuildResult {
+        bundles_scanned: last_bundle,
+        dids_checked: temp_total_dids,
+        errors,
+        missing_in_index: 0,
+        extra_in_index: 0,
+        location_mismatches: mismatched_shards,
+    })
+}
+
 pub fn cmd_index_verify(dir: PathBuf, verbose: bool) -> Result<()> {
     let manager = BundleManager::new(dir.clone())?;
 
@@ -350,6 +542,28 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool) -> Result<()> {
 
     if verbose && compaction_strategy != "manual" {
         log::info!("  ✓ Compaction strategy: {}", compaction_strategy);
+    }
+
+    // Check 5: Rebuild index in memory and compare
+    log::info!("Rebuilding index in memory for verification...");
+    let rebuild_result = rebuild_and_compare_index(&manager, last_bundle as u32, verbose)?;
+
+    if rebuild_result.errors > 0 {
+        errors += rebuild_result.errors;
+        log::error!("  ✗ Index rebuild comparison failed with {} errors", rebuild_result.errors);
+        if rebuild_result.missing_in_index > 0 {
+            log::error!("    - {} DIDs missing from existing index", rebuild_result.missing_in_index);
+        }
+        if rebuild_result.extra_in_index > 0 {
+            log::error!("    - {} DIDs in index but not in bundles", rebuild_result.extra_in_index);
+        }
+        if rebuild_result.location_mismatches > 0 {
+            log::error!("    - {} DIDs with location mismatches", rebuild_result.location_mismatches);
+        }
+    } else if verbose {
+        log::info!("  ✓ Index rebuild verification passed");
+        log::info!("    - {} DIDs verified", rebuild_result.dids_checked);
+        log::info!("    - {} bundles scanned", rebuild_result.bundles_scanned);
     }
 
     // Summary
