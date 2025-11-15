@@ -120,6 +120,15 @@ pub fn cmd_index_stats(dir: PathBuf, json: bool) -> Result<()> {
     let shard_count = stats_map.get("shard_count")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
+    let shards_with_data = stats_map.get("shards_with_data")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let shards_with_segments = stats_map.get("shards_with_segments")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let max_segments_per_shard = stats_map.get("max_segments_per_shard")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
     let last_bundle = stats_map.get("last_bundle")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
@@ -138,6 +147,12 @@ pub fn cmd_index_stats(dir: PathBuf, json: bool) -> Result<()> {
     let delta_segments = stats_map.get("delta_segments")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
+    let total_shard_size = stats_map.get("total_shard_size_bytes")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let total_delta_size = stats_map.get("total_delta_size_bytes")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     let compaction_strategy = stats_map.get("compaction_strategy")
         .and_then(|v| v.as_str())
         .unwrap_or("manual");
@@ -145,17 +160,30 @@ pub fn cmd_index_stats(dir: PathBuf, json: bool) -> Result<()> {
     println!("\nDID Index Statistics");
     println!("════════════════════\n");
     println!("  Location:      {}/{}/", utils::display_path(&dir).display(), constants::DID_INDEX_DIR);
-    println!("  Total DIDs:    {}", total_dids);
-    println!("  Shard count:   {}", shard_count);
+    println!("  Total DIDs:    {}", utils::format_number(total_dids as u64));
+    println!("  Shard count:   {} ({} with data, {} with segments)", 
+        shard_count, shards_with_data, shards_with_segments);
     println!("  Last bundle:   {:06}", last_bundle);
     println!();
-    println!("  Delta segments: {} (strategy: {})", delta_segments, compaction_strategy);
+    println!("  Storage:");
+    println!("    Base shards:  {} ({})", 
+        shards_with_data, 
+        utils::format_bytes(total_shard_size));
+    println!("    Delta segs:   {} ({})", 
+        delta_segments, 
+        utils::format_bytes(total_delta_size));
+    println!("    Total size:   {}", 
+        utils::format_bytes(total_shard_size + total_delta_size));
+    if max_segments_per_shard > 0 {
+        println!("    Max seg/shard: {}", max_segments_per_shard);
+    }
+    println!("    Strategy:     {}", compaction_strategy);
     println!();
-    println!("  Cached shards: {} / {}", cached_shards, cache_limit);
-    
+    println!("  Cache:");
+    println!("    Cached:       {} / {}", cached_shards, cache_limit);
     if total_lookups > 0 {
-        println!("  Cache hit rate: {:.1}%", cache_hit_rate * 100.0);
-        println!("  Total lookups:  {}", total_lookups);
+        println!("    Hit rate:      {:.1}%", cache_hit_rate * 100.0);
+        println!("    Total lookups: {}", utils::format_number(total_lookups as u64));
     }
     
     println!();
@@ -200,6 +228,194 @@ pub fn cmd_index_verify(dir: PathBuf, _verbose: bool) -> Result<()> {
     log::info!("✓ DID index is valid");
     log::info!("  Total DIDs:  {}", total_dids);
     log::info!("  Last bundle: {:06}", last_bundle);
+    
+    Ok(())
+}
+
+pub fn cmd_index_debug(dir: PathBuf, shard: Option<u8>, json: bool) -> Result<()> {
+    let manager = BundleManager::new(dir.clone())?;
+    
+    let did_index = manager.get_did_index();
+    let stats_map = did_index.read().unwrap().get_stats();
+    
+    if !stats_map.get("exists")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false) 
+    {
+        log::error!("DID index does not exist");
+        log::info!("Run: plcbundle-rs index build");
+        return Ok(());
+    }
+    
+    let shard_details = did_index.read().unwrap().get_shard_details(shard)?;
+    
+    if json {
+        let json_str = serde_json::to_string_pretty(&shard_details)?;
+        println!("{}", json_str);
+        return Ok(());
+    }
+    
+    if let Some(shard_num) = shard {
+        // Show single shard details
+        if let Some(detail) = shard_details.first() {
+            println!("\nShard {:02x} Details", shard_num);
+            println!("═══════════════════════════════════════\n");
+            
+            let did_count = detail.get("did_count")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let segment_count = detail.get("segment_count")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let base_exists = detail.get("base_exists")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let base_size = detail.get("base_size_bytes")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let total_segment_size = detail.get("total_segment_size_bytes")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let total_size = detail.get("total_size_bytes")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let next_segment_id = detail.get("next_segment_id")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            
+            println!("  DIDs:              {}", utils::format_number(did_count));
+            println!("  Base shard:        {} ({})", 
+                if base_exists { "exists" } else { "missing" },
+                utils::format_bytes(base_size));
+            println!("  Delta segments:    {}", segment_count);
+            println!("  Segment size:      {}", utils::format_bytes(total_segment_size));
+            println!("  Total size:        {}", utils::format_bytes(total_size));
+            println!("  Next segment ID:   {}", next_segment_id);
+            
+            if let Some(segments) = detail.get("segments").and_then(|v| v.as_array()) {
+                if !segments.is_empty() {
+                    println!("\n  Delta Segments:");
+                    println!("  ───────────────────────────────────────");
+                    for (idx, seg) in segments.iter().enumerate() {
+                        let file_name = seg.get("file_name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("?");
+                        let exists = seg.get("exists")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        let size = seg.get("size_bytes")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        let did_count = seg.get("did_count")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        let bundle_start = seg.get("bundle_start")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        let bundle_end = seg.get("bundle_end")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        
+                        println!("    [{:2}] {} {} ({})", 
+                            idx + 1,
+                            if exists { "✓" } else { "✗" },
+                            file_name,
+                            utils::format_bytes(size));
+                        println!("         Bundles: {:06}-{:06}, DIDs: {}, Locations: {}",
+                            bundle_start,
+                            bundle_end,
+                            utils::format_number(did_count),
+                            seg.get("location_count")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0));
+                    }
+                }
+            }
+            
+            println!();
+        }
+    } else {
+        // Show summary of all shards
+        println!("\nShard Summary");
+        println!("═══════════════════════════════════════\n");
+        
+        let mut shards_with_data = 0;
+        let mut shards_with_segments = 0;
+        let mut total_dids = 0u64;
+        let mut total_base_size = 0u64;
+        let mut total_segment_size = 0u64;
+        let mut max_segments = 0;
+        
+        for detail in &shard_details {
+            let did_count = detail.get("did_count")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let segment_count = detail.get("segment_count")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let base_size = detail.get("base_size_bytes")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let seg_size = detail.get("total_segment_size_bytes")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            
+            if did_count > 0 {
+                shards_with_data += 1;
+            }
+            if segment_count > 0 {
+                shards_with_segments += 1;
+            }
+            total_dids += did_count;
+            total_base_size += base_size;
+            total_segment_size += seg_size;
+            max_segments = max_segments.max(segment_count);
+        }
+        
+        println!("  Shards with data:    {} / {}", shards_with_data, shard_details.len());
+        println!("  Shards with segments: {} / {}", shards_with_segments, shard_details.len());
+        println!("  Total DIDs:          {}", utils::format_number(total_dids));
+        println!("  Base shard size:     {}", utils::format_bytes(total_base_size));
+        println!("  Delta segment size:  {}", utils::format_bytes(total_segment_size));
+        println!("  Total size:          {}", utils::format_bytes(total_base_size + total_segment_size));
+        println!("  Max segments/shard:   {}", max_segments);
+        println!();
+        
+        // Show top 10 shards by DID count
+        let mut sorted_shards: Vec<_> = shard_details.iter()
+            .filter(|d| d.get("did_count").and_then(|v| v.as_u64()).unwrap_or(0) > 0)
+            .collect();
+        sorted_shards.sort_by_key(|d| {
+            std::cmp::Reverse(d.get("did_count").and_then(|v| v.as_u64()).unwrap_or(0))
+        });
+        
+        if !sorted_shards.is_empty() {
+            println!("  Top 10 Shards by DID Count:");
+            println!("  ───────────────────────────────────────");
+            for (idx, detail) in sorted_shards.iter().take(10).enumerate() {
+                let shard_hex = detail.get("shard_hex")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("??");
+                let did_count = detail.get("did_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let segment_count = detail.get("segment_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let total_size = detail.get("total_size_bytes")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                
+                println!("    [{:2}] Shard {:2}: {} DIDs, {} segments, {}",
+                    idx + 1,
+                    shard_hex,
+                    utils::format_number(did_count),
+                    segment_count,
+                    utils::format_bytes(total_size));
+            }
+            println!();
+        }
+    }
     
     Ok(())
 }

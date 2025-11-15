@@ -751,11 +751,45 @@ impl Manager {
         let total = hits + misses;
         let hit_rate = if total > 0 { hits as f64 / total as f64 } else { 0.0 };
 
+        // Calculate shard statistics
+        let shards_with_data = config.shards.iter().filter(|s| s.did_count > 0).count();
+        let shards_with_segments = config.shards.iter().filter(|s| !s.segments.is_empty()).count();
+        let max_segments_per_shard = config.shards.iter().map(|s| s.segments.len()).max().unwrap_or(0);
+        let total_shard_size: u64 = (0..DID_SHARD_COUNT)
+            .map(|i| {
+                let shard_path = self.shard_path(i as u8);
+                if shard_path.exists() {
+                    fs::metadata(&shard_path).map(|m| m.len()).unwrap_or(0)
+                } else {
+                    0
+                }
+            })
+            .sum();
+        let total_delta_size: u64 = config.shards.iter()
+            .enumerate()
+            .flat_map(|(idx, s)| {
+                s.segments.iter().map(move |seg| (idx as u8, seg))
+            })
+            .map(|(shard_num, seg)| {
+                let path = self.segment_path(shard_num, &seg.file_name);
+                if path.exists() {
+                    fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+                } else {
+                    0
+                }
+            })
+            .sum();
+
         let mut stats = HashMap::new();
         stats.insert("exists".to_string(), json!(self.exists()));
         stats.insert("total_dids".to_string(), json!(config.total_dids));
         stats.insert("last_bundle".to_string(), json!(config.last_bundle));
         stats.insert("shard_count".to_string(), json!(config.shard_count));
+        stats.insert("shards_with_data".to_string(), json!(shards_with_data));
+        stats.insert("shards_with_segments".to_string(), json!(shards_with_segments));
+        stats.insert("max_segments_per_shard".to_string(), json!(max_segments_per_shard));
+        stats.insert("total_shard_size_bytes".to_string(), json!(total_shard_size));
+        stats.insert("total_delta_size_bytes".to_string(), json!(total_delta_size));
         stats.insert("cached_shards".to_string(), json!(cache.len()));
         stats.insert("cache_limit".to_string(), json!(self.max_cache));
         stats.insert("cache_hits".to_string(), json!(hits));
@@ -766,6 +800,75 @@ impl Manager {
         stats.insert("compaction_strategy".to_string(), json!(config.compaction_strategy));
 
         stats
+    }
+
+    // Get detailed shard information for debugging
+    pub fn get_shard_details(&self, shard_num: Option<u8>) -> Result<Vec<HashMap<String, serde_json::Value>>> {
+        use serde_json::json;
+        use std::collections::HashMap as Map;
+        
+        let config = self.config.read().unwrap();
+        let shards_to_check: Vec<u8> = if let Some(num) = shard_num {
+            vec![num]
+        } else {
+            (0..DID_SHARD_COUNT).map(|i| i as u8).collect()
+        };
+
+        let mut details = Vec::new();
+        for shard_num in shards_to_check {
+            let shard_meta = config.shards.get(shard_num as usize)
+                .cloned()
+                .unwrap_or_else(|| ShardMeta::new(shard_num));
+            
+            let shard_path = self.shard_path(shard_num);
+            let base_exists = shard_path.exists();
+            let base_size = if base_exists {
+                fs::metadata(&shard_path).map(|m| m.len()).unwrap_or(0)
+            } else {
+                0
+            };
+
+            let mut segment_details = Vec::new();
+            let mut total_segment_size = 0u64;
+            for seg in &shard_meta.segments {
+                let seg_path = self.segment_path(shard_num, &seg.file_name);
+                let seg_exists = seg_path.exists();
+                let seg_size = if seg_exists {
+                    fs::metadata(&seg_path).map(|m| m.len()).unwrap_or(0)
+                } else {
+                    0
+                };
+                total_segment_size += seg_size;
+                
+                segment_details.push(json!({
+                    "id": seg.id,
+                    "file_name": seg.file_name,
+                    "exists": seg_exists,
+                    "size_bytes": seg_size,
+                    "bundle_start": seg.bundle_start,
+                    "bundle_end": seg.bundle_end,
+                    "did_count": seg.did_count,
+                    "location_count": seg.location_count,
+                    "created_at": seg.created_at,
+                }));
+            }
+
+            let mut detail = Map::new();
+            detail.insert("shard".to_string(), json!(shard_num));
+            detail.insert("shard_hex".to_string(), json!(format!("{:02x}", shard_num)));
+            detail.insert("did_count".to_string(), json!(shard_meta.did_count));
+            detail.insert("next_segment_id".to_string(), json!(shard_meta.next_segment_id));
+            detail.insert("segment_count".to_string(), json!(shard_meta.segments.len()));
+            detail.insert("base_exists".to_string(), json!(base_exists));
+            detail.insert("base_size_bytes".to_string(), json!(base_size));
+            detail.insert("total_segment_size_bytes".to_string(), json!(total_segment_size));
+            detail.insert("total_size_bytes".to_string(), json!(base_size + total_segment_size));
+            detail.insert("segments".to_string(), json!(segment_details));
+            
+            details.push(detail);
+        }
+
+        Ok(details)
     }
 
     /// Compact pending delta segments. If `shards` is `None`, all shards are compacted.
