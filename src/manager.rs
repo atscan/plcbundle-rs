@@ -345,6 +345,45 @@ impl BundleManager {
         Ok(ops_with_loc)
     }
 
+    /// Get DID operations with locations and detailed statistics (for verbose logging)
+    pub fn get_did_operations_with_locations_and_stats(&self, did: &str) -> Result<(Vec<OperationWithLocation>, did_index::DIDLookupStats, u8, did_index::DIDLookupTimings, std::time::Duration)> {
+        use std::time::Instant;
+        
+        let index_start = Instant::now();
+        let did_index = self.did_index.read().unwrap();
+        let (locations, shard_stats, shard_num, lookup_timings) = did_index.get_did_locations_with_stats(did)?;
+        let _index_time = index_start.elapsed();
+        
+        let mut ops_with_loc = Vec::new();
+        let load_start = Instant::now();
+        for loc in locations {
+            let bundle_num = loc.bundle() as u32;
+            let position = loc.position() as usize;
+            
+            match self.get_operation(bundle_num, position) {
+                Ok(op) => {
+                    ops_with_loc.push(OperationWithLocation {
+                        operation: op,
+                        bundle: bundle_num,
+                        position,
+                        nullified: loc.nullified(),
+                    });
+                }
+                Err(e) => {
+                    log::warn!("Failed to load operation at bundle {} position {}: {}", bundle_num, position, e);
+                }
+            }
+        }
+        let load_time = load_start.elapsed();
+        
+        // Sort by global position (bundle * BUNDLE_SIZE + position)
+        ops_with_loc.sort_by_key(|owl| {
+            (owl.bundle as u64) * constants::BUNDLE_SIZE as u64 + owl.position as u64
+        });
+        
+        Ok((ops_with_loc, shard_stats, shard_num, lookup_timings, load_time))
+    }
+
     /// Get DID operations from mempool
     pub fn get_did_operations_from_mempool(&self, did: &str) -> Result<Vec<Operation>> {
         let mempool_guard = self.mempool.read().unwrap();

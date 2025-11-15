@@ -29,7 +29,7 @@ pub use manager::{BundleManager, LoadOptions, LoadResult, OperationResult, Query
                   BundleInfo, InfoFlags, RollbackSpec, RollbackPlan, RollbackResult,
                   WarmUpSpec, WarmUpStrategy, RebuildStats, DIDIndexStats, ManagerStats, ResolveResult,
                   RollbackFileStats};
-pub use did_index::DIDLookupStats;
+pub use did_index::{DIDLookupStats, DIDLookupTimings};
 pub use operations::{Operation, OperationFilter, OperationRequest, OperationWithLocation};
 pub use iterators::{QueryIterator, ExportIterator, RangeIterator};
 pub use resolver::{DIDDocument, DIDState, resolve_did_document, build_did_state, validate_did_format, format_audit_log, AuditLogEntry};

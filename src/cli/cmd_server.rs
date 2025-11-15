@@ -68,7 +68,7 @@ pub struct ServerCommand {
     #[arg(long)]
     pub resolver: bool,
 
-    /// Handle resolver URL (defaults to quickdid.smokesignal.tools if --resolver is enabled)
+    /// Handle resolver URL (defaults to quickdid.smokesignal.tools if not provided)
     #[arg(long)]
     pub handle_resolver: Option<String>,
 
@@ -126,17 +126,17 @@ fn run_server(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
 async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
     use std::net::SocketAddr;
 
-    // Initialize manager with handle resolver if configured
-    // If --resolver is enabled but --handle-resolver is not provided, use default
+    // Initialize manager with handle resolver
+    // Always use default resolver URL if not explicitly provided (DID endpoints always available)
     use plcbundle::constants;
     
-    let handle_resolver_url = if cmd.resolver && cmd.handle_resolver.is_none() {
+    let handle_resolver_url = if cmd.handle_resolver.is_none() {
         if cmd.verbose {
             log::debug!("[Resolver] Using default handle resolver: {}", constants::DEFAULT_HANDLE_RESOLVER_URL);
         }
         Some(constants::DEFAULT_HANDLE_RESOLVER_URL.to_string())
     } else {
-        if cmd.verbose && cmd.handle_resolver.is_some() {
+        if cmd.verbose {
             log::debug!("[Resolver] Using custom handle resolver: {}", cmd.handle_resolver.as_ref().unwrap());
         }
         cmd.handle_resolver.clone()
