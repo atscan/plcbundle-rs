@@ -2627,6 +2627,54 @@ impl BundleManager {
         }
         true
     }
+
+    // === Repository Management ===
+
+    /// Initialize a new repository with an empty index
+    ///
+    /// This is a static method that doesn't require an existing BundleManager.
+    /// Creates all necessary directories and an empty index file.
+    ///
+    /// # Arguments
+    /// * `directory` - Directory to initialize
+    /// * `origin` - PLC directory URL or origin identifier
+    /// * `force` - Whether to reinitialize if already exists
+    ///
+    /// # Returns
+    /// True if initialized (created new), False if already existed and force=false
+    pub fn init_repository<P: AsRef<std::path::Path>>(
+        directory: P,
+        origin: String,
+        force: bool,
+    ) -> Result<bool> {
+        Index::init(directory, origin, force)
+    }
+
+    /// Rebuild index from existing bundle files
+    ///
+    /// This is a static method that doesn't require an existing BundleManager.
+    /// It scans all .jsonl.zst files in the directory and reconstructs the index
+    /// by extracting embedded metadata from each bundle's skippable frame.
+    ///
+    /// # Arguments
+    /// * `directory` - Directory containing bundle files
+    /// * `origin` - Optional origin URL (auto-detected from first bundle if None)
+    /// * `progress_cb` - Optional progress callback (current, total)
+    ///
+    /// # Returns
+    /// The reconstructed index (already saved to disk)
+    pub fn rebuild_index<P: AsRef<std::path::Path>, F>(
+        directory: P,
+        origin: Option<String>,
+        progress_cb: Option<F>,
+    ) -> Result<Index>
+    where
+        F: Fn(usize, usize),
+    {
+        let index = Index::rebuild_from_bundles(&directory, origin, progress_cb)?;
+        index.save(&directory)?;
+        Ok(index)
+    }
 }
 
 // Supporting types moved here

@@ -3,7 +3,7 @@ use super::progress::ProgressBar;
 use super::utils::format_bytes;
 use anyhow::Result;
 use clap::Args;
-use plcbundle::Index;
+use plcbundle::BundleManager;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -61,8 +61,8 @@ pub fn run(cmd: RebuildCommand, dir: PathBuf) -> Result<()> {
     let progress_bar: Arc<Mutex<Option<ProgressBar>>> = Arc::new(Mutex::new(None));
     let progress_bar_clone = progress_bar.clone();
 
-    // Rebuild index using Index API
-    let index = Index::rebuild_from_bundles(
+    // Rebuild index using BundleManager API
+    let index = BundleManager::rebuild_index(
         &dir,
         cmd.origin,
         Some(move |current, total| {

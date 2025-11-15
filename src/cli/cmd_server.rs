@@ -130,12 +130,6 @@ fn run_server(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
 async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
     use std::net::SocketAddr;
 
-    // Print ASCII art banner at the very beginning
-    eprint!(
-        "{}\n",
-        plcbundle::server::get_ascii_art_banner(env!("CARGO_PKG_VERSION"))
-    );
-
     // Initialize manager with handle resolver
     // Always use default resolver URL if not explicitly provided (DID endpoints always available)
     use plcbundle::constants;
@@ -159,13 +153,17 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
     };
     let manager = if cmd.sync {
         // Sync mode can auto-init
-        BundleManager::with_handle_resolver(dir.clone(), handle_resolver_url.clone()).or_else(
-            |_| {
-                // Try to initialize if it doesn't exist using Index API
-                plcbundle::Index::init(&dir, cmd.plc.clone(), false)?;
+        match BundleManager::with_handle_resolver(dir.clone(), handle_resolver_url.clone()) {
+            Ok(mgr) => mgr,
+            Err(_) => {
+                // Repository doesn't exist, try to initialize
+                BundleManager::init_repository(&dir, cmd.plc.clone(), false)
+                    .context("Failed to initialize repository")?;
+                // Try again after initialization
                 BundleManager::with_handle_resolver(dir.clone(), handle_resolver_url.clone())
-            },
-        )?
+                    .context("Failed to open repository after initialization")?
+            }
+        }
     } else {
         // Read-only mode cannot auto-init
         BundleManager::with_handle_resolver(dir.clone(), handle_resolver_url).context(format!(
@@ -173,6 +171,12 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
             plcbundle::constants::BINARY_NAME
         ))?
     };
+
+    // Print ASCII art banner after repository validation succeeds
+    eprint!(
+        "{}\n",
+        plcbundle::server::get_ascii_art_banner(env!("CARGO_PKG_VERSION"))
+    );
 
     // Set verbose mode on manager
     let manager = manager.with_verbose(cmd.verbose);

@@ -18,7 +18,7 @@ pub struct StatusCommand {
 
 pub fn run(cmd: StatusCommand, dir: PathBuf) -> Result<()> {
     let manager = utils::create_manager(dir.clone(), false)?;
-    let index = Index::load(&dir)?;
+    let index = manager.get_index();
 
     match cmd.format {
         super::InfoFormat::Human => print_human_status(&manager, &index, &dir, cmd.detailed)?,

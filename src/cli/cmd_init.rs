@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Args;
-use plcbundle::constants;
+use plcbundle::{constants, BundleManager};
 use std::path::PathBuf;
 
 #[derive(Args)]
@@ -30,8 +30,6 @@ pub fn run(cmd: InitCommand) -> Result<()> {
         std::env::current_dir()?.join(&cmd.dir)
     };
 
-    let index_path = dir.join("plc_bundles.json");
-
     // Determine PLC Directory URL
     let plc_url = if let Some(plc) = cmd.plc {
         // Use provided --plc flag
@@ -44,8 +42,8 @@ pub fn run(cmd: InitCommand) -> Result<()> {
         prompt_plc_directory_url()?
     };
 
-    // Initialize repository using Index API
-    let initialized = plcbundle::Index::init(&dir, plc_url.clone(), cmd.force)?;
+    // Initialize repository using BundleManager API
+    let initialized = BundleManager::init_repository(&dir, plc_url.clone(), cmd.force)?;
 
     if !initialized {
         eprintln!("Repository already initialized at: {}", dir.display());
