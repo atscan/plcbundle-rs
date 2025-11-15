@@ -402,9 +402,16 @@ impl Manager {
             total_lookups: AtomicI64::new(0),
         };
 
-        // ALWAYS persist normalized config to fix corruption from old versions
+        // Try to persist normalized config to fix corruption from old versions
         // This ensures the shards array is properly saved to disk
-        manager.persist_config(&config)?;
+        // If this fails (e.g., read-only filesystem), we log a warning but continue
+        // since read-only operations don't need to write the config
+        if let Err(e) = manager.persist_config(&config) {
+            log::warn!(
+                "[DID Index] Failed to persist normalized config (read-only?): {}. Continuing with read-only access.",
+                e
+            );
+        }
 
         log::debug!(
             "[DID Index] Config loaded and normalized ({} shards)",
