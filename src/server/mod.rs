@@ -4,7 +4,21 @@
 #[cfg(feature = "server")]
 mod config;
 #[cfg(feature = "server")]
-mod handlers;
+mod error;
+#[cfg(feature = "server")]
+mod handle_bundle;
+#[cfg(feature = "server")]
+mod handle_debug;
+#[cfg(feature = "server")]
+mod handle_did;
+#[cfg(feature = "server")]
+mod handle_root;
+#[cfg(feature = "server")]
+mod handle_status;
+#[cfg(feature = "server")]
+mod routes;
+#[cfg(feature = "server")]
+mod utils;
 #[cfg(feature = "server")]
 mod websocket;
 
@@ -19,6 +33,14 @@ use std::time::Instant;
 
 #[cfg(feature = "server")]
 pub use config::ServerConfig;
+
+#[cfg(feature = "server")]
+#[derive(Clone)]
+pub struct ServerState {
+    pub manager: Arc<BundleManager>,
+    pub config: ServerConfig,
+    pub start_time: Instant,
+}
 
 #[cfg(feature = "server")]
 pub struct Server {
@@ -38,7 +60,7 @@ impl Server {
     }
 
     pub fn router(&self) -> Router {
-        handlers::create_router(
+        routes::create_router(
             Arc::clone(&self.manager),
             self.config.clone(),
             self.start_time,
@@ -51,7 +73,15 @@ impl Server {
 }
 
 #[cfg(feature = "server")]
-pub use handlers::ServerState;
+pub use handle_bundle::*;
+#[cfg(feature = "server")]
+pub use handle_debug::*;
+#[cfg(feature = "server")]
+pub use handle_did::*;
+#[cfg(feature = "server")]
+pub use handle_root::*;
+#[cfg(feature = "server")]
+pub use handle_status::*;
 
 /// Returns the ASCII art banner as a string
 #[cfg(feature = "server")]

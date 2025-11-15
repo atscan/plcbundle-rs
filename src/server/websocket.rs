@@ -1,7 +1,7 @@
 // WebSocket handler for streaming operations
 
 use crate::constants;
-use crate::server::handlers::ServerState;
+use crate::server::ServerState;
 use axum::extract::ws::Message;
 use axum::{
     body::Bytes,
