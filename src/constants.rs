@@ -71,6 +71,9 @@ pub const DID_INDEX_DIR: &str = ".plcbundle";
 /// DID index shards subdirectory name
 pub const DID_INDEX_SHARDS: &str = "shards";
 
+/// DID index delta segments subdirectory name
+pub const DID_INDEX_DELTAS: &str = "deltas";
+
 /// DID index config file name
 pub const DID_INDEX_CONFIG: &str = "config.json";
 

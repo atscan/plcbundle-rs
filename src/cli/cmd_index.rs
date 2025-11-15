@@ -122,6 +122,12 @@ pub fn cmd_index_stats(dir: PathBuf, json: bool) -> Result<()> {
     let total_lookups = stats_map.get("total_lookups")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
+    let delta_segments = stats_map.get("delta_segments")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let compaction_strategy = stats_map.get("compaction_strategy")
+        .and_then(|v| v.as_str())
+        .unwrap_or("manual");
     
     println!("\nDID Index Statistics");
     println!("════════════════════\n");
@@ -129,6 +135,8 @@ pub fn cmd_index_stats(dir: PathBuf, json: bool) -> Result<()> {
     println!("  Total DIDs:    {}", total_dids);
     println!("  Shard count:   {}", shard_count);
     println!("  Last bundle:   {:06}", last_bundle);
+    println!();
+    println!("  Delta segments: {} (strategy: {})", delta_segments, compaction_strategy);
     println!();
     println!("  Cached shards: {} / {}", cached_shards, cache_limit);
     
@@ -179,6 +187,55 @@ pub fn cmd_index_verify(dir: PathBuf, _verbose: bool) -> Result<()> {
     log::info!("✓ DID index is valid");
     log::info!("  Total DIDs:  {}", total_dids);
     log::info!("  Last bundle: {:06}", last_bundle);
+    
+    Ok(())
+}
+
+#[allow(dead_code)]
+pub fn cmd_index_compact(dir: PathBuf, shards: Option<Vec<u8>>) -> Result<()> {
+    let manager = BundleManager::new(dir.clone())?;
+    
+    let did_index = manager.get_did_index();
+    let stats_map = did_index.read().unwrap().get_stats();
+    
+    if !stats_map.get("exists")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false) 
+    {
+        log::error!("DID index does not exist");
+        log::info!("Run: plcbundle-rs index build");
+        return Ok(());
+    }
+    
+    let delta_segments_before = stats_map.get("delta_segments")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    
+    if delta_segments_before == 0 {
+        log::info!("No pending delta segments to compact");
+        return Ok(());
+    }
+    
+    log::info!("Compacting delta segments...");
+    if let Some(ref shard_list) = shards {
+        log::info!("  Targeting {} specific shard(s)", shard_list.len());
+    } else {
+        log::info!("  Compacting all shards");
+    }
+    
+    let start = Instant::now();
+    did_index.write().unwrap().compact_pending_segments(shards)?;
+    let elapsed = start.elapsed();
+    
+    let stats_map_after = did_index.read().unwrap().get_stats();
+    let delta_segments_after = stats_map_after.get("delta_segments")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    
+    log::info!("\n✓ Compaction complete in {:?}", elapsed);
+    log::info!("  Delta segments before: {}", delta_segments_before);
+    log::info!("  Delta segments after:  {}", delta_segments_after);
+    log::info!("  Segments compacted:    {}", delta_segments_before.saturating_sub(delta_segments_after));
     
     Ok(())
 }

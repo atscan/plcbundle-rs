@@ -67,8 +67,6 @@ pub fn run(cmd: SyncCommand) -> Result<()> {
             interval: cmd.interval,
             max_bundles: cmd.max_bundles,
             verbose: cmd.verbose,
-            enable_did_batching: false,
-            did_batch_size: 10,
             shutdown_rx: None,
         };
 
@@ -82,8 +80,6 @@ pub fn run(cmd: SyncCommand) -> Result<()> {
                 interval: cmd.interval,
                 max_bundles: 0,
                 verbose: cmd.verbose,
-                enable_did_batching: false,
-                did_batch_size: 10,
                 shutdown_rx: None,
             };
             

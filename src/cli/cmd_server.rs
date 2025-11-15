@@ -319,8 +319,6 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
                 interval,
                 max_bundles: max_bundles as usize,
                 verbose,
-                enable_did_batching: true,
-                did_batch_size: 10000,
                 shutdown_rx: Some(shutdown_rx_sync),
             };
 

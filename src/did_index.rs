@@ -71,6 +71,59 @@ pub struct Config {
     pub total_dids: i64,
     pub updated_at: String,
     pub last_bundle: i32,
+    #[serde(default)]
+    pub delta_segments_total: u64,
+    #[serde(default = "default_compaction_strategy")]
+    pub compaction_strategy: String,
+    #[serde(default = "default_shard_meta_vec")]
+    pub shards: Vec<ShardMeta>,
+}
+
+fn default_compaction_strategy() -> String {
+    "manual".to_string()
+}
+
+fn default_shard_meta_vec() -> Vec<ShardMeta> {
+    (0..DID_SHARD_COUNT as u8)
+        .map(ShardMeta::new)
+        .collect()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShardMeta {
+    pub shard: u8,
+    #[serde(default)]
+    pub did_count: u32,
+    #[serde(default = "default_next_segment_id")]
+    pub next_segment_id: u64,
+    #[serde(default)]
+    pub segments: Vec<DeltaSegmentMeta>,
+}
+
+impl ShardMeta {
+    fn new(shard: u8) -> Self {
+        ShardMeta {
+            shard,
+            did_count: 0,
+            next_segment_id: 1,
+            segments: Vec::new(),
+        }
+    }
+}
+
+fn default_next_segment_id() -> u64 {
+    1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeltaSegmentMeta {
+    pub id: u64,
+    pub file_name: String,
+    pub bundle_start: u32,
+    pub bundle_end: u32,
+    pub did_count: u32,
+    pub location_count: u32,
+    pub created_at: String,
 }
 
 impl Config {
@@ -82,6 +135,22 @@ impl Config {
             total_dids: 0,
             updated_at: chrono::Utc::now().to_rfc3339(),
             last_bundle: 0,
+            delta_segments_total: 0,
+            compaction_strategy: default_compaction_strategy(),
+            shards: default_shard_meta_vec(),
+        }
+    }
+
+    fn normalize(&mut self) {
+        if self.shards.len() != DID_SHARD_COUNT {
+            let mut normalized = default_shard_meta_vec();
+            for meta in self.shards.iter() {
+                let idx = meta.shard as usize;
+                if idx < normalized.len() {
+                    normalized[idx] = meta.clone();
+                }
+            }
+            self.shards = normalized;
         }
     }
 }
@@ -91,19 +160,36 @@ impl Config {
 // ============================================================================
 
 struct Shard {
-    _shard_num: u8,
-    mmap: Option<Mmap>,
-    _file: Option<File>,
+    #[allow(dead_code)]
+    shard_num: u8,
+    base: Option<Mmap>,
+    #[allow(dead_code)]
+    base_file: Option<File>,
+    segments: Vec<SegmentLayer>,
     last_used: AtomicU64,
     access_count: AtomicU64,
+}
+
+struct SegmentLayer {
+    #[allow(dead_code)]
+    meta: DeltaSegmentMeta,
+    mmap: Mmap,
+    _file: File,
+}
+
+impl SegmentLayer {
+    fn data(&self) -> &[u8] {
+        &self.mmap[..]
+    }
 }
 
 impl Shard {
     fn new_empty(shard_num: u8) -> Self {
         Shard {
-            _shard_num: shard_num,
-            mmap: None,
-            _file: None,
+            shard_num,
+            base: None,
+            base_file: None,
+            segments: Vec::new(),
             last_used: AtomicU64::new(unix_timestamp()),
             access_count: AtomicU64::new(0),
         }
@@ -114,9 +200,10 @@ impl Shard {
         let mmap = unsafe { MmapOptions::new().map(&file)? };
         
         Ok(Shard {
-            _shard_num: shard_num,
-            mmap: Some(mmap),
-            _file: Some(file),
+            shard_num,
+            base: Some(mmap),
+            base_file: Some(file),
+            segments: Vec::new(),
             last_used: AtomicU64::new(unix_timestamp()),
             access_count: AtomicU64::new(1),
         })
@@ -127,8 +214,17 @@ impl Shard {
         self.access_count.fetch_add(1, Ordering::Relaxed);
     }
 
-    fn data(&self) -> Option<&[u8]> {
-        self.mmap.as_ref().map(|m| &m[..])
+    fn base_data(&self) -> Option<&[u8]> {
+        self.base.as_ref().map(|m| &m[..])
+    }
+
+    fn segments(&self) -> &[SegmentLayer] {
+        &self.segments
+    }
+
+    fn with_segments(mut self, segments: Vec<SegmentLayer>) -> Self {
+        self.segments = segments;
+        self
     }
 }
 
@@ -147,6 +243,10 @@ impl ShardBuilder {
         }
     }
 
+    fn from_entries(entries: HashMap<String, Vec<OpLocation>>) -> Self {
+        ShardBuilder { entries }
+    }
+
     fn add(&mut self, identifier: String, loc: OpLocation) {
         self.entries.entry(identifier).or_insert_with(Vec::new).push(loc);
     }
@@ -156,19 +256,37 @@ impl ShardBuilder {
             self.entries.entry(id).or_insert_with(Vec::new).extend(locs);
         }
     }
+
+    fn total_locations(&self) -> usize {
+        self.entries.values().map(|v| v.len()).sum()
+    }
+
+    fn into_entries(self) -> HashMap<String, Vec<OpLocation>> {
+        self.entries
+    }
 }
 
 // ============================================================================
 // Stats structures
 // ============================================================================
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DIDLookupStats {
     pub shard_size: usize,
     pub total_entries: usize,
     pub prefix_narrowed_to: usize,
     pub binary_search_attempts: usize,
     pub locations_found: usize,
+}
+
+impl DIDLookupStats {
+    fn accumulate(&mut self, other: &DIDLookupStats) {
+        self.shard_size += other.shard_size;
+        self.total_entries += other.total_entries;
+        self.prefix_narrowed_to += other.prefix_narrowed_to;
+        self.binary_search_attempts += other.binary_search_attempts;
+        self.locations_found += other.locations_found;
+    }
 }
 
 // ============================================================================
@@ -179,11 +297,13 @@ pub struct Manager {
     _base_dir: PathBuf,
     index_dir: PathBuf,
     shard_dir: PathBuf,
+    delta_dir: PathBuf,
     config_path: PathBuf,
 
     // LRU cache for hot shards
     shard_cache: Arc<RwLock<HashMap<u8, Arc<Shard>>>>,
     max_cache: usize,
+    max_segments_per_shard: usize,
 
     config: Arc<RwLock<Config>>,
 
@@ -197,22 +317,26 @@ impl Manager {
     pub fn new(base_dir: PathBuf) -> Result<Self> {
         let index_dir = base_dir.join(constants::DID_INDEX_DIR);
         let shard_dir = index_dir.join(constants::DID_INDEX_SHARDS);
+        let delta_dir = index_dir.join(constants::DID_INDEX_DELTAS);
         let config_path = index_dir.join(constants::DID_INDEX_CONFIG);
 
-        let config = if config_path.exists() {
+        let mut config = if config_path.exists() {
             let data = fs::read_to_string(&config_path)?;
             serde_json::from_str(&data)?
         } else {
             Config::new()
         };
+        config.normalize();
 
         Ok(Manager {
             _base_dir: base_dir,
             index_dir,
             shard_dir,
+            delta_dir,
             config_path,
             shard_cache: Arc::new(RwLock::new(HashMap::new())),
             max_cache: 5,
+            max_segments_per_shard: 8,
             config: Arc::new(RwLock::new(config)),
             cache_hits: AtomicI64::new(0),
             cache_misses: AtomicI64::new(0),
@@ -234,11 +358,8 @@ impl Manager {
 
         shard.touch();
 
-        if let Some(data) = shard.data() {
-            Ok(self.search_shard(data, &identifier))
-        } else {
-            Ok(Vec::new())
-        }
+        let (locations, _) = self.search_shard_layers(&shard, &identifier);
+        Ok(locations)
     }
 
     // Get DID locations with detailed statistics
@@ -251,18 +372,8 @@ impl Manager {
 
         shard.touch();
 
-        if let Some(data) = shard.data() {
-            let (locations, stats) = self.search_shard_with_stats(data, &identifier);
-            Ok((locations, stats, shard_num))
-        } else {
-            Ok((Vec::new(), DIDLookupStats {
-                shard_size: 0,
-                total_entries: 0,
-                prefix_narrowed_to: 0,
-                binary_search_attempts: 0,
-                locations_found: 0,
-            }, shard_num))
-        }
+        let (locations, stats) = self.search_shard_layers(&shard, &identifier);
+        Ok((locations, stats, shard_num))
     }
 
     // Build index from scratch
@@ -280,6 +391,7 @@ impl Manager {
         log::info!("Starting DID index build from scratch for {} bundles", bundles.len());
 
         fs::create_dir_all(&self.shard_dir)?;
+        fs::remove_dir_all(&self.delta_dir).ok();
 
         // Pass 1: Accumulate entries in memory per shard
         // Use HashMap to avoid file descriptor limits
@@ -362,12 +474,14 @@ impl Manager {
         let mut total_dids = 0i64;
         let mut shards_with_data = 0usize;
         let mut total_shard_size = 0u64;
+        let mut per_shard_counts = vec![0u32; DID_SHARD_COUNT];
 
         for shard_num in 0..DID_SHARD_COUNT {
             let shard_start = Instant::now();
             let count = self.consolidate_shard(shard_num as u8)?;
 
             if count > 0 {
+                per_shard_counts[shard_num] = count as u32;
                 shards_with_data += 1;
                 total_dids += count;
 
@@ -405,7 +519,23 @@ impl Manager {
 
         // Update config
         let last_bundle = bundles.last().map(|(n, _)| *n as i32).unwrap_or(0);
-        self.update_config(total_dids, last_bundle)?;
+        self.modify_config(|config| {
+            config.total_dids = total_dids;
+            config.last_bundle = last_bundle;
+            config.delta_segments_total = 0;
+
+            if config.shards.len() != DID_SHARD_COUNT {
+                config.shards = default_shard_meta_vec();
+            }
+
+            for (idx, count) in per_shard_counts.iter().enumerate() {
+                if let Some(meta) = config.shards.get_mut(idx) {
+                    meta.did_count = *count;
+                    meta.segments.clear();
+                    meta.next_segment_id = 1;
+                }
+            }
+        })?;
 
         let total_duration = total_start.elapsed();
         log::info!(
@@ -509,39 +639,52 @@ impl Manager {
             valid_dids, shard_ops.len(), grouping_duration.as_secs_f64() * 1000.0
         );
 
-        // Update each shard
+        // Write delta segments per shard
         let update_start = Instant::now();
-        let mut delta_dids = 0i64;
+        let mut segments_written = 0usize;
+        let mut shards_compacted = 0usize;
 
         for (shard_num, new_ops) in shard_ops {
             let new_dids_in_shard = new_ops.len();
-            let delta = self.update_shard(shard_num, new_ops)?;
-            delta_dids += delta;
+            if let Some(meta) = self.write_delta_segment(shard_num, new_ops, bundle_num)? {
+                segments_written += 1;
+                log::debug!(
+                    "[DID Index]   Delta segment {:02x}/#{:016x}: {} DIDs, {} locations",
+                    shard_num,
+                    meta.id,
+                    new_dids_in_shard,
+                    meta.location_count
+                );
 
-            log::debug!(
-                "[DID Index]   Updated shard {:02x}: {} new entries, {} net new DIDs",
-                shard_num, new_dids_in_shard, delta
-            );
+                if self.auto_compact_if_needed(shard_num)? {
+                    shards_compacted += 1;
+                }
+            } else {
+                log::debug!(
+                    "[DID Index]   Skipped shard {:02x}: no valid DIDs to append",
+                    shard_num
+                );
+            }
         }
 
         let update_duration = update_start.elapsed();
 
-        // Update config
-        let config_start = Instant::now();
-        let config = self.config.read().unwrap();
-        let new_total = config.total_dids + delta_dids;
-        drop(config);
-        self.update_config(new_total, bundle_num as i32)?;
-        let config_duration = config_start.elapsed();
+        if segments_written == 0 {
+            self.modify_config(|cfg| {
+                cfg.last_bundle = bundle_num as i32;
+            })?;
+        }
 
         let total_duration = start.elapsed();
         log::debug!(
-            "[DID Index] ✓ Bundle {:06} indexed: {} ops → {} DIDs (+{} new) in {:.3}ms (group={:.1}ms, update={:.1}ms, config={:.1}ms)",
-            bundle_num, total_ops, new_total, delta_dids,
+            "[DID Index] ✓ Bundle {:06} indexed: {} ops, {} delta segments (compacted {}) in {:.3}ms (group={:.1}ms, delta={:.1}ms)",
+            bundle_num,
+            total_ops,
+            segments_written,
+            shards_compacted,
             total_duration.as_secs_f64() * 1000.0,
             grouping_duration.as_secs_f64() * 1000.0,
-            update_duration.as_secs_f64() * 1000.0,
-            config_duration.as_secs_f64() * 1000.0
+            update_duration.as_secs_f64() * 1000.0
         );
 
         Ok(())
@@ -579,15 +722,35 @@ impl Manager {
         stats.insert("cache_misses".to_string(), json!(misses));
         stats.insert("cache_hit_rate".to_string(), json!(hit_rate));
         stats.insert("total_lookups".to_string(), json!(self.total_lookups.load(Ordering::Relaxed)));
+        stats.insert("delta_segments".to_string(), json!(config.delta_segments_total));
+        stats.insert("compaction_strategy".to_string(), json!(config.compaction_strategy));
 
         stats
+    }
+
+    /// Compact pending delta segments. If `shards` is `None`, all shards are compacted.
+    pub fn compact_pending_segments(&self, shards: Option<Vec<u8>>) -> Result<()> {
+        match shards {
+            Some(list) if !list.is_empty() => {
+                for shard in list {
+                    self.compact_shard(shard)?;
+                }
+            }
+            _ => {
+                for shard in 0..DID_SHARD_COUNT {
+                    self.compact_shard(shard as u8)?;
+                }
+            }
+        }
+
+        Ok(())
     }
 
     // ========================================================================
     // Internal methods
     // ========================================================================
 
-    fn calculate_shard(&self, identifier: &str) -> u8 {
+    pub fn calculate_shard(&self, identifier: &str) -> u8 {
         use fnv::FnvHasher;
         use std::hash::Hasher;
         
@@ -595,6 +758,143 @@ impl Manager {
         hasher.write(identifier.as_bytes());
         let hash = hasher.finish() as u32;
         (hash % DID_SHARD_COUNT as u32) as u8
+    }
+
+    fn shard_path(&self, shard_num: u8) -> PathBuf {
+        self.shard_dir.join(format!("{:02x}.idx", shard_num))
+    }
+
+    fn shard_delta_dir(&self, shard_num: u8) -> PathBuf {
+        self.delta_dir.join(format!("{:02x}", shard_num))
+    }
+
+    fn segment_path(&self, shard_num: u8, file_name: &str) -> PathBuf {
+        self.shard_delta_dir(shard_num).join(file_name)
+    }
+
+    fn load_shard_segments(&self, shard_num: u8) -> Result<Vec<SegmentLayer>> {
+        let metas = {
+            let config = self.config.read().unwrap();
+            config
+                .shards
+                .get(shard_num as usize)
+                .map(|meta| meta.segments.clone())
+                .unwrap_or_default()
+        };
+
+        let mut layers = Vec::new();
+        for meta in metas {
+            let path = self.segment_path(shard_num, &meta.file_name);
+            if !path.exists() {
+                continue;
+            }
+
+            let file = match File::open(&path) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            let mmap = unsafe { MmapOptions::new().map(&file)? };
+            layers.push(SegmentLayer {
+                meta,
+                mmap,
+                _file: file,
+            });
+        }
+
+        Ok(layers)
+    }
+
+    fn auto_compact_if_needed(&self, shard_num: u8) -> Result<bool> {
+        let should_compact = {
+            let config = self.config.read().unwrap();
+            config
+                .shards
+                .get(shard_num as usize)
+                .map(|meta| meta.segments.len() >= self.max_segments_per_shard)
+                .unwrap_or(false)
+        };
+
+        if should_compact {
+            self.compact_shard(shard_num)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn compact_shard(&self, shard_num: u8) -> Result<()> {
+        use std::time::Instant;
+
+        let segments = {
+            let config = self.config.read().unwrap();
+            config
+                .shards
+                .get(shard_num as usize)
+                .map(|meta| meta.segments.clone())
+                .unwrap_or_default()
+        };
+
+        if segments.is_empty() {
+            return Ok(());
+        }
+
+        let start = Instant::now();
+
+        let mut segment_builder = ShardBuilder::new();
+        for meta in &segments {
+            let path = self.segment_path(shard_num, &meta.file_name);
+            if !path.exists() {
+                continue;
+            }
+            let data = fs::read(&path)?;
+            if data.len() >= 32 {
+                self.parse_shard_data(&data, &mut segment_builder)?;
+            }
+        }
+
+        let merged_entries = segment_builder.into_entries();
+        if merged_entries.is_empty() {
+            self.remove_segment_files(shard_num, &segments);
+            self.modify_config(|cfg| {
+                if let Some(meta) = cfg.shards.get_mut(shard_num as usize) {
+                    meta.segments.clear();
+                }
+                cfg.delta_segments_total = cfg.delta_segments_total.saturating_sub(segments.len() as u64);
+            })?;
+            return Ok(());
+        }
+
+        let delta = self.update_shard(shard_num, merged_entries)?;
+        self.remove_segment_files(shard_num, &segments);
+
+        self.modify_config(|cfg| {
+            if let Some(meta) = cfg.shards.get_mut(shard_num as usize) {
+                meta.segments.clear();
+                let updated = (meta.did_count as i64 + delta).max(0);
+                meta.did_count = updated as u32;
+            }
+            cfg.delta_segments_total = cfg.delta_segments_total.saturating_sub(segments.len() as u64);
+            cfg.total_dids = cfg.shards.iter().map(|m| m.did_count as i64).sum();
+        })?;
+
+        self.invalidate_shard_cache(shard_num);
+
+        let duration = start.elapsed();
+        log::info!(
+            "[DID Index] Compacted shard {:02x}: removed {} segments in {:.3}ms",
+            shard_num,
+            segments.len(),
+            duration.as_secs_f64() * 1000.0
+        );
+
+        Ok(())
+    }
+
+    fn remove_segment_files(&self, shard_num: u8, segments: &[DeltaSegmentMeta]) {
+        for meta in segments {
+            let path = self.segment_path(shard_num, &meta.file_name);
+            let _ = fs::remove_file(path);
+        }
     }
 
     fn load_shard(&self, shard_num: u8) -> Result<Arc<Shard>> {
@@ -610,13 +910,16 @@ impl Manager {
         self.cache_misses.fetch_add(1, Ordering::Relaxed);
 
         // Load from disk
-        let shard_path = self.shard_dir.join(format!("{:02x}.idx", shard_num));
-        
-        let shard = if shard_path.exists() {
-            Arc::new(Shard::load(shard_num, &shard_path)?)
+        let shard_path = self.shard_path(shard_num);
+        let mut shard = if shard_path.exists() {
+            Shard::load(shard_num, &shard_path)?
         } else {
-            Arc::new(Shard::new_empty(shard_num))
+            Shard::new_empty(shard_num)
         };
+
+        let segments = self.load_shard_segments(shard_num)?;
+        shard = shard.with_segments(segments);
+        let shard = Arc::new(shard);
 
         // Add to cache
         {
@@ -642,9 +945,26 @@ impl Manager {
         }
     }
 
-    fn search_shard(&self, data: &[u8], identifier: &str) -> Vec<OpLocation> {
-        let (locations, _) = self.search_shard_with_stats(data, identifier);
-        locations
+    fn search_shard_layers(&self, shard: &Shard, identifier: &str) -> (Vec<OpLocation>, DIDLookupStats) {
+        let mut combined = Vec::new();
+        let mut aggregated = DIDLookupStats::default();
+
+        if let Some(base) = shard.base_data() {
+            let (locations, stats) = self.search_shard_with_stats(base, identifier);
+            combined.extend(locations);
+            aggregated.accumulate(&stats);
+        }
+
+        for segment in shard.segments() {
+            let (locations, stats) = self.search_shard_with_stats(segment.data(), identifier);
+            combined.extend(locations);
+            aggregated.accumulate(&stats);
+        }
+
+        combined.sort_by_key(|loc| loc.as_u32());
+        aggregated.locations_found = combined.len();
+
+        (combined, aggregated)
     }
 
     fn search_shard_with_stats(&self, data: &[u8], identifier: &str) -> (Vec<OpLocation>, DIDLookupStats) {
@@ -895,7 +1215,7 @@ impl Manager {
         use std::time::Instant;
 
         let start = Instant::now();
-        let shard_path = self.shard_dir.join(format!("{:02x}.idx", shard_num));
+        let shard_path = self.shard_path(shard_num);
         let mut builder = ShardBuilder::new();
 
         // Read existing shard
@@ -927,7 +1247,7 @@ impl Manager {
 
         // Invalidate cache
         let cache_start = Instant::now();
-        self.shard_cache.write().unwrap().remove(&shard_num);
+        self.invalidate_shard_cache(shard_num);
         let cache_duration = cache_start.elapsed();
 
         let total_duration = start.elapsed();
@@ -946,20 +1266,81 @@ impl Manager {
         Ok(delta)
     }
 
+    fn write_delta_segment(
+        &self,
+        shard_num: u8,
+        new_ops: HashMap<String, Vec<OpLocation>>,
+        bundle_num: u32,
+    ) -> Result<Option<DeltaSegmentMeta>> {
+        if new_ops.is_empty() {
+            return Ok(None);
+        }
+
+        let builder = ShardBuilder::from_entries(new_ops);
+        if builder.entries.is_empty() {
+            return Ok(None);
+        }
+
+        let (segment_id, file_name) = {
+            let mut config = self.config.write().unwrap();
+            if config.shards.len() <= shard_num as usize {
+                config.shards = default_shard_meta_vec();
+            }
+            let shard_meta = config.shards.get_mut(shard_num as usize).unwrap();
+            let id = shard_meta.next_segment_id;
+            shard_meta.next_segment_id += 1;
+            (id, format!("seg_{id:016x}.idx"))
+        };
+
+        let segment_path = self.segment_path(shard_num, &file_name);
+        if let Some(parent) = segment_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        self.write_shard_to_path(shard_num, &builder, &segment_path, "delta")?;
+
+        let location_count = builder.total_locations() as u32;
+        let meta = DeltaSegmentMeta {
+            id: segment_id,
+            file_name: file_name.clone(),
+            bundle_start: bundle_num,
+            bundle_end: bundle_num,
+            did_count: builder.entries.len() as u32,
+            location_count,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        self.modify_config(|cfg| {
+            if let Some(shard_meta) = cfg.shards.get_mut(shard_num as usize) {
+                shard_meta.segments.push(meta.clone());
+            }
+            cfg.delta_segments_total += 1;
+            cfg.last_bundle = bundle_num as i32;
+        })?;
+
+        self.invalidate_shard_cache(shard_num);
+
+        Ok(Some(meta))
+    }
+
     fn write_shard(&self, shard_num: u8, builder: &ShardBuilder) -> Result<()> {
+        let target = self.shard_path(shard_num);
+        self.write_shard_to_path(shard_num, builder, &target, "base")
+    }
+
+    fn write_shard_to_path(&self, shard_num: u8, builder: &ShardBuilder, target: &Path, label: &str) -> Result<()> {
         use std::time::Instant;
 
         let start = Instant::now();
 
         // Ensure shard directory exists
-        if !self.shard_dir.exists() {
-            fs::create_dir_all(&self.shard_dir)?;
+        if let Some(parent) = target.parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent)?;
+            }
         }
 
-        let shard_path = self.shard_dir.join(format!("{:02x}.idx", shard_num));
-
         if builder.entries.is_empty() {
-            fs::write(&shard_path, &[])?;
+            fs::write(target, &[])?;
             return Ok(());
         }
 
@@ -1032,13 +1413,13 @@ impl Manager {
 
         // Write to disk
         let write_start = Instant::now();
-        fs::write(&shard_path, &buf)?;
+        fs::write(target, &buf)?;
         let write_duration = write_start.elapsed();
 
         let total_duration = start.elapsed();
 
         log::debug!(
-            "[DID Index] Write shard {:02x}: {} DIDs, {} locations, {} bytes in {:.3}ms (sort={:.1}ms, prefix={:.1}ms, offsets={:.1}ms, buffer={:.1}ms, disk={:.1}ms)",
+            "[DID Index] Write {label} shard {:02x}: {} DIDs, {} locations, {} bytes in {:.3}ms (sort={:.1}ms, prefix={:.1}ms, offsets={:.1}ms, buffer={:.1}ms, disk={:.1}ms)",
             shard_num, builder.entries.len(), total_locations, buf.len(),
             total_duration.as_secs_f64() * 1000.0,
             sort_duration.as_secs_f64() * 1000.0,
@@ -1105,17 +1486,33 @@ impl Manager {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn update_config(&self, total_dids: i64, last_bundle: i32) -> Result<()> {
+        self.modify_config(|config| {
+            config.total_dids = total_dids;
+            config.last_bundle = last_bundle;
+        })
+    }
+
+    fn modify_config<F>(&self, mutator: F) -> Result<()>
+    where
+        F: FnOnce(&mut Config),
+    {
         let mut config = self.config.write().unwrap();
-        config.total_dids = total_dids;
-        config.last_bundle = last_bundle;
+        mutator(&mut config);
         config.updated_at = chrono::Utc::now().to_rfc3339();
-        
+        self.persist_config(&config)
+    }
+
+    fn persist_config(&self, config: &Config) -> Result<()> {
         fs::create_dir_all(&self.index_dir)?;
-        let json = serde_json::to_string_pretty(&*config)?;
+        let json = serde_json::to_string_pretty(config)?;
         fs::write(&self.config_path, json)?;
-        
         Ok(())
+    }
+
+    fn invalidate_shard_cache(&self, shard_num: u8) {
+        self.shard_cache.write().unwrap().remove(&shard_num);
     }
 }
 
@@ -1141,4 +1538,60 @@ fn unix_timestamp() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn sample_did() -> &'static str {
+        "did:plc:abcdefghijklmnopqrstuvwx"
+    }
+
+    #[test]
+    fn delta_segments_round_trip_and_compact() {
+        let tmp = TempDir::new().expect("temp dir");
+        let manager = Manager::new(tmp.path().to_path_buf()).expect("manager");
+
+        let did = sample_did();
+        manager
+            .update_for_bundle(1, vec![(did.to_string(), false)])
+            .expect("bundle update");
+
+        let locations = manager.get_did_locations(did).expect("lookup");
+        assert_eq!(locations.len(), 1);
+        assert_eq!(locations[0].bundle(), 1);
+
+        {
+            let stats = manager.get_stats();
+            let delta_segments = stats.get("delta_segments")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            assert!(
+                delta_segments > 0,
+                "expected pending delta segments, got {}",
+                delta_segments
+            );
+        }
+
+        let shard = manager
+            .calculate_shard(&extract_identifier(did).unwrap());
+
+        manager
+            .compact_pending_segments(Some(vec![shard]))
+            .expect("compact");
+
+        {
+            let stats = manager.get_stats();
+            let delta_segments = stats.get("delta_segments")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            assert_eq!(delta_segments, 0, "expected no delta segments after compaction");
+        }
+
+        let after = manager.get_did_locations(did).expect("lookup after");
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].bundle(), 1);
+    }
 }

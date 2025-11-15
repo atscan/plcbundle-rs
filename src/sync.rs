@@ -281,10 +281,6 @@ pub enum SyncEvent {
         new_ops: usize,
         fetch_duration_ms: u64,
     },
-    DidIndexBatch {
-        start_bundle: u32,
-        end_bundle: u32,
-    },
     InitialSyncComplete {
         total_bundles: u32,
         mempool_count: usize,
@@ -305,8 +301,6 @@ pub struct SyncConfig {
     pub interval: Duration,
     pub max_bundles: usize,
     pub verbose: bool,
-    pub enable_did_batching: bool,
-    pub did_batch_size: u32,
     pub shutdown_rx: Option<tokio::sync::watch::Receiver<bool>>,
 }
 
@@ -318,8 +312,6 @@ impl Default for SyncConfig {
             interval: Duration::from_secs(60),
             max_bundles: 0,
             verbose: false,
-            enable_did_batching: false,
-            did_batch_size: 10,  // Update DID index every 10 bundles during initial sync
             shutdown_rx: None,
         }
     }
@@ -358,8 +350,6 @@ pub trait SyncLogger: Send + Sync {
         new_ops: usize,
         fetch_duration_ms: u64,
     );
-    
-    fn on_did_index_batch(&self, start_bundle: u32, end_bundle: u32);
     
     fn on_initial_sync_complete(&self, total_bundles: u32, mempool_count: usize, interval: Duration);
     
@@ -448,12 +438,6 @@ impl SyncLogger for ServerLogger {
         }
     }
     
-    fn on_did_index_batch(&self, start_bundle: u32, end_bundle: u32) {
-        if *self.verbose.lock().unwrap() {
-            eprintln!("[Sync] ✓ DID index updated for bundles {:06} to {:06}", start_bundle, end_bundle);
-        }
-    }
-    
     fn on_initial_sync_complete(&self, total_bundles: u32, mempool_count: usize, _interval: Duration) {
         eprintln!("[Sync] ✓ Initial sync complete ({} bundles synced)", total_bundles);
         if mempool_count > 0 {
@@ -508,10 +492,6 @@ impl SyncLogger for CliLogger {
         _fetch_duration_ms: u64,
     ) {
         // CLI doesn't show caught up events
-    }
-    
-    fn on_did_index_batch(&self, _start_bundle: u32, _end_bundle: u32) {
-        // CLI doesn't use DID batching
     }
     
     fn on_initial_sync_complete(&self, _total_bundles: u32, _mempool_count: usize, _interval: Duration) {
@@ -611,12 +591,6 @@ impl SyncManager {
                         *fetch_duration_ms,
                     );
                 }
-                SyncEvent::DidIndexBatch {
-                    start_bundle,
-                    end_bundle,
-                } => {
-                    logger.on_did_index_batch(*start_bundle, *end_bundle);
-                }
                 SyncEvent::InitialSyncComplete {
                     total_bundles,
                     mempool_count,
@@ -641,7 +615,7 @@ impl SyncManager {
                 }
             }
 
-            match self.manager.sync_next_bundle(&self.client, false).await {
+            match self.manager.sync_next_bundle(&self.client).await {
                 Ok(crate::manager::SyncResult::BundleCreated {
                     bundle_num,
                     mempool_count: _,
@@ -706,8 +680,6 @@ impl SyncManager {
 
         let mut total_synced = 0u32;
         let mut is_initial_sync = true;
-        let mut pending_did_index_start = 0u32;
-        let mut pending_did_index_count = 0u32;
 
         // Notify logger that sync is starting
         if let Some(logger) = &self.logger {
@@ -736,9 +708,8 @@ impl SyncManager {
                 }
             }
 
-            // Skip DID index updates during initial sync if batching is enabled
-            let skip_did_index = is_initial_sync && self.config.enable_did_batching;
-            let sync_result = self.manager.sync_next_bundle(&self.client, skip_did_index).await;
+            // Update DID index on every bundle (now fast with delta segments)
+            let sync_result = self.manager.sync_next_bundle(&self.client).await;
 
             match sync_result {
                 Ok(crate::manager::SyncResult::BundleCreated {
@@ -752,32 +723,6 @@ impl SyncManager {
                 }) => {
                     total_synced += 1;
                     let save_duration_ms = duration_ms.saturating_sub(fetch_duration_ms);
-
-                    // Track bundles pending DID index update during initial sync
-                    if is_initial_sync && self.config.enable_did_batching {
-                        if pending_did_index_start == 0 {
-                            pending_did_index_start = bundle_num;
-                        }
-                        pending_did_index_count += 1;
-
-                        // Update DID index every N bundles during initial sync
-                        // Use async version to avoid blocking the runtime (and HTTP server)
-                        if pending_did_index_count >= self.config.did_batch_size {
-                            let end_bundle = bundle_num;
-                            if let Err(e) = self.manager.batch_update_did_index_async(pending_did_index_start, end_bundle).await {
-                                self.handle_event(&SyncEvent::Error {
-                                    error: format!("Failed to batch update DID index: {}", e),
-                                });
-                            } else {
-                                self.handle_event(&SyncEvent::DidIndexBatch {
-                                    start_bundle: pending_did_index_start,
-                                    end_bundle,
-                                });
-                            }
-                            pending_did_index_start = 0;
-                            pending_did_index_count = 0;
-                        }
-                    }
 
                     self.handle_event(&SyncEvent::BundleCreated {
                         bundle_num,
@@ -852,26 +797,6 @@ impl SyncManager {
                     // mempool from a previous run but still have thousands of bundles to sync.
                     if is_initial_sync && total_synced > 0 {
                         is_initial_sync = false;
-
-                        // Update any remaining pending DID index bundles
-                        // Use async version to avoid blocking the runtime (and HTTP server)
-                        if self.config.enable_did_batching && pending_did_index_count > 0 {
-                            let last_bundle = self.manager.get_last_bundle();
-                            if pending_did_index_start > 0 && last_bundle >= pending_did_index_start {
-                                if let Err(e) = self.manager.batch_update_did_index_async(pending_did_index_start, last_bundle).await {
-                                    self.handle_event(&SyncEvent::Error {
-                                        error: format!("Failed to batch update DID index: {}", e),
-                                    });
-                                } else {
-                                    self.handle_event(&SyncEvent::DidIndexBatch {
-                                        start_bundle: pending_did_index_start,
-                                        end_bundle: last_bundle,
-                                    });
-                                }
-                            }
-                            pending_did_index_start = 0;
-                            pending_did_index_count = 0;
-                        }
 
                         self.handle_event(&SyncEvent::InitialSyncComplete {
                             total_bundles: total_synced,
