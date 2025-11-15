@@ -141,27 +141,31 @@ impl PLCClient {
 }
 
 /// Parse the Retry-After header from a response
-/// Returns the duration to wait before retrying, defaulting to 5 minutes if parsing fails
+/// Returns the duration to wait before retrying, capped at 60 seconds maximum
 fn parse_retry_after(response: &reqwest::Response) -> Duration {
+    const MAX_RETRY_SECONDS: u64 = 60;
+    
     if let Some(retry_after_header) = response.headers().get("retry-after") {
         if let Ok(retry_after_str) = retry_after_header.to_str() {
             // Try parsing as seconds (integer) - most common format
             if let Ok(seconds) = retry_after_str.parse::<u64>() {
-                return Duration::from_secs(seconds);
+                // Cap at maximum wait time
+                return Duration::from_secs(seconds.min(MAX_RETRY_SECONDS));
             }
 
             // Try parsing as HTTP date (RFC 7231)
             // httpdate::parse_http_date returns a SystemTime
             if let Ok(http_time) = httpdate::parse_http_date(retry_after_str) {
                 if let Ok(duration) = http_time.duration_since(std::time::SystemTime::now()) {
-                    return duration;
+                    // Cap at maximum wait time
+                    return duration.min(Duration::from_secs(MAX_RETRY_SECONDS));
                 }
             }
         }
     }
 
     // Default to 60 seconds if no header or parsing fails
-    Duration::from_secs(60)
+    Duration::from_secs(MAX_RETRY_SECONDS)
 }
 
 // Simple token bucket rate limiter
