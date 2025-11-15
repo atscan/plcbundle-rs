@@ -1,6 +1,6 @@
 // Simplified DID Index implementation matching Go version
 use crate::constants;
-use anyhow::Result;
+use anyhow::{Result, Context};
 use memmap2::{Mmap, MmapOptions};
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -1740,7 +1740,17 @@ impl Manager {
     fn persist_config(&self, config: &Config) -> Result<()> {
         fs::create_dir_all(&self.index_dir)?;
         let json = serde_json::to_string_pretty(config)?;
-        fs::write(&self.config_path, json)?;
+        
+        // Atomic write: write to temp file first, then rename
+        // This ensures the config file is never partially written, even if process is killed
+        let temp_path = self.config_path.with_extension("json.tmp");
+        fs::write(&temp_path, json)
+            .with_context(|| format!("Failed to write temp config to: {}", temp_path.display()))?;
+        
+        // Atomic rename - this is guaranteed to be atomic on most filesystems
+        fs::rename(&temp_path, &self.config_path)
+            .with_context(|| format!("Failed to rename temp config to: {}", self.config_path.display()))?;
+        
         Ok(())
     }
 

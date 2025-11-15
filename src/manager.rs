@@ -21,6 +21,8 @@ pub enum SyncResult {
         mempool_count: usize,
         duration_ms: u64,
         fetch_duration_ms: u64,
+        bundle_save_ms: u64,
+        index_ms: u64,
         fetch_requests: usize,
         hash: String,
         age: String,
@@ -1217,6 +1219,10 @@ impl BundleManager {
         let mempool_count = self.get_mempool_stats().map(|s| s.count).unwrap_or(0);
         let total_duration_ms = (fetch_total_duration + save_duration).as_millis() as u64;
         let fetch_duration_ms = fetch_total_duration.as_millis() as u64;
+        
+        // Calculate separate timings: bundle save (serialize + compress + hash) vs index (did_index + index_write)
+        let bundle_save_ms = (serialize_time + compress_time + hash_time).as_millis() as u64;
+        let index_ms = (did_index_time + index_write_time).as_millis() as u64;
 
         // Only log detailed info in verbose mode
         if *self.verbose.lock().unwrap() {
@@ -1232,6 +1238,8 @@ impl BundleManager {
             mempool_count,
             duration_ms: total_duration_ms,
             fetch_duration_ms,
+            bundle_save_ms,
+            index_ms,
             fetch_requests: fetch_num,
             hash: short_hash,
             age: age_str,
@@ -1558,11 +1566,21 @@ impl BundleManager {
         };
         
         // Serialize and write index in blocking task to avoid blocking async runtime
+        // Use atomic write (temp file + rename) to prevent corruption on shutdown
         let index_path_clone = index_path.clone();
         tokio::task::spawn_blocking(move || {
             let index_json = serde_json::to_string_pretty(&index_json)?;
-            std::fs::write(&index_path_clone, index_json)
-                .with_context(|| format!("Failed to write index to: {}", index_path_clone.display()))?;
+            
+            // Atomic write: write to temp file first, then rename
+            // This ensures the index file is never partially written, even if process is killed
+            let temp_path = index_path_clone.with_extension("json.tmp");
+            std::fs::write(&temp_path, index_json)
+                .with_context(|| format!("Failed to write temp index to: {}", temp_path.display()))?;
+            
+            // Atomic rename - this is guaranteed to be atomic on most filesystems
+            std::fs::rename(&temp_path, &index_path_clone)
+                .with_context(|| format!("Failed to rename temp index to: {}", index_path_clone.display()))?;
+            
             Ok::<(), anyhow::Error>(())
         })
         .await

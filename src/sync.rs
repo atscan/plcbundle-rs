@@ -281,7 +281,8 @@ pub enum SyncEvent {
         hash: String,
         age: String,
         fetch_duration_ms: u64,
-        save_duration_ms: u64,
+        bundle_save_ms: u64,
+        index_ms: u64,
         total_duration_ms: u64,
         fetch_requests: usize,
     },
@@ -350,7 +351,8 @@ pub trait SyncLogger: Send + Sync {
         hash: &str,
         age: &str,
         fetch_duration_ms: u64,
-        save_duration_ms: u64,
+        bundle_save_ms: u64,
+        index_ms: u64,
         total_duration_ms: u64,
         fetch_requests: usize,
     );
@@ -422,14 +424,15 @@ impl SyncLogger for ServerLogger {
         hash: &str,
         age: &str,
         fetch_duration_ms: u64,
-        save_duration_ms: u64,
+        bundle_save_ms: u64,
+        index_ms: u64,
         _total_duration_ms: u64,
         fetch_requests: usize,
     ) {
         let fetch_secs = fetch_duration_ms as f64 / 1000.0;
         
-        eprintln!("[INFO] → Bundle {:06} | {} | fetch: {:.3}s ({} reqs) | save: {}ms | {}",
-            bundle_num, hash, fetch_secs, fetch_requests, save_duration_ms, age);
+        eprintln!("[INFO] → Bundle {:06} | {} | fetch: {:.3}s ({} reqs) | save: {}ms | index: {}ms | {}",
+            bundle_num, hash, fetch_secs, fetch_requests, bundle_save_ms, index_ms, age);
     }
     
     fn on_caught_up(
@@ -487,7 +490,8 @@ impl SyncLogger for CliLogger {
         _hash: &str,
         _age: &str,
         _fetch_duration_ms: u64,
-        _save_duration_ms: u64,
+        _bundle_save_ms: u64,
+        _index_ms: u64,
         _total_duration_ms: u64,
         _fetch_requests: usize,
     ) {
@@ -574,7 +578,8 @@ impl SyncManager {
                     hash,
                     age,
                     fetch_duration_ms,
-                    save_duration_ms,
+                    bundle_save_ms,
+                    index_ms,
                     total_duration_ms,
                     fetch_requests,
                 } => {
@@ -583,7 +588,8 @@ impl SyncManager {
                         hash,
                         age,
                         *fetch_duration_ms,
-                        *save_duration_ms,
+                        *bundle_save_ms,
+                        *index_ms,
                         *total_duration_ms,
                         *fetch_requests,
                     );
@@ -631,19 +637,21 @@ impl SyncManager {
                     mempool_count: _,
                     duration_ms,
                     fetch_duration_ms,
+                    bundle_save_ms,
+                    index_ms,
                     fetch_requests,
                     hash,
                     age,
                 }) => {
                     synced += 1;
-                    let save_duration_ms = duration_ms.saturating_sub(fetch_duration_ms);
 
                     self.handle_event(&SyncEvent::BundleCreated {
                         bundle_num,
                         hash,
                         age,
                         fetch_duration_ms,
-                        save_duration_ms,
+                        bundle_save_ms,
+                        index_ms,
                         total_duration_ms: duration_ms,
                         fetch_requests,
                     });
@@ -734,19 +742,21 @@ impl SyncManager {
                     mempool_count: _,
                     duration_ms,
                     fetch_duration_ms,
+                    bundle_save_ms,
+                    index_ms,
                     fetch_requests,
                     hash,
                     age,
                 }) => {
                     total_synced += 1;
-                    let save_duration_ms = duration_ms.saturating_sub(fetch_duration_ms);
 
                     self.handle_event(&SyncEvent::BundleCreated {
                         bundle_num,
                         hash,
                         age,
                         fetch_duration_ms,
-                        save_duration_ms,
+                        bundle_save_ms,
+                        index_ms,
                         total_duration_ms: duration_ms,
                         fetch_requests,
                     });
