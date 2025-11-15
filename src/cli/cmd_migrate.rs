@@ -154,7 +154,10 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
     eprintln!("Migrating...\n");
 
     let start = Instant::now();
-    let progress = ProgressBar::new(needs_migration.len());
+
+    // Calculate total bytes to process
+    let total_bytes: u64 = needs_migration.iter().map(|info| info.old_size).sum();
+    let progress = ProgressBar::with_bytes(needs_migration.len(), total_bytes);
 
     let mut success = 0;
     let mut failed = 0;
@@ -173,6 +176,7 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
     use std::sync::{Arc, Mutex};
 
     let progress_arc = Arc::new(Mutex::new(0usize));
+    let bytes_processed_arc = Arc::new(Mutex::new(0u64));
     let results: Vec<_> = if workers > 1 {
         // Parallel mode: process in chunks to maintain some ordering
         let chunk_size = workers * 2; // Process 2x workers at a time for better pipelining
@@ -184,11 +188,19 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
                 chunk.par_iter().map(|info| {
                     let result = manager.migrate_bundle(info.bundle_number);
 
-                    // Update progress
+                    // Update progress with bytes
                     {
                         let mut prog = progress_arc.lock().unwrap();
                         *prog += 1;
-                        progress.set(*prog);
+                        let count = *prog;
+                        drop(prog);
+
+                        let mut bytes = bytes_processed_arc.lock().unwrap();
+                        *bytes += info.old_size;
+                        let total_bytes = *bytes;
+                        drop(bytes);
+
+                        progress.set_with_bytes(count, total_bytes);
                     }
 
                     (info, result)
@@ -202,7 +214,15 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
 
             let mut prog = progress_arc.lock().unwrap();
             *prog += 1;
-            progress.set(*prog);
+            let count = *prog;
+            drop(prog);
+
+            let mut bytes = bytes_processed_arc.lock().unwrap();
+            *bytes += info.old_size;
+            let total_bytes = *bytes;
+            drop(bytes);
+
+            progress.set_with_bytes(count, total_bytes);
 
             (info, result)
         }).collect()

@@ -1401,9 +1401,9 @@ impl BundleManager {
         let compressed_frames;
         let content_hash;
 
-        // Compress operations to frames
+        // Compress operations to frames using parallel compression
         let compress_result = {
-            let result = crate::bundle_format::compress_operations_to_frames(&operations)?;
+            let result = crate::bundle_format::compress_operations_to_frames_parallel(&operations)?;
             serialize_time = std::time::Duration::from_secs_f64(result.serialize_time_ms / 1000.0);
             compress_time = std::time::Duration::from_secs_f64(result.compress_time_ms / 1000.0);
             result
@@ -1728,8 +1728,8 @@ impl BundleManager {
         let unique_dids: HashSet<String> = operations.iter().map(|op| op.did.clone()).collect();
         let did_count = unique_dids.len() as u32;
 
-        // Compress operations into frames using library function
-        let frame_result = crate::bundle_format::compress_operations_to_frames(&operations)?;
+        // Compress operations into frames using parallel compression
+        let frame_result = crate::bundle_format::compress_operations_to_frames_parallel(&operations)?;
         let compressed_size = frame_result.compressed_size;
         let uncompressed_size = frame_result.uncompressed_size;
 

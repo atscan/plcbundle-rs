@@ -193,8 +193,98 @@ pub struct FrameCompressionResult {
     pub compress_time_ms: f64,
 }
 
-/// Compress operations into multiple frames
-/// 
+/// Compress operations into multiple frames using parallel compression
+///
+/// Each frame contains FRAME_SIZE operations (except possibly the last frame).
+/// Returns the compressed frames and their relative offsets.
+/// Uses rayon to compress multiple frames in parallel for better performance.
+pub fn compress_operations_to_frames_parallel(operations: &[crate::operations::Operation]) -> anyhow::Result<FrameCompressionResult> {
+    use rayon::prelude::*;
+    use std::time::Instant;
+
+    let num_frames = (operations.len() + constants::FRAME_SIZE - 1) / constants::FRAME_SIZE;
+
+    // Process all frames in parallel
+    let frame_results: Vec<_> = (0..num_frames)
+        .into_par_iter()
+        .map(|frame_idx| {
+            let frame_start = frame_idx * constants::FRAME_SIZE;
+            let frame_end = (frame_start + constants::FRAME_SIZE).min(operations.len());
+            let frame_ops = &operations[frame_start..frame_end];
+
+            // Serialize frame to JSONL
+            let serialize_start = Instant::now();
+            let mut frame_data = Vec::new();
+            for op in frame_ops {
+                let json = if let Some(raw) = &op.raw_json {
+                    raw.clone()
+                } else {
+                    sonic_rs::to_string(op)?
+                };
+                frame_data.extend_from_slice(json.as_bytes());
+                frame_data.push(b'\n');
+            }
+            let serialize_time = serialize_start.elapsed();
+            let uncompressed_size = frame_data.len() as u64;
+
+            // Compress frame with content size and checksum
+            let compress_start = Instant::now();
+            let mut compressed_frame = Vec::new();
+            {
+                let mut encoder = zstd::Encoder::new(&mut compressed_frame, constants::ZSTD_COMPRESSION_LEVEL)?;
+                encoder.set_pledged_src_size(Some(frame_data.len() as u64))?;
+                encoder.include_contentsize(true)?;
+                encoder.include_checksum(true)?;  // Enable XXH64 checksum
+                std::io::copy(&mut frame_data.as_slice(), &mut encoder)?;
+                encoder.finish()?;
+            }
+            let compress_time = compress_start.elapsed();
+
+            Ok::<_, anyhow::Error>((compressed_frame, uncompressed_size, serialize_time, compress_time))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Calculate offsets sequentially (must be done in order)
+    let mut frame_offsets = Vec::with_capacity(num_frames + 1);
+    let mut compressed_frames: Vec<Vec<u8>> = Vec::with_capacity(num_frames);
+    let mut total_uncompressed = 0u64;
+    let mut total_serialize_time = std::time::Duration::ZERO;
+    let mut total_compress_time = std::time::Duration::ZERO;
+
+    for (compressed_frame, uncompressed_size, serialize_time, compress_time) in frame_results {
+        let offset = if frame_offsets.is_empty() {
+            0i64
+        } else {
+            let prev_frame_size = compressed_frames.last().unwrap().len() as i64;
+            frame_offsets.last().unwrap() + prev_frame_size
+        };
+        frame_offsets.push(offset);
+        compressed_frames.push(compressed_frame);
+        total_uncompressed += uncompressed_size;
+        total_serialize_time += serialize_time;
+        total_compress_time += compress_time;
+    }
+
+    // Add final offset (end of last frame)
+    if let Some(last_frame) = compressed_frames.last() {
+        let final_offset = frame_offsets.last().unwrap() + last_frame.len() as i64;
+        frame_offsets.push(final_offset);
+    }
+
+    let compressed_size: u64 = compressed_frames.iter().map(|f| f.len() as u64).sum();
+
+    Ok(FrameCompressionResult {
+        compressed_frames,
+        frame_offsets,
+        uncompressed_size: total_uncompressed,
+        compressed_size,
+        serialize_time_ms: total_serialize_time.as_secs_f64() * 1000.0,
+        compress_time_ms: total_compress_time.as_secs_f64() * 1000.0,
+    })
+}
+
+/// Compress operations into multiple frames (sequential version)
+///
 /// Each frame contains FRAME_SIZE operations (except possibly the last frame).
 /// Returns the compressed frames and their relative offsets.
 pub fn compress_operations_to_frames(operations: &[crate::operations::Operation]) -> anyhow::Result<FrameCompressionResult> {
@@ -230,7 +320,7 @@ pub fn compress_operations_to_frames(operations: &[crate::operations::Operation]
         total_serialize_time += serialize_start.elapsed();
         total_uncompressed += frame_data.len() as u64;
 
-        // Compress frame with content size in header and checksum
+        // Compress frame with content size and checksum
         let compress_start = Instant::now();
         let mut compressed_frame = Vec::new();
         {
@@ -409,6 +499,47 @@ mod tests {
         println!();
         println!("Compare with: zstd -l /tmp/test_with*.zst /tmp/test_without*.zst");
         println!("Expected: New file should show 'Uncompressed' size and 'XXH64' check");
+    }
+
+    #[test]
+    fn test_parallel_compression_matches_sequential() {
+        use crate::operations::Operation;
+
+        // Create test operations
+        let mut operations = Vec::new();
+        for i in 0..250 {  // Multiple frames (250 ops = 3 frames with FRAME_SIZE=100)
+            operations.push(Operation {
+                did: format!("did:plc:test{}", i),
+                operation: serde_json::json!({
+                    "type": "create",
+                    "data": format!("test data {}", i),
+                }),
+                cid: Some(format!("cid{}", i)),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                nullified: false,
+                extra: serde_json::Value::Object(serde_json::Map::new()),
+                raw_json: None,
+            });
+        }
+
+        // Compress using both methods
+        let result_sequential = compress_operations_to_frames(&operations).unwrap();
+        let result_parallel = compress_operations_to_frames_parallel(&operations).unwrap();
+
+        // Verify results match
+        assert_eq!(result_sequential.compressed_frames.len(), result_parallel.compressed_frames.len());
+        assert_eq!(result_sequential.frame_offsets, result_parallel.frame_offsets);
+        assert_eq!(result_sequential.uncompressed_size, result_parallel.uncompressed_size);
+        assert_eq!(result_sequential.compressed_size, result_parallel.compressed_size);
+
+        // Verify compressed frames are identical
+        for (seq_frame, par_frame) in result_sequential.compressed_frames.iter().zip(result_parallel.compressed_frames.iter()) {
+            assert_eq!(seq_frame, par_frame, "Compressed frames must be identical");
+        }
+
+        println!("✓ Parallel compression produces identical output to sequential");
+        println!("  Frames: {}", result_parallel.compressed_frames.len());
+        println!("  Compressed size: {} bytes", result_parallel.compressed_size);
     }
 
     #[test]
