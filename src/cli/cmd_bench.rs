@@ -1,3 +1,4 @@
+use super::progress::ProgressBar;
 use super::utils::format_number;
 use anyhow::Result;
 use clap::Args;
@@ -252,15 +253,15 @@ fn bench_bundle_load(
     let mut timings = Vec::with_capacity(iterations);
     let mut total_bytes = 0u64;
 
+    let pb = if interactive {
+        Some(ProgressBar::new(iterations))
+    } else {
+        None
+    };
+
     for (i, &bundle_num) in bundles.iter().enumerate() {
-        if interactive && i % 10 == 0 {
-            eprint!(
-                "\r  Progress: {}/{} ({:.0}%)",
-                i,
-                iterations,
-                (i as f64 / iterations as f64) * 100.0
-            );
-            std::io::stderr().flush().ok();
+        if let Some(ref pb) = pb {
+            pb.set(i + 1);
         }
 
         if let Some(size) = bundle_compressed_size(manager, bundle_num)? {
@@ -272,8 +273,8 @@ fn bench_bundle_load(
         timings.push(start.elapsed().as_secs_f64() * 1000.0);
     }
 
-    if interactive {
-        eprintln!("\r  Progress: {}/{} (100%)", iterations, iterations);
+    if let Some(ref pb) = pb {
+        pb.finish();
     }
 
     let unique_bundles = bundles
@@ -323,22 +324,24 @@ fn bench_bundle_decompress(
     let mut timings = Vec::with_capacity(iterations);
     let mut total_bytes = 0u64;
 
-    for (i, &bundle_num) in bundles.iter().enumerate() {
-        if interactive && i % 10 == 0 {
-            eprint!(
-                "\r  Progress: {}/{} ({:.0}%)",
-                i,
-                iterations,
-                (i as f64 / iterations as f64) * 100.0
-            );
-            std::io::stderr().flush().ok();
-        }
+    let pb = if interactive {
+        Some(ProgressBar::new(iterations))
+    } else {
+        None
+    };
 
+    let mut processed = 0;
+    for (i, &bundle_num) in bundles.iter().enumerate() {
         let size = match bundle_compressed_size(manager, bundle_num)? {
             Some(size) => size,
             None => continue,
         };
         total_bytes += size;
+        processed += 1;
+
+        if let Some(ref pb) = pb {
+            pb.set(processed);
+        }
 
         let start = Instant::now();
         let file = manager.stream_bundle_raw(bundle_num)?;
@@ -348,8 +351,8 @@ fn bench_bundle_decompress(
         timings.push(start.elapsed().as_secs_f64() * 1000.0);
     }
 
-    if interactive {
-        eprintln!("\r  Progress: {}/{} (100%)", iterations, iterations);
+    if let Some(ref pb) = pb {
+        pb.finish();
     }
 
     let unique_bundles = bundles
@@ -408,15 +411,16 @@ fn bench_operation_read(
 
     // Benchmark - random bundle and random position each iteration
     let mut timings = Vec::with_capacity(iterations);
+    
+    let pb = if interactive {
+        Some(ProgressBar::new(iterations))
+    } else {
+        None
+    };
+
     for i in 0..iterations {
-        if interactive && i % 10 == 0 {
-            eprint!(
-                "\r  Progress: {}/{} ({:.0}%)",
-                i,
-                iterations,
-                (i as f64 / iterations as f64) * 100.0
-            );
-            std::io::stderr().flush().ok();
+        if let Some(ref pb) = pb {
+            pb.set(i + 1);
         }
 
         let (bundle_num, op_count) = bundle_op_counts[i % bundle_op_counts.len()];
@@ -431,8 +435,8 @@ fn bench_operation_read(
         timings.push(start.elapsed().as_secs_f64() * 1000.0);
     }
 
-    if interactive {
-        eprintln!("\r  Progress: {}/{} (100%)", iterations, iterations);
+    if let Some(ref pb) = pb {
+        pb.finish();
     }
 
     let unique_bundles = bundle_op_counts
@@ -476,15 +480,16 @@ fn bench_did_index_lookup(
 
     // Benchmark - different DID each iteration
     let mut timings = Vec::with_capacity(iterations);
+    
+    let pb = if interactive {
+        Some(ProgressBar::new(iterations))
+    } else {
+        None
+    };
+
     for i in 0..iterations {
-        if interactive && i % 10 == 0 {
-            eprint!(
-                "\r  Progress: {}/{} ({:.0}%)",
-                i,
-                iterations,
-                (i as f64 / iterations as f64) * 100.0
-            );
-            std::io::stderr().flush().ok();
+        if let Some(ref pb) = pb {
+            pb.set(i + 1);
         }
 
         let did = &dids[i % dids.len()];
@@ -493,8 +498,8 @@ fn bench_did_index_lookup(
         timings.push(start.elapsed().as_secs_f64() * 1000.0);
     }
 
-    if interactive {
-        eprintln!("\r  Progress: {}/{} (100%)", iterations, iterations);
+    if let Some(ref pb) = pb {
+        pb.finish();
     }
 
     Ok(calculate_stats("DID Index Lookup", iterations, timings))
@@ -527,15 +532,16 @@ fn bench_did_resolution(
     // Benchmark - different DID each iteration
     manager.clear_caches();
     let mut timings = Vec::with_capacity(iterations);
+    
+    let pb = if interactive {
+        Some(ProgressBar::new(iterations))
+    } else {
+        None
+    };
+
     for i in 0..iterations {
-        if interactive && i % 10 == 0 {
-            eprint!(
-                "\r  Progress: {}/{} ({:.0}%)",
-                i,
-                iterations,
-                (i as f64 / iterations as f64) * 100.0
-            );
-            std::io::stderr().flush().ok();
+        if let Some(ref pb) = pb {
+            pb.set(i + 1);
         }
 
         let did = &dids[i % dids.len()];
@@ -544,8 +550,8 @@ fn bench_did_resolution(
         timings.push(start.elapsed().as_secs_f64() * 1000.0);
     }
 
-    if interactive {
-        eprintln!("\r  Progress: {}/{} (100%)", iterations, iterations);
+    if let Some(ref pb) = pb {
+        pb.finish();
     }
 
     Ok(calculate_stats(
@@ -634,15 +640,15 @@ fn bench_sequential_access(
     let mut timings = Vec::with_capacity(count);
     let mut total_bytes = 0u64;
 
+    let pb = if interactive {
+        Some(ProgressBar::new(count))
+    } else {
+        None
+    };
+
     for i in 0..count {
-        if interactive && i % 5 == 0 {
-            eprint!(
-                "\r  Progress: {}/{} ({:.0}%)",
-                i,
-                count,
-                (i as f64 / count as f64) * 100.0
-            );
-            std::io::stderr().flush().ok();
+        if let Some(ref pb) = pb {
+            pb.set(i + 1);
         }
 
         let bundle_num = start_bundle + i as u32;
@@ -655,8 +661,8 @@ fn bench_sequential_access(
         timings.push(start.elapsed().as_secs_f64() * 1000.0);
     }
 
-    if interactive {
-        eprintln!("\r  Progress: {}/{} (100%)", count, count);
+    if let Some(ref pb) = pb {
+        pb.finish();
     }
 
     let end_stats = manager.get_stats();
