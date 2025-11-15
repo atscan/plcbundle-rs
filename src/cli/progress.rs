@@ -13,6 +13,7 @@ pub struct ProgressBar {
     width: usize,
     is_tty: bool,
     last_line_print: Arc<Mutex<Instant>>,
+    message: Arc<Mutex<String>>, 
 }
 
 impl ProgressBar {
@@ -29,6 +30,7 @@ impl ProgressBar {
             show_bytes: false,
             width: 40,
             is_tty,
+            message: Arc::new(Mutex::new(String::new())),
         }
     }
 
@@ -45,6 +47,7 @@ impl ProgressBar {
             show_bytes: true,
             width: 40,
             is_tty,
+            message: Arc::new(Mutex::new(String::new())),
         }
     }
 
@@ -62,6 +65,7 @@ impl ProgressBar {
             show_bytes: true,
             width: 40,
             is_tty,
+            message: Arc::new(Mutex::new(String::new())),
         }
     }
 
@@ -94,6 +98,11 @@ impl ProgressBar {
         *bytes_guard += bytes;
         drop(bytes_guard);
         self.print();
+    }
+
+    pub fn set_message<S: Into<String>>(&self, msg: S) {
+        let mut m = self.message.lock().unwrap();
+        *m = msg.into();
     }
 
     /// Finish the progress bar
@@ -139,7 +148,27 @@ impl ProgressBar {
             0
         };
 
-        let bar = "█".repeat(filled) + &"░".repeat(self.width - filled);
+        let calc = if self.total > 0 {
+            (self.width as f64 * current as f64) / self.total as f64
+        } else {
+            0.0
+        };
+        let frac = calc - filled as f64;
+        let tip = if frac >= 0.75 {
+            "▓"
+        } else if frac >= 0.5 {
+            "▒"
+        } else if frac > 0.0 {
+            "░"
+        } else {
+            ""
+        };
+        let bar = if tip.is_empty() {
+            "█".repeat(filled) + &"░".repeat(self.width - filled)
+        } else {
+            let rem = self.width.saturating_sub(filled + 1);
+            "█".repeat(filled) + tip + &"░".repeat(rem)
+        };
 
         let elapsed = self.start_time.elapsed();
         let speed = if elapsed.as_secs_f64() > 0.0 {
@@ -157,6 +186,13 @@ impl ProgressBar {
 
         let is_complete = current >= self.total;
 
+        let spinner_frames = [
+            "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
+        ];
+        let elapsed_precise = format_elapsed(elapsed);
+        let frame = spinner_frames[((elapsed.as_millis() / 100) as usize) % spinner_frames.len()];
+        let msg = self.message.lock().unwrap().clone();
+
         if self.show_bytes && current_bytes > 0 {
             let mb_processed = current_bytes as f64 / 1_000_000.0;
             let mb_per_sec = if elapsed.as_secs_f64() > 0.0 {
@@ -167,35 +203,56 @@ impl ProgressBar {
 
             if is_complete {
                 eprint!(
-                    "\r  [{}] {:6.2}% | {}/{} | {:.1}/s | {:.1} MB/s | Done    ",
-                    bar, percent, current, self.total, speed, mb_per_sec
-                );
-            } else {
-                eprint!(
-                    "\r  [{}] {:6.2}% | {}/{} | {:.1}/s | {:.1} MB/s | ETA: {} ",
+                    "\r  {} [{}] [{}] {:6.2}% | {}/{} | {:.1}/s | {:.1} MB/s{} | Done    ",
+                    frame,
+                    elapsed_precise,
                     bar,
                     percent,
                     current,
                     self.total,
                     speed,
                     mb_per_sec,
+                    if msg.is_empty() { String::new() } else { format!(" | {}", msg) }
+                );
+            } else {
+                eprint!(
+                    "\r  {} [{}] [{}] {:6.2}% | {}/{} | {:.1}/s | {:.1} MB/s{} | ETA: {} ",
+                    frame,
+                    elapsed_precise,
+                    bar,
+                    percent,
+                    current,
+                    self.total,
+                    speed,
+                    mb_per_sec,
+                    if msg.is_empty() { String::new() } else { format!(" | {}", msg) },
                     format_eta(eta)
                 );
             }
         } else {
             if is_complete {
                 eprint!(
-                    "\r  [{}] {:6.2}% | {}/{} | {:.1}/s | Done    ",
-                    bar, percent, current, self.total, speed
-                );
-            } else {
-                eprint!(
-                    "\r  [{}] {:6.2}% | {}/{} | {:.1}/s | ETA: {} ",
+                    "\r  {} [{}] [{}] {:6.2}% | {}/{} | {:.1}/s{} | Done    ",
+                    frame,
+                    elapsed_precise,
                     bar,
                     percent,
                     current,
                     self.total,
                     speed,
+                    if msg.is_empty() { String::new() } else { format!(" | {}", msg) }
+                );
+            } else {
+                eprint!(
+                    "\r  {} [{}] [{}] {:6.2}% | {}/{} | {:.1}/s{} | ETA: {} ",
+                    frame,
+                    elapsed_precise,
+                    bar,
+                    percent,
+                    current,
+                    self.total,
+                    speed,
+                    if msg.is_empty() { String::new() } else { format!(" | {}", msg) },
                     format_eta(eta)
                 );
             }
@@ -235,13 +292,22 @@ impl ProgressBar {
                 0.0
             };
             eprintln!(
-                "Progress: {:.1}% ({}/{} | {:.1}/s | {:.1} MB/s)",
-                percent, current, self.total, speed, mb_per_sec
+                "Progress: [{}] {:.1}% ({}/{} | {:.1}/s | {:.1} MB/s)",
+                format_elapsed(elapsed),
+                percent,
+                current,
+                self.total,
+                speed,
+                mb_per_sec
             );
         } else {
             eprintln!(
-                "Progress: {:.1}% ({}/{} | {:.1}/s)",
-                percent, current, self.total, speed
+                "Progress: [{}] {:.1}% ({}/{} | {:.1}/s)",
+                format_elapsed(elapsed),
+                percent,
+                current,
+                self.total,
+                speed
             );
         }
     }
@@ -263,5 +329,17 @@ fn format_eta(duration: Duration) -> String {
         let hours = secs / 3600;
         let mins = (secs % 3600) / 60;
         format!("{}h {}m", hours, mins)
+    }
+}
+
+fn format_elapsed(duration: Duration) -> String {
+    let secs = duration.as_secs();
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    let s = secs % 60;
+    if h > 0 {
+        format!("{:02}:{:02}:{:02}", h, m, s)
+    } else {
+        format!("{:02}:{:02}", m, s)
     }
 }

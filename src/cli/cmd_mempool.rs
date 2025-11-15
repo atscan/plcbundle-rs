@@ -65,7 +65,8 @@ pub fn run(cmd: MempoolCommand) -> Result<()> {
 }
 
 fn show_status(manager: &BundleManager, dir: &PathBuf, verbose: bool) -> Result<()> {
-    let stats = manager.get_mempool_stats()?;
+    manager.get_mempool()?;
+    let stats: plcbundle::MempoolStats = manager.get_mempool_stats()?;
 
     println!("Mempool Status");
     println!("══════════════\n");
@@ -175,6 +176,7 @@ fn show_status(manager: &BundleManager, dir: &PathBuf, verbose: bool) -> Result<
 }
 
 fn clear(manager: &BundleManager, dir: &PathBuf, force: bool) -> Result<()> {
+    manager.get_mempool()?;
     let stats = manager.get_mempool_stats()?;
     let count = stats.count;
 
@@ -208,6 +210,7 @@ fn clear(manager: &BundleManager, dir: &PathBuf, force: bool) -> Result<()> {
 }
 
 fn dump(manager: &BundleManager, output: Option<PathBuf>) -> Result<()> {
+    manager.get_mempool()?;
     let ops = manager.get_mempool_operations()?;
 
     if ops.is_empty() {

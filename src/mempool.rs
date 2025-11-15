@@ -3,6 +3,8 @@ use crate::constants;
 use crate::operations::Operation;
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
+use log::{debug, info};
+use crate::format::format_std_duration_ms;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -77,6 +79,9 @@ impl Mempool {
             .collect();
 
         let mut new_ops = Vec::new();
+        let total_in = ops.len();
+        let mut skipped_no_cid = 0usize;
+        let mut skipped_dupe = 0usize;
 
         // Start from last operation time if we have any
         let mut last_time = if !self.operations.is_empty() {
@@ -85,15 +90,22 @@ impl Mempool {
             self.min_timestamp
         };
 
+        let start_add = std::time::Instant::now();
+        let mut first_added_time: Option<DateTime<Utc>> = None;
+        let mut last_added_time: Option<DateTime<Utc>> = None;
         for op in ops {
             // Skip if no CID
             let cid = match &op.cid {
                 Some(c) => c,
-                None => continue,
+                None => {
+                    skipped_no_cid += 1;
+                    continue;
+                },
             };
 
             // Skip duplicates
             if existing_cids.contains(cid) {
+                skipped_dupe += 1;
                 continue;
             }
 
@@ -122,6 +134,10 @@ impl Mempool {
             new_ops.push(op.clone());
             existing_cids.insert(cid.clone());
             last_time = op_time;
+            if first_added_time.is_none() {
+                first_added_time = Some(op_time);
+            }
+            last_added_time = Some(op_time);
         }
 
         let added = new_ops.len();
@@ -130,6 +146,29 @@ impl Mempool {
         self.operations.extend(new_ops);
         self.validated = true;
         self.dirty = true;
+
+        if self.verbose {
+            let dur = start_add.elapsed();
+            info!(
+                "mempool add: +{} unique from {} ({} no-cid, {} dupes) in {} • total {}",
+                added,
+                total_in,
+                skipped_no_cid,
+                skipped_dupe,
+                format_std_duration_ms(dur),
+                self.operations.len()
+            );
+            if let (Some(f), Some(l)) = (first_added_time, last_added_time) {
+                debug!(
+                    "mempool add range: {} → {}",
+                    f.format("%Y-%m-%d %H:%M:%S"),
+                    l.format("%Y-%m-%d %H:%M:%S")
+                );
+            }
+            if added == 0 && (skipped_no_cid > 0 || skipped_dupe > 0) {
+                debug!("mempool add made no progress");
+            }
+        }
 
         Ok(added)
     }
@@ -252,9 +291,13 @@ impl Mempool {
 
     /// Clear removes all operations
     pub fn clear(&mut self) {
+        let prev = self.operations.len();
         self.operations.clear();
         self.validated = false;
         self.dirty = true;
+        if self.verbose {
+            info!("mempool clear: removed {} ops", prev);
+        }
     }
 
     /// ShouldSave checks if threshold/interval is met
@@ -330,6 +373,8 @@ impl Mempool {
         // CRITICAL: Use raw_json if available to preserve exact byte content
         // This is required for deterministic content_hash calculation.
         // Re-serialization would change field order/whitespace and break hash verification.
+        let mut bytes_written = 0usize;
+        let mut appended = 0usize;
         for op in new_ops {
             let json = if let Some(ref raw) = op.raw_json {
                 raw.clone()
@@ -339,6 +384,8 @@ impl Mempool {
                 serde_json::to_string(op)?
             };
             writeln!(writer, "{}", json)?;
+            bytes_written += json.len() + 1;
+            appended += 1;
         }
 
         writer.flush()?;
@@ -351,11 +398,21 @@ impl Mempool {
         self.last_save_time = std::time::Instant::now();
         self.dirty = false;
 
+        if self.verbose {
+            info!(
+                "mempool save: appended {} ops ({} bytes) to {}",
+                appended,
+                bytes_written,
+                self.get_filename()
+            );
+        }
+
         Ok(())
     }
 
     /// Load reads mempool from disk and validates it
     pub fn load(&mut self) -> Result<()> {
+        let start = std::time::Instant::now();
         let file = File::open(&self.file)?;
         let reader = BufReader::new(file);
 
@@ -384,11 +441,12 @@ impl Mempool {
         self.last_save_time = std::time::Instant::now();
         self.dirty = false;
 
-        if self.verbose && !self.operations.is_empty() {
-            eprintln!(
-                "Loaded {} operations from mempool for bundle {:06}",
+        if self.verbose {
+            info!(
+                "mempool load: {} ops for bundle {:06} in {}",
                 self.operations.len(),
-                self.target_bundle
+                self.target_bundle,
+                format_std_duration_ms(start.elapsed())
             );
         }
 

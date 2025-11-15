@@ -594,10 +594,30 @@ fn verify_range_sequential(
     full: bool,
     fast: bool,
 ) -> Result<()> {
-    let progress = if !verbose {
-        Some(ProgressBar::new(total))
+    // Prefer bytes-aware progress bar to show MB/s if metadata available
+    let (progress, mut processed_uncompressed, per_bundle_uncompressed): (
+        Option<ProgressBar>,
+        u64,
+        Vec<(u32, u64)>,
+    ) = if !verbose {
+        let index = manager.get_index();
+        let mut sizes = Vec::with_capacity(total);
+        let mut total_uncompressed_size: u64 = 0;
+        for num in start..=end {
+            if let Some(meta) = index.get_bundle(num) {
+                sizes.push((num, meta.uncompressed_size));
+                total_uncompressed_size += meta.uncompressed_size;
+            } else {
+                sizes.push((num, 0));
+            }
+        }
+        (
+            Some(ProgressBar::with_bytes(total, total_uncompressed_size)),
+            0u64,
+            sizes,
+        )
     } else {
-        None
+        (None, 0, Vec::new())
     };
 
     let mut verified = 0;
@@ -649,7 +669,15 @@ fn verify_range_sequential(
         }
 
         if let Some(ref pb) = progress {
-            pb.set((bundle_num - start + 1) as usize);
+            if let Some((_, sz)) = per_bundle_uncompressed
+                .get((bundle_num - start) as usize)
+                .cloned()
+            {
+                processed_uncompressed = processed_uncompressed.saturating_add(sz);
+                pb.set_with_bytes((bundle_num - start + 1) as usize, processed_uncompressed);
+            } else {
+                pb.set((bundle_num - start + 1) as usize);
+            }
         }
     }
 

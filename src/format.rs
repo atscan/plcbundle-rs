@@ -90,3 +90,14 @@ pub fn format_std_duration(duration: StdDuration) -> String {
         Err(_) => format!("{}s", duration.as_secs()),
     }
 }
+
+pub fn format_std_duration_ms(duration: StdDuration) -> String {
+    let ms = duration.as_secs_f64() * 1000.0;
+    if ms < 100.0 {
+        format!("{:.3}ms", ms)
+    } else if ms < 1000.0 {
+        format!("{:.0}ms", ms)
+    } else {
+        format!("{:.0}ms", ms)
+    }
+}
