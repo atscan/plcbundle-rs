@@ -3,6 +3,8 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
+pub use plcbundle::format::{format_bytes, format_number};
+
 /// Parse bundle specification string into a vector of bundle numbers
 pub fn parse_bundle_spec(spec: Option<String>, max_bundle: u32) -> Result<Vec<u32>> {
     match spec {
@@ -10,89 +12,29 @@ pub fn parse_bundle_spec(spec: Option<String>, max_bundle: u32) -> Result<Vec<u3
         Some(s) => {
             if s.starts_with("latest:") {
                 let count: u32 = s.strip_prefix("latest:").unwrap().parse()?;
-                let start = max_bundle.saturating_sub(count - 1);
+                let start = max_bundle.saturating_sub(count.saturating_sub(1));
                 Ok((start..=max_bundle).collect())
             } else {
-                parse_bundle_range(&s, max_bundle)
+                plcbundle::parse_bundle_range(&s, max_bundle)
             }
         }
     }
-}
-
-/// Parse bundle range string (e.g., "1-10,15,20-25")
-pub fn parse_bundle_range(spec: &str, _max_bundle: u32) -> Result<Vec<u32>> {
-    let mut result = Vec::new();
-
-    for part in spec.split(',') {
-        let part = part.trim();
-        if part.contains('-') {
-            let parts: Vec<&str> = part.split('-').collect();
-            if parts.len() != 2 {
-                anyhow::bail!("Invalid range format: {}", part);
-            }
-            let start: u32 = parts[0].parse()?;
-            let end: u32 = parts[1].parse()?;
-            if start > end {
-                anyhow::bail!("Invalid range: {} > {}", start, end);
-            }
-            result.extend(start..=end);
-        } else {
-            let num: u32 = part.parse()?;
-            result.push(num);
-        }
-    }
-
-    Ok(result)
 }
 
 /// Parse a simple bundle range string (e.g., "1-100") into (start, end)
-pub fn parse_bundle_range_simple(spec: &str) -> Result<(u32, u32)> {
-    if spec.contains('-') {
-        let parts: Vec<&str> = spec.split('-').collect();
-        if parts.len() != 2 {
-            anyhow::bail!("Invalid range format: {}", spec);
-        }
-        let start: u32 = parts[0].trim().parse()?;
-        let end: u32 = parts[1].trim().parse()?;
-        if start > end {
-            anyhow::bail!("Invalid range: {} > {}", start, end);
-        }
-        Ok((start, end))
+pub fn parse_bundle_range_simple(spec: &str, max_bundle: u32) -> Result<(u32, u32)> {
+    let (start, end) = if let Some((start, end)) = spec.split_once('-') {
+        (start.trim().parse()?, end.trim().parse()?)
     } else {
         let num: u32 = spec.trim().parse()?;
-        Ok((num, num))
-    }
-}
+        (num, num)
+    };
 
-/// Format number with thousand separators
-pub fn format_number(n: u64) -> String {
-    let s = n.to_string();
-    let mut result = String::new();
-    for (i, c) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            result.push(',');
-        }
-        result.push(c);
-    }
-    result.chars().rev().collect()
-}
-
-/// Format bytes in human-readable format
-pub fn format_bytes(bytes: u64) -> String {
-    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
-    let mut size = bytes as f64;
-    let mut unit_idx = 0;
-
-    while size >= 1024.0 && unit_idx < UNITS.len() - 1 {
-        size /= 1024.0;
-        unit_idx += 1;
+    if start == 0 || end == 0 || start > end || end > max_bundle {
+        anyhow::bail!("Invalid range: {}-{}", start, end);
     }
 
-    if unit_idx == 0 {
-        format!("{} {}", bytes, UNITS[0])
-    } else {
-        format!("{:.2} {}", size, UNITS[unit_idx])
-    }
+    Ok((start, end))
 }
 
 /// Display path resolving "." to absolute path

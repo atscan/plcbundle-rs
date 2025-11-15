@@ -2,7 +2,6 @@ use super::utils::format_number;
 use anyhow::Result;
 use clap::Args;
 use plcbundle::BundleManager;
-use plcbundle::constants;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::Instant;
@@ -220,6 +219,12 @@ fn generate_random_bundles(last_bundle: u32, count: usize) -> Vec<u32> {
         .collect()
 }
 
+fn bundle_compressed_size(manager: &BundleManager, bundle_num: u32) -> Result<Option<u64>> {
+    Ok(manager
+        .get_bundle_metadata(bundle_num)?
+        .map(|meta| meta.compressed_size))
+}
+
 /// Benchmark bundle loading (full bundle read + decompression + parsing)
 /// Iterates over random bundles from the entire repository
 fn bench_bundle_load(
@@ -258,9 +263,8 @@ fn bench_bundle_load(
             std::io::stderr().flush().ok();
         }
 
-        let bundle_path = constants::bundle_path(manager.directory(), bundle_num);
-        if let Ok(metadata) = std::fs::metadata(&bundle_path) {
-            total_bytes += metadata.len();
+        if let Some(size) = bundle_compressed_size(manager, bundle_num)? {
+            total_bytes += size;
         }
 
         let start = Instant::now();
@@ -304,13 +308,15 @@ fn bench_bundle_decompress(
 
     // Warmup
     for i in 0..warmup.min(10) {
-        let bundle_path = constants::bundle_path(manager.directory(), bundles[i % bundles.len()]);
-        if bundle_path.exists() {
-            let file = std::fs::File::open(&bundle_path)?;
-            let mut decoder = zstd::Decoder::new(file)?;
-            let mut buffer = Vec::new();
-            decoder.read_to_end(&mut buffer)?;
+        let bundle_num = bundles[i % bundles.len()];
+        if bundle_compressed_size(manager, bundle_num)?.is_none() {
+            continue;
         }
+
+        let file = manager.stream_bundle_raw(bundle_num)?;
+        let mut decoder = zstd::Decoder::new(file)?;
+        let mut buffer = Vec::new();
+        decoder.read_to_end(&mut buffer)?;
     }
 
     // Benchmark - iterate over different bundles each time
@@ -328,17 +334,14 @@ fn bench_bundle_decompress(
             std::io::stderr().flush().ok();
         }
 
-        let bundle_path = constants::bundle_path(manager.directory(), bundle_num);
-        if !bundle_path.exists() {
-            continue;
-        }
-
-        if let Ok(metadata) = std::fs::metadata(&bundle_path) {
-            total_bytes += metadata.len();
-        }
+        let size = match bundle_compressed_size(manager, bundle_num)? {
+            Some(size) => size,
+            None => continue,
+        };
+        total_bytes += size;
 
         let start = Instant::now();
-        let file = std::fs::File::open(&bundle_path)?;
+        let file = manager.stream_bundle_raw(bundle_num)?;
         let mut decoder = zstd::Decoder::new(file)?;
         let mut buffer = Vec::new();
         decoder.read_to_end(&mut buffer)?;
@@ -643,9 +646,8 @@ fn bench_sequential_access(
         }
 
         let bundle_num = start_bundle + i as u32;
-        let bundle_path = constants::bundle_path(manager.directory(), bundle_num);
-        if let Ok(metadata) = std::fs::metadata(&bundle_path) {
-            total_bytes += metadata.len();
+        if let Some(size) = bundle_compressed_size(manager, bundle_num)? {
+            total_bytes += size;
         }
 
         let start = Instant::now();

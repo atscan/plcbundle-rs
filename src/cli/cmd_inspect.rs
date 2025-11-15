@@ -3,6 +3,7 @@ use anyhow::{Context, Result};
 use chrono::DateTime;
 use clap::Args;
 use plcbundle::constants;
+use plcbundle::format::{format_bytes, format_duration_verbose, format_number};
 use plcbundle::{BundleManager, LoadOptions, Operation};
 use serde::Serialize;
 use serde_json::Value;
@@ -584,7 +585,7 @@ fn calculate_time_distribution(
     Some(TimeDistribution {
         earliest_op: operations[0].created_at.clone(),
         latest_op: operations[operations.len() - 1].created_at.clone(),
-        time_span: format_duration(duration.num_seconds()),
+        time_span: format_duration_verbose(duration),
         peak_hour: chrono::DateTime::from_timestamp(peak_hour * 60, 0)
             .unwrap()
             .format("%Y-%m-%d %H:%M")
@@ -664,15 +665,18 @@ fn display_human(
                 meta.start_time, meta.end_time
             );
 
-            let duration_ms = if let (Ok(start), Ok(end)) = (
+            let duration = if let (Ok(start), Ok(end)) = (
                 DateTime::parse_from_rfc3339(&meta.start_time),
                 DateTime::parse_from_rfc3339(&meta.end_time),
             ) {
-                end.signed_duration_since(start).num_seconds()
+                end.signed_duration_since(start)
             } else {
-                0
+                chrono::Duration::seconds(0)
             };
-            println!("    Duration:          {}", format_duration(duration_ms));
+            println!(
+                "    Duration:          {}",
+                format_duration_verbose(duration)
+            );
 
             println!("\n  Integrity:");
             println!("    Content hash:      {}", meta.content_hash);
@@ -903,51 +907,5 @@ fn resolve_target(target: &str, dir: &PathBuf) -> Result<(Option<u32>, PathBuf)>
         Ok((None, path))
     } else {
         anyhow::bail!("File not found: {}", target)
-    }
-}
-
-fn format_bytes(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-
-    if bytes >= GB {
-        format!("{:.2} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.2} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.2} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{} B", bytes)
-    }
-}
-
-fn format_number(n: usize) -> String {
-    let s = n.to_string();
-    let mut result = String::new();
-    let chars: Vec<_> = s.chars().collect();
-    for (i, c) in chars.iter().enumerate() {
-        if i > 0 && (chars.len() - i) % 3 == 0 {
-            result.push(',');
-        }
-        result.push(*c);
-    }
-    result
-}
-
-fn format_duration(seconds: i64) -> String {
-    let days = seconds / 86400;
-    let hours = (seconds % 86400) / 3600;
-    let minutes = (seconds % 3600) / 60;
-    let secs = seconds % 60;
-
-    if days > 0 {
-        format!("{}d {}h {}m {}s", days, hours, minutes, secs)
-    } else if hours > 0 {
-        format!("{}h {}m {}s", hours, minutes, secs)
-    } else if minutes > 0 {
-        format!("{}m {}s", minutes, secs)
-    } else {
-        format!("{}s", secs)
     }
 }

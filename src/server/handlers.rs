@@ -1,6 +1,7 @@
 // HTTP handlers for the server
 
 use crate::constants;
+use crate::format::format_number;
 use crate::manager::BundleManager;
 use crate::resolver::{build_did_state, format_audit_log};
 use crate::server::config::ServerConfig;
@@ -19,19 +20,6 @@ use std::time::Instant;
 use tokio_util::io::ReaderStream;
 use tower::ServiceBuilder;
 use tower_http::cors::CorsLayer;
-
-/// Format a number with comma separators (e.g., 1234567 -> "1,234,567")
-fn format_number(n: u64) -> String {
-    let s = n.to_string();
-    let mut result = String::new();
-    for (i, c) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            result.push(',');
-        }
-        result.push(c);
-    }
-    result.chars().rev().collect()
-}
 
 #[derive(Clone)]
 pub struct ServerState {

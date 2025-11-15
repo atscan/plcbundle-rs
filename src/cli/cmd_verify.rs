@@ -545,7 +545,8 @@ fn verify_range(
     fast: bool,
     num_threads: usize,
 ) -> Result<()> {
-    let (start, end) = parse_bundle_range_simple(range_str)?;
+    let last_bundle = manager.get_last_bundle();
+    let (start, end) = parse_bundle_range_simple(range_str, last_bundle)?;
 
     // Auto-detect workers if 0
     let actual_workers = if workers == 0 { num_threads } else { workers };

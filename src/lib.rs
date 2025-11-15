@@ -4,6 +4,7 @@ pub mod cache;
 pub mod constants;
 pub mod did_index;
 pub mod ffi;
+pub mod format;
 pub mod handle_resolver;
 pub mod index;
 pub mod iterators;
@@ -27,6 +28,10 @@ pub use constants::{
     user_agent,
 };
 pub use did_index::{DIDLookupStats, DIDLookupTimings};
+pub use format::{
+    format_bytes, format_duration_compact, format_duration_verbose, format_number,
+    format_std_duration,
+};
 pub use handle_resolver::{HandleResolver, is_handle, normalize_handle, validate_handle_format};
 pub use index::{BundleMetadata, Index};
 pub use iterators::{ExportIterator, QueryIterator, RangeIterator};

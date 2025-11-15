@@ -1,7 +1,7 @@
 use anyhow::Result;
 use plcbundle::{BundleManager, LoadOptions, constants};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// Parse operation position - supports both global position and bundle + position
 /// Mimics Go version: small numbers (< 10000) are treated as bundle 1, position N
@@ -26,33 +26,6 @@ pub fn parse_op_position(bundle: u32, position: Option<usize>) -> (u32, usize) {
             }
         }
     }
-}
-
-// Helper function to format duration for display
-#[allow(dead_code)]
-fn format_duration(duration: Duration) -> String {
-    let secs = duration.as_secs();
-
-    if secs < 60 {
-        return format!("{}s", secs);
-    }
-
-    let minutes = secs / 60;
-    if minutes < 60 {
-        return format!("{}m", minutes);
-    }
-
-    let hours = minutes / 60;
-    if hours < 24 {
-        return format!("{}h", hours);
-    }
-
-    let days = hours / 24;
-    if days < 365 {
-        return format!("{}d", days);
-    }
-
-    format!("{}y", days / 365)
 }
 
 pub fn cmd_op_get(dir: PathBuf, bundle: u32, position: Option<usize>, quiet: bool) -> Result<()> {
@@ -153,8 +126,6 @@ pub fn cmd_op_show(dir: PathBuf, bundle: u32, position: Option<usize>, quiet: bo
     println!("Timestamp");
     println!("─────────");
     println!("  Created:         {}", op.created_at);
-    // Would calculate age here with proper datetime parsing
-    // println!("  Age:             {}\n", format_duration(age));
     println!();
 
     println!("Status");

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::Args;
 use plcbundle::BundleManager;
+use plcbundle::format::format_duration_compact;
 use std::path::PathBuf;
 
 #[derive(Args)]
@@ -179,7 +180,7 @@ fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str) -> Stri
         "age" => {
             if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&meta.end_time) {
                 let age = chrono::Utc::now().signed_duration_since(dt);
-                format_duration_short(age)
+                format_duration_compact(age)
             } else {
                 "unknown".to_string()
             }
@@ -218,7 +219,7 @@ fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str) -> Stri
                 chrono::DateTime::parse_from_rfc3339(&meta.end_time),
             ) {
                 let duration = end.signed_duration_since(start);
-                format_duration_short(duration)
+                format_duration_compact(duration)
             } else {
                 "unknown".to_string()
             }
@@ -261,21 +262,5 @@ fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str) -> Stri
         }
 
         _ => String::new(),
-    }
-}
-
-fn format_duration_short(duration: chrono::Duration) -> String {
-    let seconds = duration.num_seconds().abs();
-
-    if seconds < 60 {
-        format!("{}s", seconds)
-    } else if seconds < 3600 {
-        format!("{}m", seconds / 60)
-    } else if seconds < 86400 {
-        format!("{}h", seconds / 3600)
-    } else if seconds < 31536000 {
-        format!("{}d", seconds / 86400)
-    } else {
-        format!("{}y", seconds / 31536000)
     }
 }

@@ -4,7 +4,6 @@ use super::utils::format_bytes;
 use anyhow::{Result, bail};
 use clap::Args;
 use plcbundle::BundleManager;
-use plcbundle::bundle_format;
 use plcbundle::constants;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -80,29 +79,14 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
     let mut format_counts = std::collections::HashMap::new();
 
     for meta in bundles {
-        let bundle_path = constants::bundle_path(&dir, meta.bundle_number);
-
-        // Try to extract metadata to check format
-        let old_format = match bundle_format::extract_metadata_from_file(&bundle_path) {
-            Ok(embedded_meta) => {
-                if embedded_meta.frame_offsets.is_empty() {
-                    "v0 (single-frame)".to_string()
-                } else {
-                    embedded_meta.format.clone()
-                }
-            }
-            Err(_) => "v0 (single-frame)".to_string(),
+        let embedded_meta = manager.get_embedded_metadata(meta.bundle_number)?;
+        let (old_format, has_frame_offsets) = match embedded_meta {
+            Some(ref m) if !m.frame_offsets.is_empty() => (m.format.clone(), true),
+            Some(m) => (m.format.clone(), false),
+            None => ("v0 (single-frame)".to_string(), false),
         };
 
-        let needs_migrate = if cmd.force {
-            true
-        } else {
-            // Check if bundle has frame metadata
-            match bundle_format::extract_metadata_from_file(&bundle_path) {
-                Ok(embedded_meta) => embedded_meta.frame_offsets.is_empty(),
-                Err(_) => true, // No metadata = legacy format
-            }
-        };
+        let needs_migrate = cmd.force || !has_frame_offsets;
 
         if needs_migrate {
             needs_migration.push(BundleMigrationInfo {
@@ -138,7 +122,7 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
     eprintln!(
         "  Format:  {} → {}/1.0",
         format_parts.join(" + "),
-        plcbundle::constants::BINARY_NAME
+        constants::BINARY_NAME
     );
 
     let total_uncompressed: u64 = needs_migration.iter().map(|i| i.uncompressed_size).sum();
@@ -157,7 +141,7 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
     eprintln!(
         "  Workers: {}, Compression Level: {}\n",
         workers,
-        plcbundle::constants::ZSTD_COMPRESSION_LEVEL
+        constants::ZSTD_COMPRESSION_LEVEL
     );
 
     if cmd.dry_run {
@@ -326,8 +310,7 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
             // Measure actual metadata size
             let mut total_actual_metadata = 0u64;
             for bundle_num in &hash_changes {
-                let bundle_path = constants::bundle_path(&dir, *bundle_num);
-                if let Ok(meta_size) = measure_metadata_size(&bundle_path) {
+                if let Ok(meta_size) = measure_metadata_size(&manager, *bundle_num) {
                     total_actual_metadata += meta_size;
                 }
             }
@@ -415,7 +398,7 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
                 eprintln!("\n   To diagnose:");
                 eprintln!(
                     "   1. Run '{} verify' to check all bundles",
-                    plcbundle::constants::BINARY_NAME
+                    constants::BINARY_NAME
                 );
                 eprintln!("   2. Check if the bundle file was manually modified");
                 eprintln!("   3. Re-sync affected bundles from the PLC directory");
@@ -427,7 +410,7 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
                 eprintln!("\n   To fix:");
                 eprintln!(
                     "   1. Run '{} verify' to identify all broken links",
-                    plcbundle::constants::BINARY_NAME
+                    constants::BINARY_NAME
                 );
                 eprintln!("   2. Ensure bundles are migrated in sequential order (1, 2, 3, ...)");
             }
@@ -445,10 +428,10 @@ struct BundleMigrationInfo {
     old_format: String,
 }
 
-fn measure_metadata_size(bundle_path: &PathBuf) -> Result<u64> {
+fn measure_metadata_size(manager: &BundleManager, bundle_num: u32) -> Result<u64> {
     use std::io::Read;
 
-    let mut file = std::fs::File::open(bundle_path)?;
+    let mut file = manager.stream_bundle_raw(bundle_num)?;
 
     // Read magic (4 bytes) + size (4 bytes)
     let mut header = [0u8; 8];

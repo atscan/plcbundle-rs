@@ -2,6 +2,7 @@
 use super::utils;
 use anyhow::Result;
 use clap::{Args, Subcommand};
+use plcbundle::format::format_number;
 use plcbundle::{BundleManager, constants};
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -230,19 +231,4 @@ fn dump(manager: &BundleManager, output: Option<PathBuf>) -> Result<()> {
 
     eprintln!("Exported {} operations from mempool", ops.len());
     Ok(())
-}
-
-fn format_number(n: usize) -> String {
-    let s = n.to_string();
-    let mut result = String::new();
-    let chars: Vec<char> = s.chars().collect();
-
-    for (i, c) in chars.iter().enumerate() {
-        if i > 0 && (chars.len() - i) % 3 == 0 {
-            result.push(',');
-        }
-        result.push(*c);
-    }
-
-    result
 }
