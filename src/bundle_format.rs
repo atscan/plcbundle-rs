@@ -187,6 +187,10 @@ pub struct FrameCompressionResult {
     pub uncompressed_size: u64,
     /// Total compressed size
     pub compressed_size: u64,
+    /// Time spent serializing (in milliseconds)
+    pub serialize_time_ms: f64,
+    /// Time spent compressing (in milliseconds)
+    pub compress_time_ms: f64,
 }
 
 /// Compress operations into multiple frames
@@ -194,9 +198,14 @@ pub struct FrameCompressionResult {
 /// Each frame contains FRAME_SIZE operations (except possibly the last frame).
 /// Returns the compressed frames and their relative offsets.
 pub fn compress_operations_to_frames(operations: &[crate::operations::Operation]) -> anyhow::Result<FrameCompressionResult> {
+    use std::time::Instant;
+    
     let mut frame_offsets = Vec::new();
     let mut compressed_frames: Vec<Vec<u8>> = Vec::new();
     let mut total_uncompressed = 0u64;
+    
+    let mut total_serialize_time = std::time::Duration::ZERO;
+    let mut total_compress_time = std::time::Duration::ZERO;
 
     // Process operations in frames of FRAME_SIZE
     let num_frames = (operations.len() + constants::FRAME_SIZE - 1) / constants::FRAME_SIZE;
@@ -207,6 +216,7 @@ pub fn compress_operations_to_frames(operations: &[crate::operations::Operation]
         let frame_ops = &operations[frame_start..frame_end];
 
         // Serialize frame to JSONL
+        let serialize_start = Instant::now();
         let mut frame_data = Vec::new();
         for op in frame_ops {
             let json = if let Some(raw) = &op.raw_json {
@@ -217,10 +227,13 @@ pub fn compress_operations_to_frames(operations: &[crate::operations::Operation]
             frame_data.extend_from_slice(json.as_bytes());
             frame_data.push(b'\n');
         }
+        total_serialize_time += serialize_start.elapsed();
         total_uncompressed += frame_data.len() as u64;
 
         // Compress frame
+        let compress_start = Instant::now();
         let compressed_frame = zstd::encode_all(frame_data.as_slice(), constants::ZSTD_COMPRESSION_LEVEL)?;
+        total_compress_time += compress_start.elapsed();
         
         // Record offset (relative to first data frame)
         let offset = if frame_offsets.is_empty() {
@@ -247,6 +260,8 @@ pub fn compress_operations_to_frames(operations: &[crate::operations::Operation]
         frame_offsets,
         uncompressed_size: total_uncompressed,
         compressed_size,
+        serialize_time_ms: total_serialize_time.as_secs_f64() * 1000.0,
+        compress_time_ms: total_compress_time.as_secs_f64() * 1000.0,
     })
 }
 

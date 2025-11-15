@@ -1303,10 +1303,9 @@ impl BundleManager {
 
         // Compress operations to frames
         let compress_result = {
-            let compress_start = Instant::now();
             let result = crate::bundle_format::compress_operations_to_frames(&operations)?;
-            serialize_time = compress_start.elapsed();
-            compress_time = serialize_time; // Compression is done inside compress_operations_to_frames
+            serialize_time = std::time::Duration::from_secs_f64(result.serialize_time_ms / 1000.0);
+            compress_time = std::time::Duration::from_secs_f64(result.compress_time_ms / 1000.0);
             result
         };
 
