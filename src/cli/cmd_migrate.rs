@@ -134,7 +134,7 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
     for (format, count) in &format_counts {
         format_parts.push(format!("{} ({})", format, count));
     }
-    eprintln!("  Format:  {} → plcbundle/1.0", format_parts.join(" + "));
+    eprintln!("  Format:  {} → {}/1.0", format_parts.join(" + "), plcbundle::constants::BINARY_NAME);
 
     let total_uncompressed: u64 = needs_migration.iter().map(|i| i.uncompressed_size).sum();
     let avg_compression = if total_size > 0 {
@@ -408,7 +408,7 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
                 eprintln!("   • This could mean the original bundle was corrupted or modified");
                 eprintln!("   • The chain integrity check is working correctly");
                 eprintln!("\n   To diagnose:");
-                eprintln!("   1. Run 'plcbundle verify' to check all bundles");
+                eprintln!("   1. Run '{} verify' to check all bundles", plcbundle::constants::BINARY_NAME);
                 eprintln!("   2. Check if the bundle file was manually modified");
                 eprintln!("   3. Re-sync affected bundles from the PLC directory");
             } else if err_msg.contains("Parent hash mismatch") {
@@ -417,7 +417,7 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
                 eprintln!("   • Bundles may have been migrated out of order");
                 eprintln!("   • The index metadata may be inconsistent");
                 eprintln!("\n   To fix:");
-                eprintln!("   1. Run 'plcbundle verify' to identify all broken links");
+                eprintln!("   1. Run '{} verify' to identify all broken links", plcbundle::constants::BINARY_NAME);
                 eprintln!("   2. Ensure bundles are migrated in sequential order (1, 2, 3, ...)");
             }
         }

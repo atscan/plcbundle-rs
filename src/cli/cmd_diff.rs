@@ -28,15 +28,15 @@ const RESET: &str = "\x1b[0m";
                     • Local file path (e.g., /path/to/plc_bundles.json)",
     after_help = "Examples:\n  \
         # High-level comparison\n  \
-        plcbundle-rs diff https://plc.example.com\n\n  \
+        plcbundle diff https://plc.example.com\n\n  \
         # Show all differences (verbose)\n  \
-        plcbundle-rs diff https://plc.example.com -v\n\n  \
+        plcbundle diff https://plc.example.com -v\n\n  \
         # Deep dive into specific bundle\n  \
-        plcbundle-rs diff https://plc.example.com --bundle 23\n\n  \
+        plcbundle diff https://plc.example.com --bundle 23\n\n  \
         # Compare bundle with operation samples\n  \
-        plcbundle-rs diff https://plc.example.com --bundle 23 --show-operations\n\n  \
+        plcbundle diff https://plc.example.com --bundle 23 --show-operations\n\n  \
         # Show first 50 operations\n  \
-        plcbundle-rs diff https://plc.example.com --bundle 23 --sample 50"
+        plcbundle diff https://plc.example.com --bundle 23 --sample 50"
 )]
 pub struct DiffCommand {
     /// Target to compare against (URL or local path)

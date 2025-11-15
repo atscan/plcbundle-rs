@@ -75,7 +75,7 @@ pub fn cmd_index_repair(dir: PathBuf) -> Result<()> {
 
     if !index_exists {
         log::error!("DID index does not exist");
-        log::info!("Use: plcbundle-rs index build");
+        log::info!("Use: {} index build", constants::BINARY_NAME);
         return Ok(());
     }
 
@@ -136,7 +136,7 @@ pub fn cmd_index_stats(dir: PathBuf, json: bool) -> Result<()> {
         .unwrap_or(false)
     {
         log::error!("DID index does not exist");
-        log::info!("Run: plcbundle-rs index build");
+        log::info!("Run: {} index build", constants::BINARY_NAME);
         return Ok(());
     }
 
@@ -472,7 +472,7 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool) -> Result<()> {
         .unwrap_or(false)
     {
         log::error!("DID index does not exist");
-        log::info!("Run: plcbundle-rs index build");
+        log::info!("Run: {} index build", constants::BINARY_NAME);
         return Ok(());
     }
 
@@ -500,7 +500,7 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool) -> Result<()> {
             last_bundle,
             manager_last
         );
-        log::info!("      Run: plcbundle-rs index repair");
+        log::info!("      Run: {} index repair", constants::BINARY_NAME);
         warnings += 1;
     } else if verbose {
         log::info!("  ✓ Last bundle matches: {:06}", last_bundle);
@@ -630,14 +630,14 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool) -> Result<()> {
             "  ✗ Too many delta segments: {} (performance will degrade)",
             delta_segments
         );
-        log::info!("      Run: plcbundle-rs index compact");
+        log::info!("      Run: {} index compact", constants::BINARY_NAME);
         errors += 1;
     } else if delta_segments >= SEGMENT_WARNING_THRESHOLD {
         log::warn!(
             "  ⚠️  Many delta segments: {} (consider compacting)",
             delta_segments
         );
-        log::info!("      Run: plcbundle-rs index compact");
+        log::info!("      Run: {} index compact", constants::BINARY_NAME);
         warnings += 1;
     } else if verbose {
         log::info!(
@@ -691,7 +691,7 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool) -> Result<()> {
         log::error!("✗ Index verification failed");
         log::error!("  Errors:   {}", errors);
         log::error!("  Warnings: {}", warnings);
-        log::info!("\n  Run: plcbundle-rs index repair");
+        log::info!("\n  Run: {} index repair", constants::BINARY_NAME);
         std::process::exit(1);
     } else if warnings > 0 {
         log::warn!("⚠️  Index verification passed with warnings");
@@ -724,7 +724,7 @@ pub fn cmd_index_debug(dir: PathBuf, shard: Option<u8>, json: bool) -> Result<()
         .unwrap_or(false)
     {
         log::error!("DID index does not exist");
-        log::info!("Run: plcbundle-rs index build");
+        log::info!("Run: {} index build", constants::BINARY_NAME);
         return Ok(());
     }
 
@@ -954,7 +954,7 @@ pub fn cmd_index_compact(dir: PathBuf, shards: Option<Vec<u8>>) -> Result<()> {
         .unwrap_or(false)
     {
         log::error!("DID index does not exist");
-        log::info!("Run: plcbundle-rs index build");
+        log::info!("Run: {} index build", constants::BINARY_NAME);
         return Ok(());
     }
 

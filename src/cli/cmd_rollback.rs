@@ -371,7 +371,7 @@ fn handle_did_index(
             .unwrap_or(0)
             > 0
         {
-            println!("         Run: plcbundle-rs index rebuild");
+            println!("         Run: {} index rebuild", plcbundle::constants::BINARY_NAME);
         }
     }
 
@@ -422,7 +422,7 @@ fn display_rollback_success(plan: &RollbackPlan, cmd: &RollbackCommand) -> Resul
     if !cmd.rebuild_did_index && plan.has_did_index {
         println!("💡 Next Steps");
         println!("   DID index is out of date. Rebuild with:");
-        println!("   plcbundle-rs index rebuild\n");
+        println!("   {} index rebuild\n", plcbundle::constants::BINARY_NAME);
     }
 
     Ok(())

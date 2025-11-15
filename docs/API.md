@@ -111,8 +111,8 @@ pub fn init_repository(directory: PathBuf, origin: String) -> Result<()>
 
 **CLI Usage:**
 ```bash
-plcbundle-rs init
-plcbundle-rs init /path/to/bundles --origin my-node
+plcbundle init
+plcbundle init /path/to/bundles --origin my-node
 ```
 
 ### Sync from PLC Directory
@@ -141,13 +141,13 @@ pub async fn sync_once(&mut self, client: &PLCClient) -> Result<usize>
 **CLI Usage:**
 ```bash
 # Sync once
-plcbundle-rs sync
+plcbundle sync
 
 # Continuous daemon
-plcbundle-rs sync --continuous --interval 30s
+plcbundle sync --continuous --interval 30s
 
 # Max bundles
-plcbundle-rs sync --max-bundles 10
+plcbundle sync --max-bundles 10
 ```
 
 ### PLC Client
@@ -197,9 +197,9 @@ pub fn clear_mempool(&self) -> Result<()>
 
 **CLI Usage:**
 ```bash
-plcbundle-rs mempool status
-plcbundle-rs mempool dump
-plcbundle-rs mempool clear
+plcbundle mempool status
+plcbundle mempool dump
+plcbundle mempool clear
 ```
 
 ### Boundary CID Deduplication
@@ -281,8 +281,8 @@ pub struct LoadResult {
 ```
 
 **Use Cases:**
-- CLI: `plcbundle-rs info --bundle 42`
-- CLI: `plcbundle-rs verify --bundle 42`
+- CLI: `plcbundle info --bundle 42`
+- CLI: `plcbundle verify --bundle 42`
 
 ---
 
@@ -305,8 +305,8 @@ pub struct OperationOptions {
 ```
 
 **Use Cases:**
-- CLI: `plcbundle-rs op get 42 1337`
-- CLI: `plcbundle-rs op show 420000`
+- CLI: `plcbundle op get 42 1337`
+- CLI: `plcbundle op show 420000`
 
 ### Batch Operations
 
@@ -405,8 +405,8 @@ pub struct QueryIterator {
 ```
 
 **Use Cases:**
-- CLI: `plcbundle-rs query "did" --bundles 1-100`
-- CLI: `plcbundle-rs query "operation.type" --mode simple`
+- CLI: `plcbundle query "did" --bundles 1-100`
+- CLI: `plcbundle query "operation.type" --mode simple`
 
 ### Export Operations
 
@@ -441,8 +441,8 @@ pub enum BundleRange {
 ```
 
 **Use Cases:**
-- CLI: `plcbundle-rs export --range 1-100 --format jsonl`
-- CLI: `plcbundle-rs export --all --after 2024-01-01T00:00:00Z`
+- CLI: `plcbundle export --range 1-100 --format jsonl`
+- CLI: `plcbundle export --all --after 2024-01-01T00:00:00Z`
 
 ### Export with Callback
 
@@ -523,7 +523,7 @@ pub struct ChainBreak {
 ```
 
 **Use Cases:**
-- CLI: `plcbundle-rs verify --chain --bundles 1-100`
+- CLI: `plcbundle verify --chain --bundles 1-100`
 
 ---
 
@@ -556,7 +556,7 @@ pub struct BundleInfo {
 ```
 
 **Use Cases:**
-- CLI: `plcbundle-rs info --bundle 42 --detailed`
+- CLI: `plcbundle info --bundle 42 --detailed`
 
 ---
 
@@ -817,22 +817,22 @@ All CLI commands use only the high-level API:
 
 ```bash
 # Uses: get_operation()
-plcbundle-rs op get 42 1337
+plcbundle op get 42 1337
 
 # Uses: query()
-plcbundle-rs query "did" --bundles 1-100
+plcbundle query "did" --bundles 1-100
 
 # Uses: export_to_writer()
-plcbundle-rs export --range 1-100 -o output.jsonl
+plcbundle export --range 1-100 -o output.jsonl
 
 # Uses: get_bundle_info()
-plcbundle-rs info --bundle 42
+plcbundle info --bundle 42
 
 # Uses: verify_bundle()
-plcbundle-rs verify --bundle 42 --checksums
+plcbundle verify --bundle 42 --checksums
 
 # Uses: get_did_operations()
-plcbundle-rs did-lookup did:plc:xyz123
+plcbundle did-lookup did:plc:xyz123
 ```
 
 ---

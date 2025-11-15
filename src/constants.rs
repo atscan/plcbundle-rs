@@ -1,7 +1,7 @@
 // Constants for version and binary identification
 
 /// Binary name used in user agents and metadata
-pub const BINARY_NAME: &str = "plcbundle-rs";
+pub const BINARY_NAME: &str = "plcbundle";
 
 /// Package version from Cargo.toml (set at compile time)
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

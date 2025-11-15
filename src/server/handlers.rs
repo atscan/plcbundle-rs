@@ -54,7 +54,6 @@ pub fn create_router(
         .route("/op/{pointer}", get(handle_operation))
         .route("/status", get(handle_status))
         .route("/mempool", get(handle_mempool))
-        .route("/privacy", get(handle_privacy))
         .route("/debug/memory", get(handle_debug_memory))
         .route("/debug/didindex", get(handle_debug_didindex))
         .route("/debug/resolver", get(handle_debug_resolver));
@@ -91,7 +90,7 @@ async fn handle_root(
     // ASCII art banner
     response.push_str("\n");
     response.push_str(&crate::server::get_ascii_art_banner(&state.config.version));
-    response.push_str("  plcbundle server\n\n");
+    response.push_str(&format!("  {} server\n\n", constants::BINARY_NAME));
     response.push_str("*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*\n");
     response.push_str("| ⚠️ Preview Version – Do Not Use In Production!                 |\n");
     response.push_str("*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*\n");
@@ -291,7 +290,6 @@ async fn handle_root(
     response.push_str("  GET  /op/:pointer         Get single operation\n");
     response.push_str("  GET  /status              Server status\n");
     response.push_str("  GET  /mempool             Mempool operations (JSONL)\n");
-    response.push_str("  GET  /privacy             GDPR privacy notice\n");
 
     if state.config.enable_websocket {
         response.push_str("\nWebSocket Endpoints\n");
@@ -710,124 +708,6 @@ async fn handle_mempool(State(state): State<ServerState>) -> impl IntoResponse {
     }
 }
 
-async fn handle_privacy(State(state): State<ServerState>) -> impl IntoResponse {
-    let origin_url = state.manager.get_plc_origin();
-
-    // Extract domain from origin URL
-    let origin_domain = if let Some(url) = origin_url.strip_prefix("https://") {
-        url.trim_end_matches('/')
-    } else if let Some(url) = origin_url.strip_prefix("http://") {
-        url.trim_end_matches('/')
-    } else {
-        origin_url.trim_end_matches('/')
-    };
-
-    // Generate operator contact placeholder
-    let operator_contact = format!("admin@{}", origin_domain);
-
-    // Get current date in YYYY-MM-DD format
-    let current_date = chrono::Utc::now().format("%Y-%m-%d");
-
-    let privacy_notice = format!(
-        r#"Privacy Notice - plcbundle Instance
-
-Last Updated: {}
-
-================================================================================
-SUMMARY
-
-This instance archives public DID operations from plc.directory. All data is 
-already publicly available. This notice explains your GDPR rights.
-
-================================================================================
-DATA CONTROLLER
-
-Instance operator: {}
-Data source: {}
-For data removal, contact {} as the primary source.
-
-================================================================================
-WHAT WE DO
-
-We mirror and archive operations from https://plc.directory (AT Protocol's 
-public DID registry) into cryptographically-chained bundles for preservation,
-redundancy, verification, and research purposes.
-
-================================================================================
-PERSONAL DATA PROCESSED
-
-- Decentralized Identifiers (DIDs)
-- Handles (usernames)
-- Service endpoints (PDS URLs)
-- Public cryptographic keys
-- Timestamps and operation metadata
-
-We do NOT process: posts, private keys, passwords, or detailed access logs.
-
-================================================================================
-DATA SOURCE
-
-All data obtained from plc.directory (already public). We do not collect 
-data directly from you.
-
-================================================================================
-LEGAL BASIS
-
-Legitimate Interest (GDPR Art. 6(1)(f)) - preserving public records of 
-decentralized identity operations. Your rights are not overridden because 
-all data is already public and operations are designed to be public by 
-protocol specification.
-
-================================================================================
-RECIPIENTS
-
-- Public: All operations accessible via HTTP API
-- Infrastructure: Hosting provider
-- No third-party marketing sharing
-
-================================================================================
-RETENTION
-
-Indefinite - required for cryptographic chain integrity and archival purpose.
-
-================================================================================
-YOUR RIGHTS
-
-Access: GET /did/[YOUR-DID] or contact operator
-Rectification: Update at plc.directory source (we sync changes)
-Erasure: Contact plc.directory (https://plc.directory) as primary source
-Object: Contact operator to object to processing
-Portability: JSON format via API
-Complaint: Lodge with your supervisory authority (edpb.europa.eu)
-
-Contact operator with your DID and request. Response within 1 month.
-
-================================================================================
-AUTOMATED DECISIONS
-
-None. No profiling or automated decision-making with legal effects.
-
-================================================================================
-SECURITY
-
-SHA-256 integrity verification, secure server configuration, access controls.
-
-================================================================================
-About plcbundle: https://tangled.org/@atscan.net/plcbundle
-
-================================================================================
-Configuration: Replace placeholder with actual contact (email, handle)
-"#,
-        current_date, operator_contact, origin_domain, origin_domain
-    );
-
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        "Content-Type",
-        HeaderValue::from_static("text/plain; charset=utf-8"),
-    );
-    (StatusCode::OK, headers, privacy_notice)
-}
 
 async fn handle_debug_memory(State(state): State<ServerState>) -> impl IntoResponse {
     // Get DID index stats for memory info (avoid holding lock in async context)

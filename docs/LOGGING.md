@@ -34,13 +34,13 @@ log::error!("DID index does not exist");
 
 ```bash
 # Normal mode (INFO level)
-plcbundle-rs did resolve did:plc:...
+plcbundle did resolve did:plc:...
 
 # Verbose mode (DEBUG level) - shows all timing and diagnostics
-plcbundle-rs did resolve did:plc:... -v
+plcbundle did resolve did:plc:... -v
 
 # Quiet mode (ERROR only) - only JSON output and critical errors
-plcbundle-rs did resolve did:plc:... --quiet
+plcbundle did resolve did:plc:... --quiet
 ```
 
 ## Output Guidelines
@@ -108,10 +108,10 @@ The logger respects `RUST_LOG` environment variable:
 
 ```bash
 # Override log level
-RUST_LOG=trace plcbundle-rs did resolve did:plc:...
+RUST_LOG=trace plcbundle did resolve did:plc:...
 
 # Filter by module
-RUST_LOG=plcbundle::did_index=debug plcbundle-rs did resolve did:plc:...
+RUST_LOG=plcbundle::did_index=debug plcbundle did resolve did:plc:...
 ```
 
 ## Implementation

@@ -48,7 +48,7 @@ pub struct BundleMetadata {
     /// Creation timestamp
     pub created_at: String,
 
-    /// Creator version (e.g., "plcbundle-rs/0.9.0")
+    /// Creator version (e.g., "plcbundle/0.9.0")
     pub created_by: String,
 
     /// Number of frames
