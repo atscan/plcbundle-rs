@@ -371,7 +371,10 @@ fn handle_did_index(
             .unwrap_or(0)
             > 0
         {
-            println!("         Run: {} index rebuild", plcbundle::constants::BINARY_NAME);
+            println!(
+                "         Run: {} index rebuild",
+                plcbundle::constants::BINARY_NAME
+            );
         }
     }
 

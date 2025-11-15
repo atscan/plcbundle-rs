@@ -1,4 +1,5 @@
 // Constants for version and binary identification
+use std::path::{Path, PathBuf};
 
 /// Binary name used in user agents and metadata
 pub const BINARY_NAME: &str = "plcbundle";
@@ -14,6 +15,16 @@ pub fn user_agent() -> String {
 /// Returns the created_by string for bundle metadata
 pub fn created_by() -> String {
     format!("{}/{}", BINARY_NAME, VERSION)
+}
+
+/// Returns the canonical bundle filename for a bundle number
+pub fn bundle_filename(bundle_num: u32) -> String {
+    format!("{:06}.jsonl.zst", bundle_num)
+}
+
+/// Resolves an on-disk bundle path relative to the provided directory
+pub fn bundle_path(dir: impl AsRef<Path>, bundle_num: u32) -> PathBuf {
+    dir.as_ref().join(bundle_filename(bundle_num))
 }
 
 // ============================================================================

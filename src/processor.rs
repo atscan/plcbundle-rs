@@ -1,3 +1,4 @@
+use crate::constants;
 use crate::index::Index;
 use crate::options::{Options, QueryMode};
 use anyhow::Result;
@@ -187,10 +188,7 @@ impl Processor {
         let callback = Arc::new(progress_callback);
 
         let process_fn = |bundle_num: &u32| -> Result<()> {
-            let bundle_path = self
-                .options
-                .directory
-                .join(format!("{:06}.jsonl.zst", bundle_num));
+            let bundle_path = constants::bundle_path(&self.options.directory, *bundle_num);
 
             if !bundle_path.exists() {
                 return Ok(());

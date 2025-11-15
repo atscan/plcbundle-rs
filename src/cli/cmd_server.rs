@@ -126,13 +126,15 @@ fn run_server(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
     rt.block_on(run_server_async(cmd, dir))
 }
 
-
 #[cfg(feature = "server")]
 async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
     use std::net::SocketAddr;
 
     // Print ASCII art banner at the very beginning
-    eprint!("{}\n", plcbundle::server::get_ascii_art_banner(env!("CARGO_PKG_VERSION")));
+    eprint!(
+        "{}\n",
+        plcbundle::server::get_ascii_art_banner(env!("CARGO_PKG_VERSION"))
+    );
 
     // Initialize manager with handle resolver
     // Always use default resolver URL if not explicitly provided (DID endpoints always available)
@@ -183,8 +185,10 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
         )?
     } else {
         // Read-only mode cannot auto-init
-        BundleManager::with_handle_resolver(dir.clone(), handle_resolver_url)
-            .context(format!("Repository not found. Use '{} init' first or run with --sync", plcbundle::constants::BINARY_NAME))?
+        BundleManager::with_handle_resolver(dir.clone(), handle_resolver_url).context(format!(
+            "Repository not found. Use '{} init' first or run with --sync",
+            plcbundle::constants::BINARY_NAME
+        ))?
     };
 
     // Set verbose mode on manager
@@ -633,7 +637,10 @@ async fn wait_for_background_tasks(tasks: Vec<BackgroundTaskHandle>) {
 
 #[cfg(feature = "server")]
 fn display_server_info(manager: &BundleManager, addr: &str, cmd: &ServerCommand) {
-    eprintln!("Starting {} HTTP server...", plcbundle::constants::BINARY_NAME);
+    eprintln!(
+        "Starting {} HTTP server...",
+        plcbundle::constants::BINARY_NAME
+    );
     eprintln!(
         "  Directory: {}",
         utils::display_path(manager.directory()).display()

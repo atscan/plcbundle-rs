@@ -2,6 +2,7 @@
 use anyhow::{Context, Result};
 use chrono::DateTime;
 use clap::Args;
+use plcbundle::constants;
 use plcbundle::{BundleManager, LoadOptions, Operation};
 use serde::Serialize;
 use serde_json::Value;
@@ -888,7 +889,7 @@ fn display_human(
 fn resolve_target(target: &str, dir: &PathBuf) -> Result<(Option<u32>, PathBuf)> {
     // Try to parse as bundle number
     if let Ok(num) = target.parse::<u32>() {
-        let path = dir.join(format!("{:06}.jsonl.zst", num));
+        let path = constants::bundle_path(dir, num);
         if path.exists() {
             return Ok((Some(num), path));
         } else {

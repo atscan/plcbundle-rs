@@ -708,7 +708,6 @@ async fn handle_mempool(State(state): State<ServerState>) -> impl IntoResponse {
     }
 }
 
-
 async fn handle_debug_memory(State(state): State<ServerState>) -> impl IntoResponse {
     // Get DID index stats for memory info (avoid holding lock in async context)
     let did_stats = tokio::task::spawn_blocking({

@@ -2,6 +2,7 @@ use super::utils::format_number;
 use anyhow::Result;
 use clap::Args;
 use plcbundle::BundleManager;
+use plcbundle::constants;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::Instant;
@@ -257,9 +258,7 @@ fn bench_bundle_load(
             std::io::stderr().flush().ok();
         }
 
-        let bundle_path = manager
-            .directory()
-            .join(format!("{:06}.jsonl.zst", bundle_num));
+        let bundle_path = constants::bundle_path(manager.directory(), bundle_num);
         if let Ok(metadata) = std::fs::metadata(&bundle_path) {
             total_bytes += metadata.len();
         }
@@ -305,9 +304,7 @@ fn bench_bundle_decompress(
 
     // Warmup
     for i in 0..warmup.min(10) {
-        let bundle_path = manager
-            .directory()
-            .join(format!("{:06}.jsonl.zst", bundles[i % bundles.len()]));
+        let bundle_path = constants::bundle_path(manager.directory(), bundles[i % bundles.len()]);
         if bundle_path.exists() {
             let file = std::fs::File::open(&bundle_path)?;
             let mut decoder = zstd::Decoder::new(file)?;
@@ -331,9 +328,7 @@ fn bench_bundle_decompress(
             std::io::stderr().flush().ok();
         }
 
-        let bundle_path = manager
-            .directory()
-            .join(format!("{:06}.jsonl.zst", bundle_num));
+        let bundle_path = constants::bundle_path(manager.directory(), bundle_num);
         if !bundle_path.exists() {
             continue;
         }
@@ -648,9 +643,7 @@ fn bench_sequential_access(
         }
 
         let bundle_num = start_bundle + i as u32;
-        let bundle_path = manager
-            .directory()
-            .join(format!("{:06}.jsonl.zst", bundle_num));
+        let bundle_path = constants::bundle_path(manager.directory(), bundle_num);
         if let Ok(metadata) = std::fs::metadata(&bundle_path) {
             total_bytes += metadata.len();
         }

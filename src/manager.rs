@@ -135,7 +135,7 @@ impl BundleManager {
 
         self.stats.write().unwrap().cache_misses += 1;
 
-        let bundle_path = self.directory.join(format!("{:06}.jsonl.zst", num));
+        let bundle_path = constants::bundle_path(&self.directory, num);
         let operations = self.load_bundle_from_disk(&bundle_path)?;
 
         if options.cache {
@@ -152,7 +152,7 @@ impl BundleManager {
     /// This method uses frame-based access for efficient random reads.
     /// Falls back to legacy sequential scan if no frame index is available.
     pub fn get_operation_raw(&self, bundle_num: u32, position: usize) -> Result<String> {
-        let bundle_path = self.directory.join(format!("{:06}.jsonl.zst", bundle_num));
+        let bundle_path = constants::bundle_path(&self.directory, bundle_num);
 
         if !bundle_path.exists() {
             anyhow::bail!("Bundle {} not found", bundle_num);
@@ -335,39 +335,12 @@ impl BundleManager {
         &self,
         did: &str,
     ) -> Result<Vec<OperationWithLocation>> {
-        let did_index = self.did_index.read().unwrap();
-        let locations = did_index.get_did_locations(did)?;
+        let locations = {
+            let did_index = self.did_index.read().unwrap();
+            did_index.get_did_locations(did)?
+        };
 
-        let mut ops_with_loc = Vec::new();
-        for loc in locations {
-            let bundle_num = loc.bundle() as u32;
-            let position = loc.position() as usize;
-
-            match self.get_operation(bundle_num, position) {
-                Ok(op) => {
-                    ops_with_loc.push(OperationWithLocation {
-                        operation: op,
-                        bundle: bundle_num,
-                        position,
-                        nullified: loc.nullified(),
-                    });
-                }
-                Err(e) => {
-                    log::warn!(
-                        "Failed to load operation at bundle {} position {}: {}",
-                        bundle_num,
-                        position,
-                        e
-                    );
-                }
-            }
-        }
-
-        // Sort by global position (bundle * BUNDLE_SIZE + position)
-        ops_with_loc.sort_by_key(|owl| {
-            (owl.bundle as u64) * constants::BUNDLE_SIZE as u64 + owl.position as u64
-        });
-
+        let (ops_with_loc, _) = self.collect_operations_for_locations(&locations)?;
         Ok(ops_with_loc)
     }
 
@@ -385,42 +358,13 @@ impl BundleManager {
         use std::time::Instant;
 
         let index_start = Instant::now();
-        let did_index = self.did_index.read().unwrap();
-        let (locations, shard_stats, shard_num, lookup_timings) =
-            did_index.get_did_locations_with_stats(did)?;
+        let (locations, shard_stats, shard_num, lookup_timings) = {
+            let did_index = self.did_index.read().unwrap();
+            did_index.get_did_locations_with_stats(did)?
+        };
         let _index_time = index_start.elapsed();
 
-        let mut ops_with_loc = Vec::new();
-        let load_start = Instant::now();
-        for loc in locations {
-            let bundle_num = loc.bundle() as u32;
-            let position = loc.position() as usize;
-
-            match self.get_operation(bundle_num, position) {
-                Ok(op) => {
-                    ops_with_loc.push(OperationWithLocation {
-                        operation: op,
-                        bundle: bundle_num,
-                        position,
-                        nullified: loc.nullified(),
-                    });
-                }
-                Err(e) => {
-                    log::warn!(
-                        "Failed to load operation at bundle {} position {}: {}",
-                        bundle_num,
-                        position,
-                        e
-                    );
-                }
-            }
-        }
-        let load_time = load_start.elapsed();
-
-        // Sort by global position (bundle * BUNDLE_SIZE + position)
-        ops_with_loc.sort_by_key(|owl| {
-            (owl.bundle as u64) * constants::BUNDLE_SIZE as u64 + owl.position as u64
-        });
+        let (ops_with_loc, load_time) = self.collect_operations_for_locations(&locations)?;
 
         Ok((
             ops_with_loc,
@@ -501,6 +445,45 @@ impl BundleManager {
         })
     }
 
+    fn collect_operations_for_locations(
+        &self,
+        locations: &[did_index::OpLocation],
+    ) -> Result<(Vec<OperationWithLocation>, std::time::Duration)> {
+        use std::time::Instant;
+
+        let load_start = Instant::now();
+        let mut ops_with_loc = Vec::with_capacity(locations.len());
+        for loc in locations {
+            let bundle_num = loc.bundle() as u32;
+            let position = loc.position() as usize;
+
+            match self.get_operation(bundle_num, position) {
+                Ok(op) => {
+                    ops_with_loc.push(OperationWithLocation {
+                        operation: op,
+                        bundle: bundle_num,
+                        position,
+                        nullified: loc.nullified(),
+                    });
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Failed to load operation at bundle {} position {}: {}",
+                        bundle_num,
+                        position,
+                        e
+                    );
+                }
+            }
+        }
+
+        ops_with_loc.sort_by_key(|owl| {
+            (owl.bundle as u64) * constants::BUNDLE_SIZE as u64 + owl.position as u64
+        });
+
+        Ok((ops_with_loc, load_start.elapsed()))
+    }
+
     pub fn batch_resolve_dids(&self, dids: Vec<String>) -> Result<HashMap<String, Vec<Operation>>> {
         let mut results = HashMap::new();
 
@@ -563,10 +546,7 @@ impl BundleManager {
 
         let mut info = BundleInfo {
             metadata: metadata.clone(),
-            exists: self
-                .directory
-                .join(format!("{:06}.jsonl.zst", num))
-                .exists(),
+            exists: constants::bundle_path(&self.directory, num).exists(),
             cached: self.cache.contains(num),
             operations: None,
             size_info: None,
@@ -624,7 +604,7 @@ impl BundleManager {
         }
 
         for bundle_num in &plan.affected_bundles {
-            let path = self.directory.join(format!("{:06}.jsonl.zst", bundle_num));
+            let path = constants::bundle_path(&self.directory, *bundle_num);
             if path.exists() {
                 std::fs::remove_file(path)?;
             }
@@ -1824,7 +1804,7 @@ impl BundleManager {
         // Write to disk with metadata skippable frame (move to blocking task to avoid blocking async runtime)
         // CRITICAL: We need to calculate compressed_hash from the entire file (including metadata frame)
         // because verification hashes the entire file. So we write the file first, then read it back to calculate the hash.
-        let bundle_path = self.directory.join(format!("{:06}.jsonl.zst", bundle_num));
+        let bundle_path = constants::bundle_path(&self.directory, bundle_num);
         let bundle_path_clone = bundle_path.clone();
         let bundle_metadata_frame_clone = bundle_metadata_frame.clone();
         let compressed_frames_clone = compressed_frames.clone();
@@ -2178,7 +2158,7 @@ impl BundleManager {
         );
 
         // Create backup path
-        let bundle_path = self.directory.join(format!("{:06}.jsonl.zst", bundle_num));
+        let bundle_path = constants::bundle_path(&self.directory, bundle_num);
         let backup_path = bundle_path.with_extension("jsonl.zst.bak");
 
         // Backup existing file
@@ -2372,7 +2352,7 @@ impl BundleManager {
         &self,
         bundle_num: u32,
     ) -> Result<Option<crate::bundle_format::BundleMetadata>> {
-        let bundle_path = self.directory.join(format!("{:06}.jsonl.zst", bundle_num));
+        let bundle_path = constants::bundle_path(&self.directory, bundle_num);
 
         if !bundle_path.exists() {
             return Ok(None);
@@ -2391,7 +2371,7 @@ impl BundleManager {
         let mut deleted_size = 0u64;
 
         for &bundle_num in bundle_numbers {
-            let bundle_path = self.directory.join(format!("{:06}.jsonl.zst", bundle_num));
+            let bundle_path = constants::bundle_path(&self.directory, bundle_num);
 
             // Get file size before deletion
             if let Ok(metadata) = std::fs::metadata(&bundle_path) {
@@ -2427,7 +2407,7 @@ impl BundleManager {
             anyhow::bail!("Bundle {} not found in index", bundle_num);
         }
 
-        let bundle_path = self.directory.join(format!("{:06}.jsonl.zst", bundle_num));
+        let bundle_path = constants::bundle_path(&self.directory, bundle_num);
         if !bundle_path.exists() {
             anyhow::bail!(
                 "Bundle {} file not found (exists in index but missing on disk)",

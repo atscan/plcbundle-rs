@@ -1,5 +1,6 @@
 // src/verification.rs
 use crate::bundle_format;
+use crate::constants;
 use crate::index::BundleMetadata;
 use crate::index::Index;
 use crate::manager::{ChainVerifyResult, ChainVerifySpec, VerifyResult, VerifySpec};
@@ -15,7 +16,7 @@ pub fn verify_bundle(
 ) -> Result<VerifyResult> {
     let mut errors = Vec::new();
 
-    let bundle_path = directory.join(format!("{:06}.jsonl.zst", metadata.bundle_number));
+    let bundle_path = constants::bundle_path(directory, metadata.bundle_number);
 
     if !bundle_path.exists() {
         errors.push(format!("Bundle file not found: {:?}", bundle_path));

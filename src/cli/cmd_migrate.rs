@@ -5,6 +5,7 @@ use anyhow::{Result, bail};
 use clap::Args;
 use plcbundle::BundleManager;
 use plcbundle::bundle_format;
+use plcbundle::constants;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -79,7 +80,7 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
     let mut format_counts = std::collections::HashMap::new();
 
     for meta in bundles {
-        let bundle_path = dir.join(format!("{:06}.jsonl.zst", meta.bundle_number));
+        let bundle_path = constants::bundle_path(&dir, meta.bundle_number);
 
         // Try to extract metadata to check format
         let old_format = match bundle_format::extract_metadata_from_file(&bundle_path) {
@@ -134,7 +135,11 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
     for (format, count) in &format_counts {
         format_parts.push(format!("{} ({})", format, count));
     }
-    eprintln!("  Format:  {} → {}/1.0", format_parts.join(" + "), plcbundle::constants::BINARY_NAME);
+    eprintln!(
+        "  Format:  {} → {}/1.0",
+        format_parts.join(" + "),
+        plcbundle::constants::BINARY_NAME
+    );
 
     let total_uncompressed: u64 = needs_migration.iter().map(|i| i.uncompressed_size).sum();
     let avg_compression = if total_size > 0 {
@@ -321,7 +326,7 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
             // Measure actual metadata size
             let mut total_actual_metadata = 0u64;
             for bundle_num in &hash_changes {
-                let bundle_path = dir.join(format!("{:06}.jsonl.zst", bundle_num));
+                let bundle_path = constants::bundle_path(&dir, *bundle_num);
                 if let Ok(meta_size) = measure_metadata_size(&bundle_path) {
                     total_actual_metadata += meta_size;
                 }
@@ -408,7 +413,10 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
                 eprintln!("   • This could mean the original bundle was corrupted or modified");
                 eprintln!("   • The chain integrity check is working correctly");
                 eprintln!("\n   To diagnose:");
-                eprintln!("   1. Run '{} verify' to check all bundles", plcbundle::constants::BINARY_NAME);
+                eprintln!(
+                    "   1. Run '{} verify' to check all bundles",
+                    plcbundle::constants::BINARY_NAME
+                );
                 eprintln!("   2. Check if the bundle file was manually modified");
                 eprintln!("   3. Re-sync affected bundles from the PLC directory");
             } else if err_msg.contains("Parent hash mismatch") {
@@ -417,7 +425,10 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
                 eprintln!("   • Bundles may have been migrated out of order");
                 eprintln!("   • The index metadata may be inconsistent");
                 eprintln!("\n   To fix:");
-                eprintln!("   1. Run '{} verify' to identify all broken links", plcbundle::constants::BINARY_NAME);
+                eprintln!(
+                    "   1. Run '{} verify' to identify all broken links",
+                    plcbundle::constants::BINARY_NAME
+                );
                 eprintln!("   2. Ensure bundles are migrated in sequential order (1, 2, 3, ...)");
             }
         }

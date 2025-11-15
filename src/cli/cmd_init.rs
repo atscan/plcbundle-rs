@@ -77,9 +77,18 @@ pub fn run(cmd: InitCommand) -> Result<()> {
     println!("  Origin:   {}", plc_url);
     println!("  Index:    plc_bundles.json");
     println!("\nNext steps:");
-    println!("  {} sync           # Fetch bundles from PLC directory", plcbundle::constants::BINARY_NAME);
-    println!("  {} info           # Show repository info", plcbundle::constants::BINARY_NAME);
-    println!("  {} mempool status # Check mempool status", plcbundle::constants::BINARY_NAME);
+    println!(
+        "  {} sync           # Fetch bundles from PLC directory",
+        plcbundle::constants::BINARY_NAME
+    );
+    println!(
+        "  {} info           # Show repository info",
+        plcbundle::constants::BINARY_NAME
+    );
+    println!(
+        "  {} mempool status # Check mempool status",
+        plcbundle::constants::BINARY_NAME
+    );
 
     Ok(())
 }

@@ -1,3 +1,4 @@
+use crate::constants;
 use crate::manager::*;
 use crate::operations::*;
 use std::ffi::{CStr, CString};
@@ -820,7 +821,7 @@ pub unsafe extern "C" fn bundle_manager_export(
             break;
         }
 
-        let bundle_path = dir_path.join(format!("{:06}.jsonl.zst", bundle_num));
+        let bundle_path = constants::bundle_path(&dir_path, bundle_num);
         if !bundle_path.exists() {
             continue;
         }
