@@ -174,11 +174,20 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
     use rayon::prelude::*;
     use std::sync::{Arc, Mutex};
 
-    let progress_arc = Arc::new(Mutex::new(0usize));
-    let bytes_processed_arc = Arc::new(Mutex::new(0u64));
+    let progress_arc = Arc::new(Mutex::new(progress));
+    // Use atomics for counters to reduce lock contention
+    use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
+    let count_atomic = Arc::new(AtomicUsize::new(0));
+    let bytes_atomic = Arc::new(AtomicU64::new(0));
+    
+    // Update progress bar less frequently to reduce contention
+    // Update every N bundles or every 100ms, whichever comes first
+    let update_interval = (workers.max(1) * 4).max(10); // At least every 10 bundles, or 4x workers
+    
     let results: Vec<_> = if workers > 1 {
         // Parallel mode: process in chunks to maintain some ordering
-        let chunk_size = workers * 2; // Process 2x workers at a time for better pipelining
+        // Increase chunk size to reduce contention
+        let chunk_size = workers * 4; // Process 4x workers at a time for better pipelining
 
         needs_migration
             .par_chunks(chunk_size)
@@ -189,19 +198,14 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
                     .map(|info| {
                         let result = manager.migrate_bundle(info.bundle_number);
 
-                        // Update progress with bytes
-                        {
+                        // Update atomics (lock-free)
+                        let current_count = count_atomic.fetch_add(1, Ordering::Relaxed) + 1;
+                        let total_bytes = bytes_atomic.fetch_add(info.old_size, Ordering::Relaxed) + info.old_size;
+
+                        // Only update progress bar periodically to reduce lock contention
+                        if current_count % update_interval == 0 || current_count == 1 {
                             let mut prog = progress_arc.lock().unwrap();
-                            *prog += 1;
-                            let count = *prog;
-                            drop(prog);
-
-                            let mut bytes = bytes_processed_arc.lock().unwrap();
-                            *bytes += info.old_size;
-                            let total_bytes = *bytes;
-                            drop(bytes);
-
-                            progress.set_with_bytes(count, total_bytes);
+                            prog.set_with_bytes(current_count, total_bytes);
                         }
 
                         (info, result)
@@ -210,23 +214,19 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
             })
             .collect()
     } else {
-        // Sequential mode
+        // Sequential mode - can update more frequently
         needs_migration
             .iter()
-            .map(|info| {
+            .enumerate()
+            .map(|(i, info)| {
                 let result = manager.migrate_bundle(info.bundle_number);
 
+                let current_count = i + 1;
+                let total_bytes = bytes_atomic.fetch_add(info.old_size, Ordering::Relaxed) + info.old_size;
+
+                // Update every bundle in sequential mode (no contention)
                 let mut prog = progress_arc.lock().unwrap();
-                *prog += 1;
-                let count = *prog;
-                drop(prog);
-
-                let mut bytes = bytes_processed_arc.lock().unwrap();
-                *bytes += info.old_size;
-                let total_bytes = *bytes;
-                drop(bytes);
-
-                progress.set_with_bytes(count, total_bytes);
+                prog.set_with_bytes(current_count, total_bytes);
 
                 (info, result)
             })
@@ -281,7 +281,14 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
         }
     }
 
-    progress.finish();
+    // Final progress update with accurate counts
+    {
+        let final_count = count_atomic.load(Ordering::Relaxed);
+        let final_bytes = bytes_atomic.load(Ordering::Relaxed);
+        let mut prog = progress_arc.lock().unwrap();
+        prog.set_with_bytes(final_count, final_bytes);
+        prog.finish();
+    }
     let elapsed = start.elapsed();
 
     // Update index (already done in migrate_bundle, but verify)

@@ -1920,8 +1920,7 @@ impl BundleManager {
         // Add to index
         // CRITICAL: Clone index data while holding lock briefly, then release lock
         // before doing expensive serialization and file I/O in spawn_blocking
-        let index_path = self.directory.join("plc_bundles.json");
-        let index_json = {
+        let index_clone = {
             let mut index = self.index.write().unwrap();
             index.bundles.push(bundle_metadata);
             index.last_bundle = bundle_num;
@@ -1935,27 +1934,10 @@ impl BundleManager {
         };
 
         // Serialize and write index in blocking task to avoid blocking async runtime
-        // Use atomic write (temp file + rename) to prevent corruption on shutdown
-        let index_path_clone = index_path.clone();
+        // Use Index::save() which does atomic write (temp file + rename)
+        let directory = self.directory.clone();
         tokio::task::spawn_blocking(move || {
-            let index_json = serde_json::to_string_pretty(&index_json)?;
-
-            // Atomic write: write to temp file first, then rename
-            // This ensures the index file is never partially written, even if process is killed
-            let temp_path = index_path_clone.with_extension("json.tmp");
-            std::fs::write(&temp_path, index_json).with_context(|| {
-                format!("Failed to write temp index to: {}", temp_path.display())
-            })?;
-
-            // Atomic rename - this is guaranteed to be atomic on most filesystems
-            std::fs::rename(&temp_path, &index_path_clone).with_context(|| {
-                format!(
-                    "Failed to rename temp index to: {}",
-                    index_path_clone.display()
-                )
-            })?;
-
-            Ok::<(), anyhow::Error>(())
+            index_clone.save(directory)
         })
         .await
         .context("Index write task failed")??;
@@ -2249,11 +2231,8 @@ impl BundleManager {
                 index.bundles.iter().map(|b| b.uncompressed_size).sum();
             index.updated_at = chrono::Utc::now().to_rfc3339();
 
-            // Save index to disk
-            let index_path = self.directory.join("plc_bundles.json");
-            let index_json = serde_json::to_string_pretty(&*index)?;
-            std::fs::write(&index_path, index_json)
-                .with_context(|| format!("Failed to write index to: {}", index_path.display()))?;
+            // Save index to disk using Index::save() (atomic write)
+            index.save(&self.directory)?;
         }
 
         // Remove backup only after index is successfully updated
@@ -2329,11 +2308,8 @@ impl BundleManager {
         index.total_uncompressed_size_bytes =
             index.bundles.iter().map(|b| b.uncompressed_size).sum();
 
-        // Save updated index
-        let index_path = self.directory.join("plc_bundles.json");
-        let index_json = serde_json::to_string_pretty(&*index)?;
-        std::fs::write(&index_path, index_json)
-            .with_context(|| format!("Failed to write index to: {}", index_path.display()))?;
+        // Save updated index using Index::save() (atomic write)
+        index.save(&self.directory)?;
 
         Ok(())
     }

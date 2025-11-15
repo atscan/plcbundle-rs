@@ -432,6 +432,51 @@ pub fn calculate_compressed_hash(compressed_data: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// Load all operations from a bundle file as raw JSON strings
+///
+/// This function reads a bundle file and returns the operations as raw JSON strings
+/// without parsing them into Operation structs. Useful for calculating uncompressed
+/// sizes and other metadata operations.
+///
+/// # Arguments
+/// * `path` - Path to the bundle file
+///
+/// # Returns
+/// Vector of raw JSON strings, one per operation
+pub fn load_bundle_as_json_strings(path: &std::path::Path) -> Result<Vec<String>> {
+    use std::io::Read;
+
+    let file = std::fs::File::open(path)?;
+    let mut reader = std::io::BufReader::new(file);
+
+    // Skip metadata frame if present
+    let mut magic_buf = [0u8; 4];
+    reader.read_exact(&mut magic_buf)?;
+    let magic = u32::from_le_bytes(magic_buf);
+
+    if magic >= 0x184D2A50 && magic <= 0x184D2A5F {
+        // Skip metadata frame
+        let mut size_buf = [0u8; 4];
+        reader.read_exact(&mut size_buf)?;
+        let frame_size = u32::from_le_bytes(size_buf);
+
+        let mut skip_buf = vec![0u8; frame_size as usize];
+        reader.read_exact(&mut skip_buf)?;
+    } else {
+        // Rewind if not a skippable frame
+        drop(reader);
+        reader = std::io::BufReader::new(std::fs::File::open(path)?);
+    }
+
+    // Decompress remaining data
+    let decoder = zstd::Decoder::new(reader)?;
+    let mut decompressed = String::new();
+    std::io::BufReader::new(decoder).read_to_string(&mut decompressed)?;
+
+    // Split into lines
+    Ok(decompressed.lines().map(|s| s.to_string()).collect())
+}
+
 /// Create bundle metadata structure
 pub fn create_bundle_metadata(
     bundle_number: u32,
