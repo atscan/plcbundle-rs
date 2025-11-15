@@ -32,13 +32,6 @@ pub fn run(cmd: InitCommand) -> Result<()> {
 
     let index_path = dir.join("plc_bundles.json");
 
-    // Check if already initialized
-    if index_path.exists() && !cmd.force {
-        eprintln!("Repository already initialized at: {}", dir.display());
-        eprintln!("Use --force to reinitialize");
-        return Ok(());
-    }
-
     // Determine PLC Directory URL
     let plc_url = if let Some(plc) = cmd.plc {
         // Use provided --plc flag
@@ -51,32 +44,14 @@ pub fn run(cmd: InitCommand) -> Result<()> {
         prompt_plc_directory_url()?
     };
 
-    // Create directory if it doesn't exist
-    if !dir.exists() {
-        std::fs::create_dir_all(&dir)?;
-        println!("Created directory: {}", dir.display());
+    // Initialize repository using Index API
+    let initialized = plcbundle::Index::init(&dir, plc_url.clone(), cmd.force)?;
+
+    if !initialized {
+        eprintln!("Repository already initialized at: {}", dir.display());
+        eprintln!("Use --force to reinitialize");
+        return Ok(());
     }
-
-    // Create .plcbundle directory for DID index
-    let plcbundle_dir = dir.join(constants::DID_INDEX_DIR);
-    if !plcbundle_dir.exists() {
-        std::fs::create_dir_all(&plcbundle_dir)?;
-    }
-
-    // Create empty index
-    let index = serde_json::json!({
-        "version": "1.0",
-        "origin": plc_url,
-        "last_bundle": 0,
-        "updated_at": chrono::Utc::now().to_rfc3339(),
-        "total_size_bytes": 0,
-        "total_uncompressed_size_bytes": 0,
-        "bundles": []
-    });
-
-    // Write index file
-    let json = serde_json::to_string_pretty(&index)?;
-    std::fs::write(&index_path, json)?;
 
     // Check if user needs to cd to the directory
     let current_dir = std::env::current_dir()?;

@@ -8,6 +8,10 @@
 
 **CLI commands NEVER open bundle files directly**
 
+**CLI commands NEVER access core components (Index, bundle_format, etc.) directly**
+
+All CLI operations MUST go through `BundleManager` public API methods.
+
 ### 2. FOLLOW THE SPECIFICATION
 
 **All bundle creation MUST comply with [`docs/specification.md`](docs/specification.md)**
@@ -24,7 +28,7 @@ Critical requirements from spec:
 
 ---
 
-### Rule 1 Details: NO DIRECT FILE ACCESS
+### Rule 1 Details: NO DIRECT FILE ACCESS OR CORE COMPONENT ACCESS
 
 ```rust
 // ❌ WRONG - Direct file access
@@ -32,10 +36,18 @@ let file = File::open(bundle_path)?;
 let data = std::fs::read(path)?;
 std::fs::remove_file(path)?;
 
+// ❌ WRONG - Direct core component access from CLI
+use plcbundle::Index;
+let index = Index::load(&dir)?;
+Index::init(&dir, origin, force)?;
+Index::rebuild_from_bundles(&dir, origin, callback)?;
+
 // ✅ CORRECT - Via BundleManager API
 manager.load_bundle(num, options)?;
 manager.get_operation_raw(bundle, pos)?;
 manager.delete_bundle_files(&[num])?;
+manager.init_repository(origin, force)?;
+manager.rebuild_index(origin, callback)?;
 ```
 
 ## Architecture
@@ -43,13 +55,19 @@ manager.delete_bundle_files(&[num])?;
 All operations flow through `BundleManager`:
 
 ```
-┌─────────────┐      ┌──────────────────┐      ┌────────────────┐
-│ CLI Command │─────→│  BundleManager   │─────→│  File System   │
-│             │      │   (Public API)   │      │                │
-└─────────────┘      └──────────────────┘      └────────────────┘
-     Uses                 Provides                Opens files
-     Only                Public API               Directly
+┌─────────────┐      ┌──────────────────┐      ┌────────────────┐      ┌──────────────┐
+│ CLI Command │─────→│  BundleManager   │─────→│ Core Modules   │─────→│ File System  │
+│             │      │   (Public API)   │      │ (Index, etc.)  │      │              │
+└─────────────┘      └──────────────────┘      └────────────────┘      └──────────────┘
+     Uses                 Provides                Internal Use             Direct Access
+     Only                Public API               Only                     Only Here
 ```
+
+**Key principle:** CLI commands should ONLY interact with `BundleManager`, never with:
+- `Index` directly
+- `bundle_format` functions directly
+- Direct file I/O (`std::fs`, `File::open`, etc.)
+- Any other core module directly
 
 ### Why This Rule Exists
 
@@ -163,14 +181,31 @@ eprintln!("Working in: {}", display_path.display());
 let bundle_path = dir.join(format!("{:06}.jsonl.zst", num));
 let file = File::open(bundle_path)?;
 let decoder = zstd::Decoder::new(file)?;
+
+// CLI command accessing Index directly
+use plcbundle::Index;
+let index = Index::rebuild_from_bundles(&dir, origin, callback)?;
+index.save(&dir)?;
+
+// CLI command accessing bundle_format directly
+use plcbundle::bundle_format;
+let ops = bundle_format::load_bundle_as_json_strings(&path)?;
 ```
 
 ### ✅ Do This Instead
 
 ```rust
-// CLI command using BundleManager API
+// CLI command using BundleManager API only
 let manager = BundleManager::new(dir)?;
+
+// Loading bundles
 let result = manager.load_bundle(num, LoadOptions::default())?;
+
+// Rebuilding index
+manager.rebuild_index(origin, callback)?;
+
+// Initializing repository
+manager.init_repository(origin, force)?;
 ```
 
 ### ❌ Don't Do This

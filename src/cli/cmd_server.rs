@@ -161,25 +161,8 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
         // Sync mode can auto-init
         BundleManager::with_handle_resolver(dir.clone(), handle_resolver_url.clone()).or_else(
             |_| {
-                // Try to initialize if it doesn't exist (similar to init command)
-                let index_path = dir.join("plc_bundles.json");
-                if !index_path.exists() {
-                    let plcbundle_dir = dir.join(plcbundle::constants::DID_INDEX_DIR);
-                    if !plcbundle_dir.exists() {
-                        std::fs::create_dir_all(&plcbundle_dir)?;
-                    }
-                    let index = serde_json::json!({
-                        "version": "1.0",
-                        "origin": cmd.plc.clone(),
-                        "last_bundle": 0,
-                        "updated_at": Utc::now().to_rfc3339(),
-                        "total_size_bytes": 0,
-                        "total_uncompressed_size_bytes": 0,
-                        "bundles": []
-                    });
-                    let json = serde_json::to_string_pretty(&index)?;
-                    std::fs::write(&index_path, json)?;
-                }
+                // Try to initialize if it doesn't exist using Index API
+                plcbundle::Index::init(&dir, cmd.plc.clone(), false)?;
                 BundleManager::with_handle_resolver(dir.clone(), handle_resolver_url.clone())
             },
         )?

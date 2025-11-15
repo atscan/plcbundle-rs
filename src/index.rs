@@ -61,6 +61,59 @@ impl Index {
         Ok(())
     }
 
+    /// Initialize a new repository with an empty index
+    ///
+    /// Creates all necessary directories and an empty index file.
+    /// This is idempotent - if the repository already exists, it will return an error
+    /// unless `force` is true, in which case it will reinitialize.
+    ///
+    /// # Arguments
+    /// * `directory` - Directory to initialize
+    /// * `origin` - PLC directory URL or origin identifier
+    /// * `force` - Whether to reinitialize if already exists
+    ///
+    /// # Returns
+    /// True if initialized (created new), False if already existed and force=false
+    pub fn init<P: AsRef<Path>>(directory: P, origin: String, force: bool) -> Result<bool> {
+        use anyhow::Context;
+
+        let dir = directory.as_ref();
+        let index_path = dir.join("plc_bundles.json");
+
+        // Check if already initialized
+        if index_path.exists() && !force {
+            return Ok(false); // Already initialized
+        }
+
+        // Create directory if it doesn't exist
+        if !dir.exists() {
+            std::fs::create_dir_all(dir)
+                .with_context(|| format!("Failed to create directory: {}", dir.display()))?;
+        }
+
+        // Create .plcbundle directory for DID index
+        let plcbundle_dir = dir.join(crate::constants::DID_INDEX_DIR);
+        if !plcbundle_dir.exists() {
+            std::fs::create_dir_all(&plcbundle_dir)
+                .with_context(|| format!("Failed to create DID index directory: {}", plcbundle_dir.display()))?;
+        }
+
+        // Create and save empty index
+        let index = Index {
+            version: "1.0".to_string(),
+            origin,
+            last_bundle: 0,
+            updated_at: chrono::Utc::now().to_rfc3339(),
+            total_size_bytes: 0,
+            total_uncompressed_size_bytes: 0,
+            bundles: Vec::new(),
+        };
+
+        index.save(dir)?;
+
+        Ok(true) // Successfully initialized
+    }
+
     /// Rebuild index from existing bundle files by scanning their metadata
     ///
     /// This scans all .jsonl.zst files in the directory and reconstructs the index
