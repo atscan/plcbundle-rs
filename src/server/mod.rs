@@ -55,7 +55,7 @@ pub use handlers::ServerState;
 
 /// Returns the ASCII art banner as a string
 #[cfg(feature = "server")]
-pub fn get_ascii_art_banner(version: &str) -> String {
+pub fn get_ascii_art_banner(_version: &str) -> String {
     format!(
         r#"
 	⠀⠀⠀⠀⠀⠀⠀⠀⠀⠄⠀⡀⠀⠀⠀⠀⠀⠀⢀⠀⠀⡀⠀⢀⠀⢀⡀⣤⡢⣤⡤⡀⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀

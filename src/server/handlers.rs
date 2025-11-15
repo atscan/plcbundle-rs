@@ -20,6 +20,19 @@ use tokio_util::io::ReaderStream;
 use tower::ServiceBuilder;
 use tower_http::cors::CorsLayer;
 
+/// Format a number with comma separators (e.g., 1234567 -> "1,234,567")
+fn format_number(n: u64) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    for (i, c) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    result.chars().rev().collect()
+}
+
 #[derive(Clone)]
 pub struct ServerState {
     pub manager: Arc<BundleManager>,
@@ -183,7 +196,40 @@ async fn handle_root(
         response.push_str("\nResolver\n");
         response.push_str("━━━━━━━━\n");
         response.push_str("  Status:        enabled\n");
-        // TODO: Add DID index stats
+
+        let did_stats = state.manager.get_did_index_stats();
+        if did_stats
+            .get("exists")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            let indexed_dids = did_stats
+                .get("indexed_dids")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let mempool_dids = did_stats
+                .get("mempool_dids")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let total_dids = did_stats
+                .get("total_dids")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+
+            if mempool_dids > 0 {
+                response.push_str(&format!(
+                    "  Total DIDs:    {} ({} indexed + {} mempool)\n",
+                    format_number(total_dids as u64),
+                    format_number(indexed_dids as u64),
+                    format_number(mempool_dids as u64)
+                ));
+            } else {
+                response.push_str(&format!(
+                    "  Total DIDs:    {}\n",
+                    format_number(total_dids as u64)
+                ));
+            }
+        }
         response.push_str("\n");
     }
 
