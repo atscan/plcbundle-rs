@@ -751,7 +751,7 @@ impl BundleManager {
         let build_start = Instant::now();
 
         // Call the streaming build method in did_index
-        let (total_operations, _bundles_processed) = {
+        let (total_operations, _bundles_processed, stage1_duration, stage2_duration) = {
             let did_index_guard = self.did_index.read().unwrap();
             if let Some(ref idx) = *did_index_guard {
                 idx.build_from_scratch(
@@ -791,9 +791,12 @@ impl BundleManager {
 
         eprintln!("\n");
         eprintln!("✅ Index Build Complete");
-        eprintln!("   Time:       {:.1}s", total_duration.as_secs_f64());
+        eprintln!("   Time:       {:.1}s (Stage 1: {:.1}s, Stage 2: {:.1}s)", 
+            total_duration.as_secs_f64(),
+            stage1_duration.as_secs_f64(),
+            stage2_duration.as_secs_f64()
+        );
         eprintln!("   Operations: {}", crate::format::format_number(total_operations));
-        eprintln!("   Rate:       {:.0} ops/sec", total_operations as f64 / total_duration.as_secs_f64());
 
         // Get final stats
         let final_stats = self.get_did_index_stats();

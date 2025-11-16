@@ -57,7 +57,7 @@ struct Cli {
     quiet: bool,
 
     /// Enable verbose output
-    #[arg(long, global = true)]
+    #[arg(short = 'v', long, global = true)]
     verbose: bool,
 
     #[command(subcommand)]

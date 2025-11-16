@@ -16,11 +16,11 @@ impl ProgressBar {
     /// and we don't want indicatif to color things red based on slow progress detection
     pub fn new(total: usize) -> Self {
         let pb = IndicatifProgressBar::new(total as u64);
-        // Remove {per_sec} from template since it's not meaningful for shard consolidation
+        // Remove {per_sec} and {msg} from template since they're not meaningful for shard consolidation
         // and indicatif may color it red when it detects slow progress
         pb.set_style(
             ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos:.cyan}/{len:.cyan} | {msg} | ETA: {eta}")
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos:.cyan}/{len:.cyan} | ETA: {eta}")
                 .unwrap()
                 .progress_chars("█▓▒░ "),
         );

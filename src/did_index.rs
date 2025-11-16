@@ -805,7 +805,7 @@ impl Manager {
         flush_interval: u32,
         progress_callback: Option<F>,
         num_threads: usize,
-    ) -> Result<(u64, u64)> // Returns (total_operations, bundles_processed)
+    ) -> Result<(u64, u64, std::time::Duration, std::time::Duration)> // Returns (total_operations, bundles_processed, stage1_duration, stage2_duration)
     where
         F: Fn(u32, u32, u64, Option<String>) + Send + Sync, // (current, total, bytes_processed, stage)
     {
@@ -1075,6 +1075,9 @@ impl Manager {
         std::thread::yield_now(); // Give OS a chance to sync file handles
         std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst); // Memory barrier
 
+        // Calculate stage 1 duration (processing bundles)
+        let stage1_duration = build_start.elapsed();
+
         // Pass 2: Consolidate all temporary files for each shard
         eprintln!("\n📊 Stage 2/2: Consolidating shards...");
         log::debug!("[DID Index] Pass 2: Consolidating shards...");
@@ -1204,15 +1207,14 @@ impl Manager {
 
         let total_duration = build_start.elapsed();
         log::info!(
-            "[DID Index] Streaming build complete: {} bundles, {} operations, {} DIDs in {:.3}s ({:.0} ops/sec)",
+            "[DID Index] Streaming build complete: {} bundles, {} operations, {} DIDs in {:.3}s",
             last_bundle,
             total_operations,
             total_dids,
-            total_duration.as_secs_f64(),
-            total_operations as f64 / total_duration.as_secs_f64()
+            total_duration.as_secs_f64()
         );
 
-        Ok((total_operations, last_bundle as u64))
+        Ok((total_operations, last_bundle as u64, stage1_duration, pass2_duration))
     }
 
     // Update index for new bundle (incremental)

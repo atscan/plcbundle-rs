@@ -304,10 +304,18 @@ pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize, flush_interval
                     *stage2_pb = Some(ProgressBar::new(256));
                 }
                 
-                // Update Stage 2 progress bar (pos/len already shows the count, so no message needed)
-                if let Some(ref pb) = *stage2_progress.lock().unwrap() {
+                // Update Stage 2 progress bar (pos/len already shows the count, no message needed)
+                let mut stage2_pb_guard = stage2_progress.lock().unwrap();
+                if let Some(ref pb) = *stage2_pb_guard {
                     pb.set(current as usize);
-                    pb.set_message(""); // Clear message to avoid redundant count
+                    // Don't set message - progress bar template will show pos/len without extra message
+                    
+                    // Finish progress bar when stage 2 completes (256/256)
+                    if current == 256 {
+                        if let Some(pb) = stage2_pb_guard.take() {
+                            pb.finish();
+                        }
+                    }
                 }
             } else {
                 // Stage 1: use byte tracking, no stage message in progress bar
@@ -357,16 +365,6 @@ pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize, flush_interval
     }
 
     eprintln!();
-
-    // Show final info
-    let stats = manager_arc.get_did_index_stats();
-    let total_dids = stats
-        .get("total_dids")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
-
-    eprintln!("   Total DIDs: {}", utils::format_number(total_dids as u64));
-    eprintln!("   Location:   {}/{}/", utils::display_path(&dir).display(), constants::DID_INDEX_DIR);
 
     Ok(())
 }
@@ -723,7 +721,7 @@ fn rebuild_and_compare_index(
 
     // Stream bundles directly from disk - memory efficient!
     // Use default flush interval for verify
-    temp_did_index.build_from_scratch(
+    let (_, _, _, _) = temp_did_index.build_from_scratch(
         manager.directory(),
         last_bundle,
         constants::DID_INDEX_FLUSH_INTERVAL, // flush_interval
