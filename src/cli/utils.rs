@@ -4,7 +4,7 @@ use anyhow::Result;
 use plcbundle::BundleManager;
 use std::path::{Path, PathBuf};
 
-pub use plcbundle::format::{format_bytes, format_number};
+pub use plcbundle::format::{format_bytes, format_bytes_per_sec, format_number};
 
 /// Trait for extracting global flags from command objects
 /// Commands that have verbose/quiet fields should implement this trait

@@ -101,3 +101,23 @@ pub fn format_std_duration_ms(duration: StdDuration) -> String {
         format!("{:.0}ms", ms)
     }
 }
+
+/// Format a bytes-per-second rate as a human-readable string (e.g. "1.23 MB/sec").
+/// Takes bytes per second as a floating point number.
+pub fn format_bytes_per_sec(bytes_per_sec: f64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+
+    let mut size = bytes_per_sec;
+    let mut unit_idx = 0usize;
+
+    while size >= 1024.0 && unit_idx < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_idx += 1;
+    }
+
+    if unit_idx == 0 {
+        format!("{:.1} {}/sec", bytes_per_sec, UNITS[unit_idx])
+    } else {
+        format!("{:.1} {}/sec", size, UNITS[unit_idx])
+    }
+}

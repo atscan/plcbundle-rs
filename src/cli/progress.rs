@@ -1,3 +1,4 @@
+use plcbundle::format::format_bytes_per_sec;
 use indicatif::{ProgressBar as IndicatifProgressBar, ProgressStyle};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -31,8 +32,8 @@ impl ProgressBar {
     pub fn with_bytes(total: usize, _total_bytes: u64) -> Self {
         let pb = IndicatifProgressBar::new(total as u64);
         
-        // Custom template that shows MB/s calculated from our tracked bytes
-        // We'll calculate MB/s manually and include it in the message
+        // Custom template that shows data rate calculated from our tracked bytes
+        // We'll calculate bytes/sec manually and include it in the message
         pb.set_style(
             ProgressStyle::default_bar()
                 .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} | {msg} | ETA: {eta}")
@@ -60,14 +61,14 @@ impl ProgressBar {
         let current_msg = self.pb.message().to_string();
         drop(bytes_guard);
         
-        // Update message to include MB/s, preserving user message if present
+        // Update message to include data rate, preserving user message if present
         let elapsed = self.pb.elapsed().as_secs_f64();
         let bytes_guard = self.current_bytes.lock().unwrap();
         let bytes = *bytes_guard;
         drop(bytes_guard);
         
-        let mb_per_sec = if elapsed > 0.0 {
-            (bytes as f64 / 1_000_000.0) / elapsed
+        let bytes_per_sec = if elapsed > 0.0 {
+            bytes as f64 / elapsed
         } else {
             0.0
         };
@@ -80,9 +81,9 @@ impl ProgressBar {
         };
         
         let new_msg = if user_msg.is_empty() {
-            format!("{:.1} MB/s", mb_per_sec)
+            format_bytes_per_sec(bytes_per_sec)
         } else {
-            format!("{:.1} MB/s | {}", mb_per_sec, user_msg)
+            format!("{} | {}", format_bytes_per_sec(bytes_per_sec), user_msg)
         };
         self.pb.set_message(new_msg);
     }
@@ -90,22 +91,22 @@ impl ProgressBar {
     pub fn set_message<S: Into<String>>(&self, msg: S) {
         let msg_str: String = msg.into();
         if self.show_bytes {
-            // If showing bytes, prepend MB/s to the message
+            // If showing bytes, prepend data rate to the message
             let elapsed = self.pb.elapsed().as_secs_f64();
             let bytes_guard = self.current_bytes.lock().unwrap();
             let bytes = *bytes_guard;
             drop(bytes_guard);
             
-            let mb_per_sec = if elapsed > 0.0 {
-                (bytes as f64 / 1_000_000.0) / elapsed
+            let bytes_per_sec = if elapsed > 0.0 {
+                bytes as f64 / elapsed
             } else {
                 0.0
             };
             
             let new_msg = if msg_str.is_empty() {
-                format!("{:.1} MB/s", mb_per_sec)
+                format_bytes_per_sec(bytes_per_sec)
             } else {
-                format!("{:.1} MB/s | {}", mb_per_sec, msg_str)
+                format!("{} | {}", format_bytes_per_sec(bytes_per_sec), msg_str)
             };
             self.pb.set_message(new_msg);
         } else {
