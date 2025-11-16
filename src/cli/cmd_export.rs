@@ -14,17 +14,13 @@ use super::utils;
 #[derive(Args)]
 #[command(about = "Export operations to different formats")]
 pub struct ExportCommand {
-    /// Bundle range (e.g., "1-100")
-    #[arg(short, long)]
-    pub range: Option<String>,
+    /// Bundle range to export (e.g., "42", "1-100", or "1-10,20-30")
+    #[arg(long)]
+    pub bundles: Option<String>,
 
     /// Export all bundles
     #[arg(long)]
     pub all: bool,
-
-    /// Bundle range (legacy, use --range instead)
-    #[arg(long, hide = true)]
-    pub bundles: Option<String>,
 
     /// Output format
     #[arg(short = 'f', long, default_value = "jsonl")]
@@ -33,6 +29,10 @@ pub struct ExportCommand {
     /// Output file (default: stdout)
     #[arg(short, long)]
     pub output: Option<PathBuf>,
+
+    /// Number of threads to use (0 = auto-detect)
+    #[arg(short = 'j', long, default_value = "0")]
+    pub threads: usize,
 
     /// Limit number of operations to export
     #[arg(long)]
@@ -64,9 +64,6 @@ pub enum ExportFormat {
 }
 
 pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Result<()> {
-    let range = cmd.range;
-    let all = cmd.all;
-    let bundles = cmd.bundles;
     let format = cmd.format;
     let output = cmd.output;
     let count = cmd.count;
@@ -80,35 +77,12 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
     let max_bundle = index.last_bundle;
 
     // Determine bundle numbers to process
-    let bundle_numbers: Vec<u32> = if let Some(range_str) = range {
-        // Parse range like "1-100"
-        if range_str.contains('-') {
-            let parts: Vec<&str> = range_str.split('-').collect();
-            if parts.len() == 2 {
-                let start: u32 = parts[0].parse()?;
-                let end: u32 = parts[1].parse()?;
-                if start > end || start == 0 || end > max_bundle {
-                    anyhow::bail!("Invalid range: {}-{}", start, end);
-                }
-                (start..=end).collect()
-            } else {
-                anyhow::bail!("Invalid range format: {}", range_str);
-            }
-        } else {
-            // Single bundle number
-            let num: u32 = range_str.parse()?;
-            if num == 0 || num > max_bundle {
-                anyhow::bail!("Bundle number {} out of range", num);
-            }
-            vec![num]
-        }
-    } else if all {
-        (1..=max_bundle).collect()
-    } else if let Some(bundles_str) = bundles {
-        // Legacy --bundles flag
+    let bundle_numbers: Vec<u32> = if let Some(bundles_str) = cmd.bundles {
         utils::parse_bundle_spec(Some(bundles_str), max_bundle)?
+    } else if cmd.all {
+        (1..=max_bundle).collect()
     } else {
-        anyhow::bail!("Must specify either --range, --all, or --bundles");
+        anyhow::bail!("Must specify either --bundles or --all");
     };
 
     // Filter bundles by timestamp metadata if --after is specified

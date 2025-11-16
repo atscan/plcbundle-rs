@@ -1,5 +1,5 @@
 use super::progress::ProgressBar;
-use super::utils::{format_bytes, format_bytes_per_sec, format_number, parse_bundle_range_simple, HasGlobalFlags};
+use super::utils::{format_bytes, format_bytes_per_sec, format_number, HasGlobalFlags};
 use anyhow::{Result, bail};
 use clap::Args;
 use plcbundle::{BundleManager, VerifyResult, VerifySpec};
@@ -14,30 +14,24 @@ use std::time::Instant;
             plcbundle verify\n  \
             plcbundle verify --chain\n\n  \
             # Verify specific bundle\n  \
-            plcbundle verify --bundle 42\n\n  \
+            plcbundle verify --bundles 42\n\n  \
             # Verify range of bundles\n  \
-            plcbundle verify --range 1-100\n\n  \
+            plcbundle verify --bundles 1-100\n\n  \
+            # Verify multiple ranges\n  \
+            plcbundle verify --bundles 1-10,20-30\n\n  \
             # Verbose output\n  \
             plcbundle verify --chain -v\n\n  \
             # Parallel verification (faster for ranges)\n  \
-            plcbundle verify --range 1-1000 -j 8"
+            plcbundle verify --bundles 1-1000 -j 8"
 )]
 pub struct VerifyCommand {
-    /// Verify specific bundle number
-    #[arg(short, long)]
-    pub bundle: Option<u32>,
-
-    /// Verify bundle range (e.g., "1-100")
-    #[arg(short, long)]
-    pub range: Option<String>,
+    /// Bundle range to verify (e.g., "42", "1-100", or "1-10,20-30")
+    #[arg(long)]
+    pub bundles: Option<String>,
 
     /// Verify entire chain (default)
     #[arg(short, long)]
     pub chain: bool,
-
-    /// Verbose output
-    #[arg(short, long)]
-    pub verbose: bool,
 
     /// Full verification (includes content hash check)
     #[arg(long)]
@@ -53,13 +47,11 @@ pub struct VerifyCommand {
 }
 
 impl HasGlobalFlags for VerifyCommand {
-    fn verbose(&self) -> bool { self.verbose }
+    fn verbose(&self) -> bool { false }
     fn quiet(&self) -> bool { false }
 }
 
-pub fn run(mut cmd: VerifyCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
-    // Merge global verbose flag with command's verbose flag
-    cmd.verbose = cmd.verbose || global_verbose;
+pub fn run(cmd: VerifyCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
     let manager = super::utils::create_manager_from_cmd(dir.clone(), &cmd)?;
 
     // Determine number of threads
@@ -72,11 +64,11 @@ pub fn run(mut cmd: VerifyCommand, dir: PathBuf, global_verbose: bool) -> Result
     };
 
     // Show thread count in debug/verbose mode
-    if cmd.verbose {
+    if global_verbose {
         eprintln!("[DEBUG] Using {} thread(s) for verification", num_threads);
     }
 
-    if !cmd.verbose {
+    if !global_verbose {
         eprintln!(
             "\n📁 Working in: {}\n",
             super::utils::display_path(&dir).display()
@@ -84,20 +76,29 @@ pub fn run(mut cmd: VerifyCommand, dir: PathBuf, global_verbose: bool) -> Result
     }
 
     // Determine what to verify
-    if let Some(range_str) = cmd.range {
-        verify_range(
-            &manager,
-            &range_str,
-            cmd.verbose,
-            cmd.full,
-            cmd.fast,
-            num_threads,
-        )?;
-    } else if let Some(bundle_num) = cmd.bundle {
-        verify_single_bundle(&manager, bundle_num, cmd.verbose, cmd.full, cmd.fast)?;
+    if let Some(bundles_str) = cmd.bundles {
+        let last_bundle = manager.get_last_bundle();
+        let bundle_nums = super::utils::parse_bundle_spec(Some(bundles_str), last_bundle)?;
+        
+        if bundle_nums.len() == 1 {
+            verify_single_bundle(&manager, bundle_nums[0], global_verbose, cmd.full, cmd.fast)?;
+        } else {
+            // For multiple bundles, verify as range
+            let start = bundle_nums[0];
+            let end = bundle_nums[bundle_nums.len() - 1];
+            verify_range(
+                &manager,
+                start,
+                end,
+                global_verbose,
+                cmd.full,
+                cmd.fast,
+                num_threads,
+            )?;
+        }
     } else {
         // Default: verify entire chain
-        verify_chain(&manager, cmd.verbose, cmd.full, cmd.fast, num_threads)?;
+        verify_chain(&manager, global_verbose, cmd.full, cmd.fast, num_threads)?;
     }
 
     Ok(())
@@ -588,15 +589,13 @@ fn verify_chain(
 
 fn verify_range(
     manager: &BundleManager,
-    range_str: &str,
+    start: u32,
+    end: u32,
     verbose: bool,
     full: bool,
     fast: bool,
     num_threads: usize,
 ) -> Result<()> {
-    let last_bundle = manager.get_last_bundle();
-    let (start, end) = parse_bundle_range_simple(range_str, last_bundle)?;
-
     let use_parallel = num_threads > 1;
     
     eprintln!("\n🔬 Verifying bundles {:06} - {:06}", start, end);

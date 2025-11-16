@@ -72,9 +72,6 @@ pub struct ServerCommand {
     #[arg(long)]
     pub handle_resolver: Option<String>,
 
-    /// Verbose output
-    #[arg(short, long)]
-    pub verbose: bool,
 }
 
 fn parse_duration(s: &str) -> Result<Duration> {
@@ -102,30 +99,30 @@ fn parse_duration(s: &str) -> Result<Duration> {
     }
 }
 
-pub fn run(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
+pub fn run(cmd: ServerCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
     #[cfg(not(feature = "server"))]
     {
-        let _ = (cmd, dir); // Suppress unused warnings when server feature is disabled
+        let _ = (cmd, dir, global_verbose); // Suppress unused warnings when server feature is disabled
         anyhow::bail!("Server feature is not enabled. Rebuild with --features server");
     }
 
     #[cfg(feature = "server")]
     {
-        run_server(cmd, dir)
+        run_server(cmd, dir, global_verbose)
     }
 }
 
 #[cfg(feature = "server")]
-fn run_server(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
+fn run_server(cmd: ServerCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
     use tokio::runtime::Runtime;
 
     // Create tokio runtime for async operations
     let rt = Runtime::new().context("Failed to create tokio runtime")?;
-    rt.block_on(run_server_async(cmd, dir))
+    rt.block_on(run_server_async(cmd, dir, global_verbose))
 }
 
 #[cfg(feature = "server")]
-async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
+async fn run_server_async(cmd: ServerCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
     use std::net::SocketAddr;
 
     // Initialize manager with handle resolver
@@ -133,7 +130,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
     use plcbundle::constants;
 
     let handle_resolver_url = if cmd.handle_resolver.is_none() {
-        if cmd.verbose {
+        if global_verbose {
             log::debug!(
                 "[Resolver] Using default handle resolver: {}",
                 constants::DEFAULT_HANDLE_RESOLVER_URL
@@ -141,7 +138,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
         }
         Some(constants::DEFAULT_HANDLE_RESOLVER_URL.to_string())
     } else {
-        if cmd.verbose {
+        if global_verbose {
             log::debug!(
                 "[Resolver] Using custom handle resolver: {}",
                 cmd.handle_resolver.as_ref().unwrap()
@@ -177,10 +174,10 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
     );
 
     // Set verbose mode on manager
-    let manager = manager.with_verbose(cmd.verbose);
+    let manager = manager.with_verbose(global_verbose);
 
     // Log handle resolver configuration
-    if cmd.verbose {
+    if global_verbose {
         if let Some(url) = manager.get_handle_resolver_base_url() {
             log::debug!("[Resolver] Handle resolver configured: {}", url);
         } else {
@@ -190,7 +187,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
 
     // Build/verify DID index if resolver enabled
     if cmd.resolver {
-        if cmd.verbose {
+        if global_verbose {
             log::debug!("[Resolver] Checking DID index status...");
         }
 
@@ -203,7 +200,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
             .get("total_entries")
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
-        if cmd.verbose {
+        if global_verbose {
             log::debug!(
                 "[Resolver] DID index stats: total_dids={}, total_entries={}",
                 total_dids,
@@ -212,11 +209,11 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
         }
 
         if total_dids == 0 {
-            if cmd.verbose {
+            if global_verbose {
                 log::debug!("[Resolver] DID index is empty or missing");
             }
 
-            if cmd.verbose {
+            if global_verbose {
                 log::debug!(
                     "[Resolver] Last bundle number: {}",
                     manager.get_last_bundle()
@@ -230,7 +227,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
                     plcbundle::constants::BINARY_NAME,
                     plcbundle::constants::BINARY_NAME
                 );
-                if cmd.verbose {
+                if global_verbose {
                     log::debug!("[Resolver] Skipping index build - no bundles available");
                 }
             } else {
@@ -238,14 +235,14 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
                 eprintln!("Building DID index...");
                 eprintln!("Indexing {} bundles\n", last_bundle);
 
-                if cmd.verbose {
+                if global_verbose {
                     log::debug!(
                         "[Resolver] Starting index rebuild for {} bundles",
                         last_bundle
                     );
                 }
 
-                let verbose = cmd.verbose; // Copy for closure
+                let verbose = global_verbose; // Copy for closure
                 let start_time = std::time::Instant::now();
                 manager.rebuild_did_index(Some(move |current, total| {
                     if current % 10 == 0 || current == total {
@@ -276,7 +273,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
                 eprintln!("✓ DID index built");
                 eprintln!("  Total DIDs: {}\n", final_total_dids);
 
-                if cmd.verbose {
+                if global_verbose {
                     log::debug!("[Resolver] Index build completed in {:?}", elapsed);
                     log::debug!(
                         "[Resolver] Final stats: total_dids={}, total_entries={}",
@@ -286,7 +283,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
                 }
             }
         } else {
-            if cmd.verbose {
+            if global_verbose {
                 log::debug!(
                     "[Resolver] DID index already exists with {} DIDs",
                     total_dids
@@ -294,7 +291,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
             }
         }
     } else {
-        if cmd.verbose {
+        if global_verbose {
             log::debug!("[Resolver] Resolver disabled, skipping DID index check");
         }
     }
@@ -341,7 +338,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
         let plc_url = cmd.plc.clone();
         let interval = cmd.interval;
         let max_bundles = cmd.max_bundles;
-        let verbose = cmd.verbose;
+        let verbose = global_verbose;
         let shutdown_rx_sync = shutdown_rx.clone();
         let shutdown_tx_sync = shutdown_tx.clone();
 
@@ -385,7 +382,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf) -> Result<()> {
     // Start handle resolver keep-alive ping task if resolver is enabled
     if cmd.resolver {
         if let Some(resolver) = manager.get_handle_resolver() {
-            let verbose = cmd.verbose;
+            let verbose = global_verbose;
             let shutdown_rx_resolver = shutdown_rx.clone();
             let resolver_handle = tokio::spawn(async move {
                 run_resolver_ping_loop(resolver, verbose, shutdown_rx_resolver).await;

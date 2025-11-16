@@ -46,10 +46,6 @@ pub enum DIDCommands {
         /// Handle resolver URL (e.g., https://quickdid.smokesignal.tools)
         #[arg(long)]
         handle_resolver: Option<String>,
-
-        /// Verbose output
-        #[arg(short, long)]
-        verbose: bool,
     },
 
     /// Show DID operation log
@@ -57,10 +53,6 @@ pub enum DIDCommands {
     Log {
         /// DID to show log for
         did: String,
-
-        /// Verbose output
-        #[arg(short, long)]
-        verbose: bool,
 
         /// Output as JSON
         #[arg(long)]
@@ -87,17 +79,16 @@ pub enum DIDCommands {
     },
 }
 
-pub fn run_did(cmd: DidCommand, dir: PathBuf) -> Result<()> {
+pub fn run_did(cmd: DidCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
     match cmd.command {
         DIDCommands::Resolve {
             did,
             handle_resolver,
-            verbose,
         } => {
-            cmd_did_resolve(dir, did, handle_resolver, verbose)?;
+            cmd_did_resolve(dir, did, handle_resolver, global_verbose)?;
         }
-        DIDCommands::Log { did, verbose, json } => {
-            cmd_did_lookup(dir, did, verbose, json)?;
+        DIDCommands::Log { did, json } => {
+            cmd_did_lookup(dir, did, global_verbose, json)?;
         }
         DIDCommands::Batch {
             action,

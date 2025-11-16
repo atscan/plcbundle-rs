@@ -18,7 +18,7 @@ use std::time::Instant;
             # Benchmark DID lookup\n  \
             plcbundle bench --did-lookup -n 500\n\n  \
             # Run on specific bundle\n  \
-            plcbundle bench --bundle 100\n\n  \
+            plcbundle bench --bundles 100\n\n  \
             # JSON output for analysis\n  \
             plcbundle bench --format json > benchmark.json"
 )]
@@ -28,8 +28,8 @@ pub struct BenchCommand {
     pub iterations: usize,
 
     /// Bundle number to benchmark (default: uses multiple bundles)
-    #[arg(short, long)]
-    pub bundle: Option<u32>,
+    #[arg(long)]
+    pub bundles: Option<String>,
 
     /// Run all benchmarks (default)
     #[arg(short, long)]
@@ -70,10 +70,6 @@ pub struct BenchCommand {
     /// Show interactive progress during benchmarks
     #[arg(long)]
     pub interactive: bool,
-
-    /// Verbose output
-    #[arg(short, long)]
-    pub verbose: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -120,8 +116,8 @@ struct BenchmarkResult {
     cache_misses: Option<usize>,
 }
 
-pub fn run(cmd: BenchCommand, dir: PathBuf) -> Result<()> {
-    let manager = super::utils::create_manager(dir.clone(), false, false)?;
+pub fn run(cmd: BenchCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
+    let manager = super::utils::create_manager(dir.clone(), global_verbose, false)?;
 
     // Determine which benchmarks to run
     let run_all = cmd.all

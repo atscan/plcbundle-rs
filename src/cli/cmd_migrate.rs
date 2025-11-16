@@ -62,21 +62,15 @@ pub struct MigrateCommand {
     /// Number of threads to use (0 = auto-detect)
     #[arg(short = 'j', long, default_value = "0")]
     pub threads: usize,
-
-    /// Verbose output
-    #[arg(short, long)]
-    pub verbose: bool,
 }
 
 impl HasGlobalFlags for MigrateCommand {
-    fn verbose(&self) -> bool { self.verbose }
+    fn verbose(&self) -> bool { false }
     fn quiet(&self) -> bool { false }
 }
 
-pub fn run(mut cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
-    // Merge global verbose flag with command's verbose flag
-    cmd.verbose = cmd.verbose || global_verbose;
-    let manager = super::utils::create_manager_from_cmd(dir.clone(), &cmd)?;
+pub fn run(cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
+    let manager = super::utils::create_manager(dir.clone(), global_verbose, false)?;
 
     // Auto-detect number of threads if 0
     let workers = super::utils::get_worker_threads(cmd.threads, 4);
@@ -289,7 +283,7 @@ pub fn run(mut cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Resul
                 total_new_size += new_size;
                 total_new_uncompressed += new_uncompressed_size;
 
-                if cmd.verbose {
+                if global_verbose {
                     let old_ratio = info.uncompressed_size as f64 / info.old_size as f64;
                     let new_ratio = new_uncompressed_size as f64 / new_size as f64;
                     let size_change = if size_diff >= 0 {
@@ -312,7 +306,7 @@ pub fn run(mut cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Resul
                     || err_msg.contains("Parent hash mismatch")
                 {
                     eprintln!("\n❌ Bundle {:06}: {}", info.bundle_number, err_msg);
-                } else if cmd.verbose {
+                } else if global_verbose {
                     eprintln!("✗ Bundle {:06} failed: {}", info.bundle_number, e);
                 }
 
@@ -334,7 +328,7 @@ pub fn run(mut cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Resul
     let elapsed = start.elapsed();
 
     // Update index (already done in migrate_bundle, but verify)
-    if !hash_changes.is_empty() && cmd.verbose {
+    if !hash_changes.is_empty() && global_verbose {
         eprintln!("\nUpdating index...");
         let update_start = Instant::now();
         // Index is already updated by migrate_bundle, just verify

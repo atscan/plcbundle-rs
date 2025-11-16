@@ -42,20 +42,14 @@ pub struct RebuildCommand {
     /// Set origin URL (default: auto-detect from first bundle)
     #[arg(long)]
     pub origin: Option<String>,
-
-    /// Verbose output
-    #[arg(short, long)]
-    pub verbose: bool,
 }
 
 impl HasGlobalFlags for RebuildCommand {
-    fn verbose(&self) -> bool { self.verbose }
+    fn verbose(&self) -> bool { false }
     fn quiet(&self) -> bool { false }
 }
 
-pub fn run(mut cmd: RebuildCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
-    // Merge global verbose flag with command's verbose flag
-    cmd.verbose = cmd.verbose || global_verbose;
+pub fn run(cmd: RebuildCommand, dir: PathBuf, _global_verbose: bool) -> Result<()> {
     eprintln!("Rebuilding bundle index from: {}\n", super::utils::display_path(&dir).display());
 
     let start = Instant::now();

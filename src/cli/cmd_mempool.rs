@@ -28,14 +28,6 @@ use std::path::PathBuf;
 pub struct MempoolCommand {
     #[command(subcommand)]
     pub command: Option<MempoolSubcommand>,
-
-    /// Directory containing PLC bundles
-    #[arg(short, long, default_value = ".")]
-    pub dir: PathBuf,
-
-    /// Verbose output
-    #[arg(short, long)]
-    pub verbose: bool,
 }
 
 #[derive(Subcommand)]
@@ -66,22 +58,22 @@ pub enum MempoolSubcommand {
 }
 
 impl HasGlobalFlags for MempoolCommand {
-    fn verbose(&self) -> bool { self.verbose }
+    fn verbose(&self) -> bool { false }
     fn quiet(&self) -> bool { false }
 }
 
-pub fn run(cmd: MempoolCommand) -> Result<()> {
-    let manager = utils::create_manager_from_cmd(cmd.dir.clone(), &cmd)?;
+pub fn run(cmd: MempoolCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
+    let manager = utils::create_manager(dir.clone(), global_verbose, false)?;
 
     match cmd.command {
         Some(MempoolSubcommand::Status { verbose }) => {
-            show_status(&manager, &cmd.dir, verbose || cmd.verbose)
+            show_status(&manager, &dir, verbose || global_verbose)
         }
-        Some(MempoolSubcommand::Clear { force }) => clear(&manager, &cmd.dir, force),
+        Some(MempoolSubcommand::Clear { force }) => clear(&manager, &dir, force),
         Some(MempoolSubcommand::Dump { output }) => dump(&manager, output),
         None => {
             // Default to status
-            show_status(&manager, &cmd.dir, cmd.verbose)
+            show_status(&manager, &dir, global_verbose)
         }
     }
 }

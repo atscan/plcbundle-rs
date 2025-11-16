@@ -20,7 +20,7 @@ const RESET: &str = "\x1b[0m";
                     • Extra bundles (in local but not target)\n  \
                     • Hash mismatches (different content)\n  \
                     • Content mismatches (different data)\n\n\
-                  For deeper analysis of specific bundles, use --bundle flag to see\n\
+                  For deeper analysis of specific bundles, use --bundles flag to see\n\
                   detailed differences in metadata and operations.\n\n\
                   The target can be:\n  \
                     • Remote HTTP URL (e.g., https://plc.example.com)\n  \
@@ -32,40 +32,42 @@ const RESET: &str = "\x1b[0m";
         # Show all differences (verbose)\n  \
         plcbundle diff https://plc.example.com -v\n\n  \
         # Deep dive into specific bundle\n  \
-        plcbundle diff https://plc.example.com --bundle 23\n\n  \
+        plcbundle diff https://plc.example.com --bundles 23\n\n  \
         # Compare bundle with operation samples\n  \
-        plcbundle diff https://plc.example.com --bundle 23 --show-operations\n\n  \
+        plcbundle diff https://plc.example.com --bundles 23 --show-operations\n\n  \
         # Show first 50 operations\n  \
-        plcbundle diff https://plc.example.com --bundle 23 --sample 50"
+        plcbundle diff https://plc.example.com --bundles 23 --sample 50"
 )]
 pub struct DiffCommand {
     /// Target to compare against (URL or local path)
     pub target: String,
 
-    /// Show all differences (verbose output)
-    #[arg(short, long)]
-    pub verbose: bool,
-
     /// Deep diff of specific bundle
-    #[arg(short, long)]
-    pub bundle: Option<u32>,
+    #[arg(long)]
+    pub bundles: Option<String>,
 
-    /// Show operation differences (use with --bundle)
+    /// Show operation differences (use with --bundles)
     #[arg(long)]
     pub show_operations: bool,
 
-    /// Number of sample operations to show (use with --bundle)
+    /// Number of sample operations to show (use with --bundles)
     #[arg(long, default_value = "10")]
     pub sample: usize,
 }
 
-pub fn run(cmd: DiffCommand, dir: PathBuf) -> Result<()> {
-    let manager = super::utils::create_manager(dir.clone(), false, false)?;
+pub fn run(cmd: DiffCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
+    let manager = super::utils::create_manager(dir.clone(), global_verbose, false)?;
 
     let rt = Runtime::new()?;
 
     // If specific bundle requested, do detailed diff
-    if let Some(bundle_num) = cmd.bundle {
+    if let Some(bundles_str) = cmd.bundles {
+        let last_bundle = manager.get_last_bundle();
+        let bundle_nums = super::utils::parse_bundle_spec(Some(bundles_str), last_bundle)?;
+        if bundle_nums.len() != 1 {
+            anyhow::bail!("--bundles must specify a single bundle number for diff (e.g., \"23\")");
+        }
+        let bundle_num = bundle_nums[0];
         rt.block_on(diff_specific_bundle(
             &manager,
             &cmd.target,
@@ -79,7 +81,7 @@ pub fn run(cmd: DiffCommand, dir: PathBuf) -> Result<()> {
             &manager,
             &dir,
             &cmd.target,
-            cmd.verbose,
+            global_verbose,
             constants::BINARY_NAME,
         ))
     }
@@ -153,7 +155,7 @@ async fn diff_indexes(
     if !comparison.hash_mismatches.is_empty() {
         eprintln!("\n💡 Tip: Investigate specific mismatches with:");
         eprintln!(
-            "   {} diff {} --bundle {} --show-operations",
+            "   {} diff {} --bundles {} --show-operations",
             binary_name, target, comparison.hash_mismatches[0].bundle_number
         );
     }

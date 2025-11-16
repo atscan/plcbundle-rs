@@ -18,6 +18,10 @@ pub struct StatsCommand {
     #[arg(short = 't', long, default_value = "summary")]
     pub stat_type: StatType,
 
+    /// Number of threads to use (0 = auto-detect)
+    #[arg(short = 'j', long, default_value = "0")]
+    pub threads: usize,
+
     /// Output as JSON
     #[arg(long)]
     pub json: bool,

@@ -1,10 +1,17 @@
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use plcbundle::*;
 use std::path::PathBuf;
 
-use super::cmd_stats::InfoFormat;
 use super::utils;
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum InfoFormat {
+    /// Human-readable output
+    Human,
+    /// JSON output
+    Json,
+}
 
 #[derive(Parser)]
 #[command(
@@ -38,9 +45,6 @@ pub fn run(cmd: StatusCommand, dir: PathBuf) -> Result<()> {
     match cmd.format {
         InfoFormat::Human => print_human_status(&manager, &index, &dir, cmd.detailed)?,
         InfoFormat::Json => print_json_status(&manager, &index, &dir)?,
-        _ => {
-            anyhow::bail!("Only 'human' and 'json' formats are supported");
-        }
     }
 
     Ok(())

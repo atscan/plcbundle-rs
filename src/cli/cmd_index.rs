@@ -35,7 +35,7 @@ pub enum IndexCommands {
             plcbundle index build --force")]
     Build {
         /// Rebuild even if index exists
-        #[arg(long)]
+        #[arg(short, long)]
         force: bool,
     },
 
@@ -53,11 +53,7 @@ pub enum IndexCommands {
 
     /// Verify DID index integrity
     #[command(alias = "check")]
-    Verify {
-        /// Verbose output
-        #[arg(short, long)]
-        verbose: bool,
-    },
+    Verify {},
 
     /// Debug and inspect DID index internals
     #[command(alias = "inspect")]
@@ -84,7 +80,7 @@ pub enum IndexCommands {
     },
 }
 
-pub fn run(cmd: IndexCommand, dir: PathBuf) -> Result<()> {
+pub fn run(cmd: IndexCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
     match cmd.command {
         IndexCommands::Build { force } => {
             cmd_index_build(dir, force)?;
@@ -95,8 +91,8 @@ pub fn run(cmd: IndexCommand, dir: PathBuf) -> Result<()> {
         IndexCommands::Stats { json } => {
             cmd_index_stats(dir, json)?;
         }
-        IndexCommands::Verify { verbose } => {
-            cmd_index_verify(dir, verbose)?;
+        IndexCommands::Verify {} => {
+            cmd_index_verify(dir, global_verbose)?;
         }
         IndexCommands::Debug { shard, json } => {
             let shard_num = shard.map(|s| parse_shard(&s)).transpose()?;

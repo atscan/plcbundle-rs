@@ -14,7 +14,7 @@ use std::path::PathBuf;
             # Remove last 5 bundles\n  \
             plcbundle rollback --last 5\n\n  \
             # Rollback without confirmation\n  \
-            plcbundle rollback --to 50 --force\n\n  \
+            plcbundle rollback --to 50 -f\n\n  \
             # Rollback and rebuild DID index\n  \
             plcbundle rollback --to 100 --rebuild-did-index\n\n  \
             # Rollback but keep bundle files (index-only)\n  \
@@ -40,10 +40,6 @@ pub struct RollbackCommand {
     /// Update index only (don't delete bundle files)
     #[arg(long)]
     pub keep_files: bool,
-
-    /// Verbose output
-    #[arg(short, long)]
-    pub verbose: bool,
 }
 
 #[derive(Debug)]
@@ -58,9 +54,9 @@ struct RollbackPlan {
     affected_period: Option<(String, String)>,
 }
 
-pub fn run(cmd: RollbackCommand, dir: PathBuf) -> Result<()> {
+pub fn run(cmd: RollbackCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
     // Step 1: Validate options and calculate plan
-    let mut manager = super::utils::create_manager(dir.clone(), false, false)?;
+    let mut manager = super::utils::create_manager(dir.clone(), global_verbose, false)?;
     let plan = calculate_rollback_plan(&manager, &cmd)?;
 
     // Step 2: Display plan and get confirmation
@@ -75,7 +71,7 @@ pub fn run(cmd: RollbackCommand, dir: PathBuf) -> Result<()> {
     }
 
     // Step 3: Execute rollback
-    perform_rollback(&mut manager, &dir, &plan, &cmd)?;
+    perform_rollback(&mut manager, &dir, &plan, &cmd, global_verbose)?;
 
     // Step 4: Display success summary
     display_rollback_success(&plan, &cmd)?;
@@ -282,6 +278,7 @@ fn perform_rollback(
     _dir: &PathBuf,
     plan: &RollbackPlan,
     cmd: &RollbackCommand,
+    _verbose: bool,
 ) -> Result<()> {
     let total_steps = 4;
     let mut current_step = 0;
@@ -293,7 +290,7 @@ fn perform_rollback(
             "[{}/{}] Deleting bundle files...",
             current_step, total_steps
         );
-        delete_bundle_files(manager, &plan.bundles_to_delete, cmd.verbose)?;
+        delete_bundle_files(manager, &plan.bundles_to_delete)?;
         println!("      ✓ Deleted {} file(s)\n", plan.bundles_to_delete.len());
     } else {
         println!(
@@ -330,23 +327,11 @@ fn perform_rollback(
     Ok(())
 }
 
-fn delete_bundle_files(manager: &BundleManager, bundles: &[u32], verbose: bool) -> Result<()> {
-    if verbose {
-        for &bundle_num in bundles {
-            println!("      Deleting {:06}...", bundle_num);
-        }
-    }
-
+fn delete_bundle_files(manager: &BundleManager, bundles: &[u32]) -> Result<()> {
     let stats = manager.delete_bundle_files(bundles)?;
 
-    if verbose {
-        println!("      ✓ Deleted {} file(s)", stats.deleted);
-        if stats.failed > 0 {
-            println!("      ⚠️  Failed to delete {} file(s)", stats.failed);
-        }
-    }
-
     if stats.failed > 0 {
+        eprintln!("      ⚠️  Failed to delete {} file(s)", stats.failed);
         bail!("Failed to delete {} bundle files", stats.failed);
     }
 
