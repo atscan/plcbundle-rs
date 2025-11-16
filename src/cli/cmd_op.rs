@@ -186,7 +186,7 @@ pub fn cmd_op_get(dir: PathBuf, bundle: u32, position: Option<usize>, query: Opt
             ((bundle_num - 1) as u64 * constants::BUNDLE_SIZE as u64) + op_index as u64;
 
         log::info!(
-            "[Load] Bundle {:06}:{:04} (pos={}) in {:?} | {} bytes",
+            "[Load] Bundle {}:{:04} (pos={}) in {:?} | {} bytes",
             bundle_num,
             op_index,
             global_pos,
@@ -312,7 +312,7 @@ pub fn cmd_op_show(dir: PathBuf, bundle: u32, position: Option<usize>, quiet: bo
 
     println!("Location");
     println!("────────");
-    println!("  Bundle:          {:06}", bundle_num);
+    println!("  Bundle:          {}", bundle_num);
     println!("  Position:        {}", op_index);
     println!("  Global position: {}\n", global_pos);
 
@@ -409,7 +409,7 @@ pub fn cmd_op_find(dir: PathBuf, cid: String, quiet: bool) -> Result<()> {
                 let global_pos =
                     ((bundle_num - 1) as u64 * constants::BUNDLE_SIZE as u64) + i as u64;
 
-                println!("Found: bundle {:06}, position {}", bundle_num, i);
+                println!("Found: bundle {}, position {}", bundle_num, i);
                 println!("Global position: {}\n", global_pos);
 
                 println!("  DID:        {}", op.did);
@@ -429,7 +429,7 @@ pub fn cmd_op_find(dir: PathBuf, cid: String, quiet: bool) -> Result<()> {
 
         // Progress indicator every 100 bundles
         if !quiet && bundle_num % 100 == 0 {
-            eprint!("Searched through bundle {:06}...\r", bundle_num);
+            eprint!("Searched through bundle {}...\r", bundle_num);
             use std::io::Write;
             std::io::stderr().flush()?;
         }

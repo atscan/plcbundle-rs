@@ -191,7 +191,7 @@ async fn diff_specific_bundle(
     sample_size: usize,
 ) -> Result<()> {
     // Store bundle_num for use in hints
-    eprintln!("\n🔬 Deep Comparison: Bundle {:06}", bundle_num);
+    eprintln!("\n🔬 Deep Comparison: Bundle {}", bundle_num);
     eprintln!("═══════════════════════════════════════════════════════════════\n");
 
     // Get local index and check origin
@@ -225,7 +225,7 @@ async fn diff_specific_bundle(
         eprintln!("   Local:  {}", local_origin);
         eprintln!("   Target: {}", target_origin);
         eprintln!(
-            "\n   ⚠️  Bundle {:06} may have the same number but contain",
+            "\n   ⚠️  Bundle {} may have the same number but contain",
             bundle_num
         );
         eprintln!("      completely different data from different sources.");
@@ -242,7 +242,7 @@ async fn diff_specific_bundle(
         .ok_or_else(|| anyhow::anyhow!("Bundle {} not found in local index", bundle_num))?;
 
     // Load local bundle
-    eprintln!("📦 Loading local bundle {:06}...", bundle_num);
+    eprintln!("📦 Loading local bundle {}...", bundle_num);
     let local_result = manager.load_bundle(bundle_num, plcbundle::LoadOptions::default())?;
     let local_ops = local_result.operations;
 
@@ -251,7 +251,7 @@ async fn diff_specific_bundle(
         .ok_or_else(|| anyhow::anyhow!("Bundle {} not found in remote index", bundle_num))?;
 
     // Load remote bundle
-    eprintln!("📦 Loading remote bundle {:06}...\n", bundle_num);
+    eprintln!("📦 Loading remote bundle {}...\n", bundle_num);
     let remote_ops = if target.starts_with("http://") || target.starts_with("https://") {
         let client = remote::RemoteClient::new(target)?;
         client.fetch_bundle_operations(bundle_num)
@@ -550,7 +550,7 @@ fn display_comparison(c: &IndexComparison, verbose: bool, origins_match: bool) {
     }
 
     if let Some((start, end)) = c.local_range {
-        eprintln!("\n  Local range:        {:06} - {:06}", start, end);
+        eprintln!("\n  Local range:        {} - {}", start, end);
         eprintln!(
             "  Local size:         {:.2} MB",
             c.local_total_size as f64 / (1024.0 * 1024.0)
@@ -559,7 +559,7 @@ fn display_comparison(c: &IndexComparison, verbose: bool, origins_match: bool) {
     }
 
     if let Some((start, end)) = c.target_range {
-        eprintln!("\n  Target range:       {:06} - {:06}", start, end);
+        eprintln!("\n  Target range:       {} - {}", start, end);
         eprintln!(
             "  Target size:        {:.2} MB",
             c.target_total_size as f64 / (1024.0 * 1024.0)
@@ -633,7 +633,7 @@ fn show_hash_mismatches(mismatches: &[HashMismatch], verbose: bool, origins_matc
 
     for i in 0..display_count {
         let m = &mismatches[i];
-        eprintln!("  Bundle {:06}:", m.bundle_number);
+        eprintln!("  Bundle {}:", m.bundle_number);
         eprintln!("    Chain Hash:");
         eprintln!("      Local:  {}", m.local_hash);
         eprintln!("      Target: {}", m.target_hash);
@@ -680,13 +680,13 @@ fn analyze_chain_break(
 
     eprintln!("  Chain Status:");
     if last_good > 0 {
-        eprintln!("    ✅ Bundles 000001 - {:06}: Chain intact", last_good);
+        eprintln!("    ✅ Bundles 1 - {}: Chain intact", last_good);
         eprintln!(
-            "    ❌ Bundle {:06}: Chain broken (first mismatch)",
+            "    ❌ Bundle {}: Chain broken (first mismatch)",
             first_break
         );
     } else {
-        eprintln!("    ❌ Bundle 000001: Chain broken from start");
+        eprintln!("    ❌ Bundle 1: Chain broken from start");
     }
 
     // Count consecutive breaks
@@ -702,20 +702,20 @@ fn analyze_chain_break(
     if consecutive_breaks > 1 {
         let last_break = first_break + consecutive_breaks - 1;
         eprintln!(
-            "    ❌ Bundles {:06} - {:06}: Chain broken ({} consecutive)",
+            "    ❌ Bundles {} - {}: Chain broken ({} consecutive)",
             first_break, last_break, consecutive_breaks
         );
     }
 
     // Show total affected
     eprintln!("\n  Summary:");
-    eprintln!("    Last good bundle:  {:06}", last_good);
-    eprintln!("    First break:      {:06}", first_break);
+    eprintln!("    Last good bundle:  {}", last_good);
+    eprintln!("    First break:      {}", first_break);
     eprintln!("    Total mismatches: {}", mismatches.len());
 
     // Show parent hash comparison for first break
     if let Some(first_mismatch) = mismatches.first() {
-        eprintln!("\n  First Break Details (Bundle {:06}):", first_break);
+        eprintln!("\n  First Break Details (Bundle {}):", first_break);
         eprintln!(
             "    Local chain hash:  {}",
             &first_mismatch.local_hash[..16]
@@ -728,20 +728,20 @@ fn analyze_chain_break(
         // Check if parent hashes match (indicates where divergence started)
         eprintln!("\n  💡 Interpretation:");
         if last_good > 0 {
-            eprintln!("    • Bundles before {:06} are identical", last_good);
+            eprintln!("    • Bundles before {} are identical", last_good);
             eprintln!(
-                "    • Bundle {:06} has different content or was created differently",
+                "    • Bundle {} has different content or was created differently",
                 first_break
             );
             eprintln!("    • All subsequent bundles will have different chain hashes");
             eprintln!("\n    To fix:");
-            eprintln!("    1. Check bundle {:06} content differences", first_break);
+            eprintln!("    1. Check bundle {} content differences", first_break);
             eprintln!(
-                "    2. Verify operations in bundle {:06} match expected",
+                "    2. Verify operations in bundle {} match expected",
                 first_break
             );
             eprintln!(
-                "    3. Consider re-syncing from bundle {:06} onwards",
+                "    3. Consider re-syncing from bundle {} onwards",
                 first_break
             );
         } else {
@@ -772,7 +772,7 @@ fn show_cursor_mismatches(mismatches: &[HashMismatch], verbose: bool) {
             &m.local_cursor
         };
         eprintln!(
-            "  {:06}: Local: {} → Target: {}",
+            "  {}: Local: {} → Target: {}",
             m.bundle_number, local, m.target_cursor
         );
     }
@@ -797,7 +797,7 @@ fn show_missing_bundles(bundles: &[u32], verbose: bool) {
         };
 
         for i in 0..display_count {
-            eprintln!("  {:06}", bundles[i]);
+            eprintln!("  {}", bundles[i]);
         }
 
         if bundles.len() > display_count {
@@ -823,7 +823,7 @@ fn show_extra_bundles(bundles: &[u32], verbose: bool) {
         };
 
         for i in 0..display_count {
-            eprintln!("  {:06}", bundles[i]);
+            eprintln!("  {}", bundles[i]);
         }
 
         if bundles.len() > display_count {
@@ -862,9 +862,9 @@ fn display_bundle_ranges(bundles: &[u32], total_count: Option<usize>) {
     for i in 0..ranges.len().saturating_sub(1) {
         let (start, end) = ranges[i];
         if start == end {
-            eprintln!("  {:06}", start);
+            eprintln!("  {}", start);
         } else {
-            eprintln!("  {:06} - {:06}", start, end);
+            eprintln!("  {} - {}", start, end);
         }
     }
 
@@ -873,25 +873,25 @@ fn display_bundle_ranges(bundles: &[u32], total_count: Option<usize>) {
         if start == end {
             if let Some(count) = total_count {
                 eprintln!(
-                    "  {:06} ({} bundle{})",
+                    "  {} ({} bundle{})",
                     start,
                     count,
                     if count == 1 { "" } else { "s" }
                 );
             } else {
-                eprintln!("  {:06}", start);
+                eprintln!("  {}", start);
             }
         } else {
             if let Some(count) = total_count {
                 eprintln!(
-                    "  {:06} - {:06} ({} bundle{})",
+                    "  {} - {} ({} bundle{})",
                     start,
                     end,
                     count,
                     if count == 1 { "" } else { "s" }
                 );
             } else {
-                eprintln!("  {:06} - {:06}", start, end);
+                eprintln!("  {} - {}", start, end);
             }
         }
     }
@@ -912,7 +912,7 @@ fn display_bundle_metadata_comparison_full(
     eprintln!("📋 Metadata Comparison");
     eprintln!("───────────────────────\n");
 
-    eprintln!("  Bundle Number:      {:06}", remote_meta.bundle_number);
+    eprintln!("  Bundle Number:      {}", remote_meta.bundle_number);
 
     // Compare operation counts
     let op_count_match = local_ops.len() == remote_meta.operation_count as usize;

@@ -674,7 +674,7 @@ fn display_human(
             println!("───────────────────────────────────────");
             println!("  Format:              {}", meta.format);
             println!("  Origin:              {}", meta.origin);
-            println!("  Bundle Number:       {:06}", meta.bundle_number);
+            println!("  Bundle Number:       {}", meta.bundle_number);
 
             if !meta.created_by.is_empty() {
                 println!("  Created by:          {}", meta.created_by);
@@ -929,7 +929,7 @@ fn resolve_target(target: &str, dir: &PathBuf) -> Result<(Option<u32>, PathBuf)>
         if path.exists() {
             return Ok((Some(num), path));
         } else {
-            anyhow::bail!("Bundle {:06} not found in repository", num);
+            anyhow::bail!("Bundle {} not found in repository", num);
         }
     }
 

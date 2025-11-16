@@ -90,7 +90,7 @@ pub fn run(cmd: RebuildCommand, dir: PathBuf, _global_verbose: bool) -> Result<(
     eprintln!("Rebuild Summary");
     eprintln!("═══════════════");
     eprintln!("  Bundles:           {}", index.bundles.len());
-    eprintln!("  Range:             {:06} - {:06}",
+    eprintln!("  Range:             {} - {}",
         index.bundles.first().map(|b| b.bundle_number).unwrap_or(0),
         index.last_bundle
     );

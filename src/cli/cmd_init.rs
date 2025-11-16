@@ -160,6 +160,7 @@ fn prompt_plc_directory_url() -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use plcbundle::index::Index;
     use tempfile::TempDir;
 
     #[test]
@@ -174,12 +175,9 @@ mod tests {
 
         run(cmd).unwrap();
 
-        let index_path = temp.path().join("plc_bundles.json");
-        assert!(index_path.exists());
-
-        let content = std::fs::read_to_string(index_path).unwrap();
-        assert!(content.contains("\"origin\": \"test\""));
-        assert!(content.contains("\"last_bundle\": 0"));
+        let index = Index::load(temp.path()).unwrap();
+        assert_eq!(index.origin, "test");
+        assert_eq!(index.last_bundle, 0);
     }
 
     #[test]
@@ -204,9 +202,8 @@ mod tests {
         };
         run(cmd).unwrap(); // Should succeed but not overwrite
 
-        let index_path = temp.path().join("plc_bundles.json");
-        let content = std::fs::read_to_string(index_path).unwrap();
-        assert!(content.contains("\"origin\": \"first\"")); // Still first
+        let index = Index::load(temp.path()).unwrap();
+        assert_eq!(index.origin, "first"); // Still first
     }
 
     #[test]
@@ -231,8 +228,7 @@ mod tests {
         };
         run(cmd).unwrap();
 
-        let index_path = temp.path().join("plc_bundles.json");
-        let content = std::fs::read_to_string(index_path).unwrap();
-        assert!(content.contains("\"origin\": \"second\"")); // Overwritten
+        let index = Index::load(temp.path()).unwrap();
+        assert_eq!(index.origin, "second"); // Overwritten
     }
 }

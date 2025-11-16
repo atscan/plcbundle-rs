@@ -101,7 +101,7 @@ fn show_status(manager: &BundleManager, dir: &PathBuf, verbose: bool) -> Result<
     println!("Mempool Status");
     println!("══════════════\n");
     println!("  Directory:      {}", utils::display_path(dir).display());
-    println!("  Target bundle:  {:06}", stats.target_bundle);
+    println!("  Target bundle:  {}", stats.target_bundle);
     println!(
         "  Operations:     {} / {}",
         stats.count,

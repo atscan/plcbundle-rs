@@ -61,7 +61,7 @@ pub async fn handle_root(
         }
 
         response.push_str(&format!(
-            "  Range:         {:06} - {:06}\n",
+            "  Range:         {} - {}\n",
             first_bundle, last_bundle
         ));
         response.push_str(&format!(

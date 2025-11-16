@@ -292,7 +292,7 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Result<()
                         format!("-{}", format_bytes((-size_diff) as u64))
                     };
                     eprintln!(
-                        "✓ {:06}: {:.3}x→{:.3}x {}",
+                        "✓ {}: {:.3}x→{:.3}x {}",
                         info.bundle_number, old_ratio, new_ratio, size_change
                     );
                 }
@@ -305,9 +305,9 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Result<()
                 if err_msg.contains("Chain hash mismatch")
                     || err_msg.contains("Parent hash mismatch")
                 {
-                    eprintln!("\n❌ Bundle {:06}: {}", info.bundle_number, err_msg);
+                    eprintln!("\n❌ Bundle {}: {}", info.bundle_number, err_msg);
                 } else if global_verbose {
-                    eprintln!("✗ Bundle {:06} failed: {}", info.bundle_number, e);
+                    eprintln!("✗ Bundle {} failed: {}", info.bundle_number, e);
                 }
 
                 if first_error.is_none() {

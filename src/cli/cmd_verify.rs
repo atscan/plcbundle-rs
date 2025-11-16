@@ -150,7 +150,7 @@ fn verify_single_bundle(
     }
     eprintln!();
 
-    eprintln!("🔬 Verifying bundle {:06}...", bundle_num);
+    eprintln!("🔬 Verifying bundle {}...", bundle_num);
 
     let start = Instant::now();
     // For single bundle, check content hash if --full flag is set
@@ -164,7 +164,7 @@ fn verify_single_bundle(
     let elapsed = start.elapsed();
 
     if result.valid {
-        eprintln!("✅ Bundle {:06} is valid ({:?})", bundle_num, elapsed);
+        eprintln!("✅ Bundle {} is valid ({:?})", bundle_num, elapsed);
 
         // Show what was verified
         let mut verified_items = Vec::new();
@@ -207,7 +207,7 @@ fn verify_single_bundle(
         }
         Ok(())
     } else {
-        eprintln!("❌ Bundle {:06} is invalid ({:?})", bundle_num, elapsed);
+        eprintln!("❌ Bundle {} is invalid ({:?})", bundle_num, elapsed);
         if !result.errors.is_empty() {
             eprintln!("\n⚠️  Errors:");
             for err in &result.errors {
@@ -258,11 +258,11 @@ fn verify_chain(
     // Print root hash (first bundle) and head hash (latest) at start
     eprintln!("🔗 Chain Information:");
     eprintln!(
-        "   Root:   {} (bundle {:06})",
+        "   Root:   {} (bundle {})",
         bundles[0].hash, bundles[0].bundle_number
     );
     eprintln!(
-        "   Head:   {} (bundle {:06})",
+        "   Head:   {} (bundle {})",
         bundles[bundles.len() - 1].hash,
         bundles[bundles.len() - 1].bundle_number
     );
@@ -381,7 +381,7 @@ fn verify_chain(
 
             // Only print per-bundle errors in verbose mode
             if verbose {
-                eprintln!("\n❌ Bundle {:06} verification failed", bundle_num);
+                eprintln!("\n❌ Bundle {} verification failed", bundle_num);
                 if !errors.is_empty() {
                     eprintln!("  ⚠️  Errors:");
                     for err in &errors {
@@ -431,7 +431,7 @@ fn verify_chain(
             let meta = &bundles[i];
 
             if meta.parent != prev_meta.hash {
-                eprintln!("\n❌ Chain broken at bundle {:06}", meta.bundle_number);
+                eprintln!("\n❌ Chain broken at bundle {}", meta.bundle_number);
                 eprintln!(
                     "  ⚠️  Expected parent: {}...",
                     &prev_meta.hash[..16.min(prev_meta.hash.len())]
@@ -488,9 +488,9 @@ fn verify_chain(
         eprintln!();
 
         eprintln!("📊 Chain Summary:");
-        eprintln!("   First bundle: {:06}", bundles[0].bundle_number);
+        eprintln!("   First bundle: {}", bundles[0].bundle_number);
         eprintln!(
-            "   Last bundle:  {:06}",
+            "   Last bundle:  {}",
             bundles[bundles.len() - 1].bundle_number
         );
         eprintln!("   Chain root:   {}", bundles[0].hash);
@@ -551,7 +551,7 @@ fn verify_chain(
             if failed_bundles.len() <= 10 {
                 eprintln!("\n   ⚠️  Failed bundles:");
                 for (bundle_num, errors) in &failed_bundles {
-                    eprintln!("      Bundle {:06}:", bundle_num);
+                    eprintln!("      Bundle {}:", bundle_num);
                     if errors.is_empty() {
                         eprintln!("         • Verification failed (no error details)");
                     } else {
@@ -568,7 +568,7 @@ fn verify_chain(
                 // Show first few with details
                 eprintln!("\n   First few failures:");
                 for (bundle_num, errors) in failed_bundles.iter().take(5) {
-                    eprintln!("      Bundle {:06}:", bundle_num);
+                    eprintln!("      Bundle {}:", bundle_num);
                     if errors.is_empty() {
                         eprintln!("         • Verification failed (no error details)");
                     } else {
@@ -620,7 +620,7 @@ fn verify_range(
 ) -> Result<()> {
     let use_parallel = num_threads > 1;
     
-    eprintln!("\n🔬 Verifying bundles {:06} - {:06}", start, end);
+    eprintln!("\n🔬 Verifying bundles {} - {}", start, end);
     if use_parallel {
         eprintln!("   Using {} worker thread(s)", num_threads);
     }
@@ -710,7 +710,7 @@ fn verify_range_sequential(
         let result = manager.verify_bundle(bundle_num, spec.clone());
 
         if verbose {
-            eprint!("Bundle {:06}: ", bundle_num);
+            eprint!("Bundle {}: ", bundle_num);
         }
 
         match result {
@@ -775,7 +775,7 @@ fn verify_range_sequential(
             if failed_bundles.len() <= 20 {
                 eprintln!("\n   ⚠️  Failed bundles:");
                 for (bundle_num, errors) in &failed_bundles {
-                    eprintln!("      Bundle {:06}:", bundle_num);
+                    eprintln!("      Bundle {}:", bundle_num);
                     if errors.is_empty() {
                         eprintln!("         • Verification failed (no error details)");
                     } else {
@@ -792,7 +792,7 @@ fn verify_range_sequential(
                 // Show first few with details
                 eprintln!("\n   First few failures:");
                 for (bundle_num, errors) in failed_bundles.iter().take(5) {
-                    eprintln!("      Bundle {:06}:", bundle_num);
+                    eprintln!("      Bundle {}:", bundle_num);
                     if errors.is_empty() {
                         eprintln!("         • Verification failed (no error details)");
                     } else {

@@ -206,11 +206,11 @@ fn display_rollback_plan(dir: &PathBuf, plan: &RollbackPlan) -> Result<()> {
     if current_bundles > 0 {
         let last = plan.bundles_to_delete.last().unwrap();
         println!(
-            "   Current state:   {} bundles ({:06} → {:06})",
+            "   Current state:   {} bundles ({} → {})",
             current_bundles, 1, last
         );
     }
-    println!("   Target:          bundle {:06}\n", plan.target_bundle);
+    println!("   Target:          bundle {}\n", plan.target_bundle);
 
     println!("🗑️  Will Delete");
     println!("   Bundles:         {}", plan.bundles_to_delete.len());
@@ -241,7 +241,7 @@ fn display_rollback_plan(dir: &PathBuf, plan: &RollbackPlan) -> Result<()> {
         println!("   Bundles to delete:");
         let display_count = std::cmp::min(10, plan.bundles_to_delete.len());
         for &bundle_num in &plan.bundles_to_delete[..display_count] {
-            println!("   • {:06}", bundle_num);
+            println!("   • {}", bundle_num);
         }
         if plan.bundles_to_delete.len() > display_count {
             println!(
@@ -407,7 +407,7 @@ fn display_rollback_success(plan: &RollbackPlan, cmd: &RollbackCommand) -> Resul
     if plan.bundles_to_keep > 0 {
         println!("📦 New State");
         println!(
-            "   Bundles:         {} ({:06} → {:06})",
+            "   Bundles:         {} ({} → {})",
             plan.bundles_to_keep, 1, plan.target_bundle
         );
     } else {
