@@ -709,8 +709,7 @@ impl Manager {
         bundle_num: u32,
     ) -> Result<(HashMap<u8, Vec<(String, OpLocation)>>, u64, u64)> {
         use std::fs::File;
-        use std::io::{BufRead, BufReader};
-        use sonic_rs::JsonValueTrait;
+        use std::io::BufReader;
 
         let bundle_path = crate::constants::bundle_path(bundle_dir, bundle_num);
         if !bundle_path.exists() {
@@ -810,9 +809,6 @@ impl Manager {
     where
         F: Fn(u32, u32, u64, Option<String>) + Send + Sync, // (current, total, bytes_processed, stage)
     {
-        use std::fs::File;
-        use std::io::{BufRead, BufReader};
-        use sonic_rs::JsonValueTrait;
         use std::time::Instant;
         use std::sync::atomic::AtomicU64;
 
@@ -915,7 +911,6 @@ impl Manager {
         // Accumulate entries in memory per shard
         let mut shard_entries: HashMap<u8, Vec<(String, OpLocation)>> = HashMap::new();
         let mut total_operations = 0u64;
-        let mut total_valid_dids = 0u64;
         let bytes_processed = AtomicU64::new(0);
         let mut flush_count = 0usize;
         let mut total_flush_time = std::time::Duration::ZERO;

@@ -166,6 +166,39 @@ async fn run_async(cmd: CloneCommand) -> Result<()> {
         .map(|meta| meta.compressed_size)
         .sum();
 
+    // Check available disk space and warn if insufficient
+    if let Some(free_space) = super::utils::get_free_disk_space(&target_dir) {
+        // Add 10% buffer for safety (filesystem overhead, temporary files, etc.)
+        let required_space = total_bytes + (total_bytes / 10);
+        
+        if free_space < required_space {
+            let free_display = plcbundle::format::format_bytes(free_space);
+            let required_display = plcbundle::format::format_bytes(required_space);
+            let shortfall = required_space - free_space;
+            let shortfall_display = plcbundle::format::format_bytes(shortfall);
+            
+            eprintln!("⚠️  Warning: Insufficient disk space");
+            eprintln!("   Required:  {}", required_display);
+            eprintln!("   Available: {}", free_display);
+            eprintln!("   Shortfall: {}", shortfall_display);
+            eprintln!();
+            
+            // Prompt user to continue
+            use dialoguer::Confirm;
+            let proceed = Confirm::new()
+                .with_prompt("Do you want to continue anyway? (This may fail partway through)")
+                .default(false)
+                .interact()
+                .context("Failed to read user input")?;
+            
+            if !proceed {
+                anyhow::bail!("Clone cancelled by user");
+            }
+            
+            println!();
+        }
+    }
+
     println!("Downloading {} bundle(s)...", bundles_count);
     println!();
 

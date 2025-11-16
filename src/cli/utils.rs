@@ -161,3 +161,38 @@ pub fn create_manager_from_cmd<C: HasGlobalFlags>(dir: PathBuf, cmd: &C) -> Resu
 pub fn get_all_bundle_metadata(manager: &BundleManager) -> Vec<plcbundle::index::BundleMetadata> {
     manager.get_index().bundles
 }
+
+/// Check available free disk space for a given path
+///
+/// Returns the available free space in bytes, or None if the check fails.
+/// On Unix systems (macOS, Linux), uses statvfs to get filesystem statistics.
+/// On other platforms, returns None (check is skipped).
+#[cfg(unix)]
+pub fn get_free_disk_space(path: &Path) -> Option<u64> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    
+    let c_path = match CString::new(path.as_os_str().as_bytes()) {
+        Ok(p) => p,
+        Err(_) => return None,
+    };
+    
+    unsafe {
+        let mut stat: libc::statvfs = std::mem::zeroed();
+        if libc::statvfs(c_path.as_ptr(), &mut stat) == 0 {
+            // Calculate free space: available blocks * block size
+            let free_bytes = stat.f_bavail as u64 * stat.f_frsize as u64;
+            Some(free_bytes)
+        } else {
+            None
+        }
+    }
+}
+
+/// Check available free disk space for a given path
+///
+/// On non-Unix platforms, this function always returns None (check is skipped).
+#[cfg(not(unix))]
+pub fn get_free_disk_space(_path: &Path) -> Option<u64> {
+    None
+}

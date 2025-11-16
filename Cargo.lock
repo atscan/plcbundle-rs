@@ -1750,6 +1750,7 @@ dependencies = [
  "indicatif",
  "is-terminal",
  "jmespath",
+ "libc",
  "log",
  "memmap2",
  "rayon",
