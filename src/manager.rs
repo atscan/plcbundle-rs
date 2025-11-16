@@ -3052,6 +3052,115 @@ impl BundleManager {
         index.save(&directory)?;
         Ok(index)
     }
+
+    /// Clone repository from a remote plcbundle instance
+    ///
+    /// Downloads bundles from a remote instance and reconstructs the repository.
+    /// This is a static async method that doesn't require an existing BundleManager.
+    ///
+    /// # Arguments
+    /// * `remote_url` - URL of the remote plcbundle instance
+    /// * `target_dir` - Directory to clone into
+    /// * `remote_index` - Already fetched remote index
+    /// * `bundles_to_download` - List of bundle numbers to download
+    /// * `progress_callback` - Optional callback for progress updates (bundle_num, count, total_count, bytes)
+    ///
+    /// # Returns
+    /// Tuple of (successful_downloads, failed_downloads)
+    pub async fn clone_from_remote<P, F>(
+        remote_url: String,
+        target_dir: P,
+        remote_index: &Index,
+        bundles_to_download: Vec<u32>,
+        progress_callback: Option<F>,
+    ) -> Result<(usize, usize)>
+    where
+        P: AsRef<std::path::Path> + Send + Sync,
+        F: Fn(u32, usize, usize, u64) + Send + Sync + 'static,
+    {
+        use crate::remote::RemoteClient;
+        use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
+
+        let target_dir = target_dir.as_ref();
+
+        // Save index first
+        remote_index.save(target_dir)?;
+
+        // Progress tracking
+        let downloaded = Arc::new(AtomicUsize::new(0));
+        let failed = Arc::new(AtomicUsize::new(0));
+        let bytes_downloaded = Arc::new(AtomicU64::new(0));
+        let total_count = bundles_to_download.len();
+
+        // Parallel download with semaphore (4 concurrent downloads)
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(4));
+        let progress_cb = progress_callback.map(Arc::new);
+
+        let mut tasks = Vec::new();
+
+        for bundle_num in bundles_to_download {
+            let client = RemoteClient::new(&remote_url)?;
+            let target_dir = target_dir.to_path_buf();
+            let downloaded = Arc::clone(&downloaded);
+            let failed = Arc::clone(&failed);
+            let bytes_downloaded = Arc::clone(&bytes_downloaded);
+            let semaphore = Arc::clone(&semaphore);
+            let progress_cb = progress_cb.clone();
+
+            let task = tokio::spawn(async move {
+                let _permit = semaphore.acquire().await.unwrap();
+
+                // Retry logic with exponential backoff
+                let max_retries = 3;
+                for attempt in 0..max_retries {
+                    if attempt > 0 {
+                        let delay = std::time::Duration::from_secs(1 << attempt);
+                        tokio::time::sleep(delay).await;
+                    }
+
+                    match client.download_bundle_file(bundle_num).await {
+                        Ok(data) => {
+                            let data_len = data.len() as u64;
+
+                            // Write bundle file
+                            let bundle_path = constants::bundle_path(&target_dir, bundle_num);
+                            if let Err(_e) = std::fs::write(&bundle_path, data) {
+                                failed.fetch_add(1, Ordering::SeqCst);
+                                return;
+                            }
+
+                            let count = downloaded.fetch_add(1, Ordering::SeqCst) + 1;
+                            let bytes = bytes_downloaded.fetch_add(data_len, Ordering::SeqCst) + data_len;
+
+                            // Call progress callback
+                            if let Some(ref cb) = progress_cb {
+                                cb(bundle_num, count, total_count, bytes);
+                            }
+                            return;
+                        }
+                        Err(_) => {
+                            continue; // Retry
+                        }
+                    }
+                }
+
+                // All retries failed
+                failed.fetch_add(1, Ordering::SeqCst);
+            });
+
+            tasks.push(task);
+        }
+
+        // Wait for all downloads
+        for task in tasks {
+            let _ = task.await;
+        }
+
+        let downloaded_count = downloaded.load(Ordering::SeqCst);
+        let failed_count = failed.load(Ordering::SeqCst);
+
+        Ok((downloaded_count, failed_count))
+    }
 }
 
 // Supporting types moved here

@@ -113,7 +113,32 @@ pub fn is_repository_empty(manager: &BundleManager) -> bool {
 /// This is the standard way to create a BundleManager from CLI commands.
 /// It respects the verbose and quiet flags for logging.
 pub fn create_manager(dir: PathBuf, verbose: bool, _quiet: bool) -> Result<BundleManager> {
-    let manager = BundleManager::new(dir)?;
+    use anyhow::Context;
+    
+    // Check if directory exists
+    if !dir.exists() {
+        anyhow::bail!(
+            "Directory does not exist: {}\n\nHint: Make sure you're in a PLC bundle directory, or start a new repository with:\n  {} init        # Initialize empty repository\n  {} clone <url> # Clone from remote",
+            display_path(&dir).display(),
+            plcbundle::constants::BINARY_NAME,
+            plcbundle::constants::BINARY_NAME
+        );
+    }
+    
+    // Check if it's a bundle directory (has plc_bundles.json)
+    let index_path = dir.join("plc_bundles.json");
+    if !index_path.exists() {
+        anyhow::bail!(
+            "Not a PLC bundle directory: {}\n\nThis directory does not contain 'plc_bundles.json'.\n\nHint: Make sure you're in a PLC bundle directory, or start a new repository with:\n  {} init        # Initialize empty repository\n  {} clone <url> # Clone from remote",
+            display_path(&dir).display(),
+            plcbundle::constants::BINARY_NAME,
+            plcbundle::constants::BINARY_NAME
+        );
+    }
+    
+    let display_dir = display_path(&dir);
+    let manager = BundleManager::new(dir)
+        .with_context(|| format!("Failed to load bundle repository from: {}", display_dir.display()))?;
 
     if verbose {
         Ok(manager.with_verbose(true))

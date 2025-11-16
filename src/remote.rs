@@ -19,7 +19,7 @@ impl RemoteClient {
     pub fn new(base_url: impl Into<String>) -> Result<Self> {
         Ok(Self {
             client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(60))
+                .timeout(Duration::from_secs(120))
                 .build()?,
             base_url: normalize_base_url(base_url.into()),
         })
@@ -159,6 +159,41 @@ impl RemoteClient {
             .context("Failed to parse DID document JSON")?;
 
         Ok(document)
+    }
+
+    /// Download raw bundle file (zstd compressed) from remote plcbundle instance
+    ///
+    /// Downloads the raw compressed bundle file from the /data/{number} endpoint.
+    /// Returns the raw bytes of the .jsonl.zst file.
+    pub async fn download_bundle_file(&self, bundle_num: u32) -> Result<Vec<u8>> {
+        let bundle_url = format!("{}/data/{}", self.base_url, bundle_num);
+
+        let response = self
+            .client
+            .get(&bundle_url)
+            .header("User-Agent", constants::user_agent())
+            .send()
+            .await
+            .context(format!(
+                "Failed to download bundle {} from {}",
+                bundle_num, bundle_url
+            ))?;
+
+        if !response.status().is_success() {
+            anyhow::bail!(
+                "Unexpected status code: {} for bundle {} at {}",
+                response.status(),
+                bundle_num,
+                bundle_url
+            );
+        }
+
+        let bytes = response
+            .bytes()
+            .await
+            .context(format!("Failed to read bundle {} bytes", bundle_num))?;
+
+        Ok(bytes.to_vec())
     }
 }
 

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 // CLI Commands (cmd_ prefix)
 mod cmd_bench;
 mod cmd_clean;
+mod cmd_clone;
 mod cmd_did;
 mod cmd_compare;
 mod cmd_export;
@@ -67,6 +68,7 @@ struct Cli {
 enum Commands {
     Query(cmd_query::QueryCommand),
     Init(cmd_init::InitCommand),
+    Clone(cmd_clone::CloneCommand),
     Status(cmd_status::StatusCommand),
     Ls(cmd_ls::LsCommand),
     Verify(cmd_verify::VerifyCommand),
@@ -98,6 +100,7 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Query(cmd) => cmd_query::run(cmd, cli.dir, cli.quiet, cli.verbose)?,
         Commands::Init(cmd) => cmd_init::run(cmd)?,
+        Commands::Clone(cmd) => cmd_clone::run(cmd)?,
         Commands::Status(cmd) => cmd_status::run(cmd, cli.dir)?,
         Commands::Ls(cmd) => cmd_ls::run(cmd, cli.dir, cli.verbose, cli.quiet)?,
         Commands::Verify(cmd) => cmd_verify::run(cmd, cli.dir, cli.verbose)?,
