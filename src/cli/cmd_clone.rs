@@ -75,7 +75,6 @@ async fn run_async(cmd: CloneCommand) -> Result<()> {
         .await
         .context("Failed to fetch remote index")?;
 
-    let total_bundles = remote_index.bundles.len();
     let last_bundle = remote_index.last_bundle;
 
     // Get root hash (first bundle) and head hash (last bundle)
@@ -98,7 +97,6 @@ async fn run_async(cmd: CloneCommand) -> Result<()> {
     println!("  Version:       {}", remote_index.version);
     println!("  Origin:        {}", remote_index.origin);
     println!("  Last bundle:   {}", last_bundle);
-    println!("  Total bundles: {}", total_bundles);
     println!("  Total size:    {}", size_display);
     println!("  Root hash:     {}", root_hash);
     println!("  Head hash:     {}", head_hash);
@@ -202,8 +200,9 @@ async fn run_async(cmd: CloneCommand) -> Result<()> {
     println!();
     println!("Next steps:");
     println!("  cd {}", display_path(&target_dir).display());
-    println!("  {} verify --all  # Verify bundle integrity", constants::BINARY_NAME);
-    println!("  {} sync          # Fetch new bundles", constants::BINARY_NAME);
+    println!("  {} status        # Check repository status", constants::BINARY_NAME);
+    println!("  {} sync          # Sync to latest", constants::BINARY_NAME);
+    println!("  {} server --sync # Run server", constants::BINARY_NAME);
 
     Ok(())
 }

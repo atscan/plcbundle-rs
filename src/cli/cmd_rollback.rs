@@ -356,8 +356,8 @@ fn handle_did_index(
             return Ok(());
         }
 
-        // Use default flush interval of 10 for rollback
-        let _stats = manager.build_did_index(10, None::<fn(u32, u32, u64, u64)>)?;
+        // Use default flush interval for rollback
+        let _stats = manager.build_did_index(plcbundle::constants::DID_INDEX_FLUSH_INTERVAL, None::<fn(u32, u32, u64, u64)>)?;
         println!(
             "      ✓ DID index rebuilt ({} bundles)",
             plan.bundles_to_keep

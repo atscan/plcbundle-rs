@@ -29,7 +29,7 @@ pub struct IndexCommand {
 pub enum IndexCommands {
     /// Build DID position index
     #[command(after_help = "Examples:\n  \
-            # Build index (default: flush every 10 bundles)\n  \
+            # Build index (default: flush every 64 bundles)\n  \
             plcbundle index build\n\n  \
             # Force rebuild from scratch\n  \
             plcbundle index build --force\n\n  \
@@ -48,8 +48,8 @@ pub enum IndexCommands {
         #[arg(short = 'j', long, default_value = "0")]
         threads: usize,
 
-        /// Flush to disk every N bundles (0 = only at end, default = 10)
-        #[arg(long, default_value = "10")]
+        /// Flush to disk every N bundles (0 = only at end, default = 64)
+        #[arg(long, default_value_t = constants::DID_INDEX_FLUSH_INTERVAL)]
         flush_interval: u32,
     },
 
@@ -71,8 +71,8 @@ pub enum IndexCommands {
         #[arg(short = 'j', long, default_value = "0")]
         threads: usize,
 
-        /// Flush to disk every N bundles (0 = only at end, default = 10)
-        #[arg(long, default_value = "10")]
+        /// Flush to disk every N bundles (0 = only at end, default = 64)
+        #[arg(long, default_value_t = constants::DID_INDEX_FLUSH_INTERVAL)]
         flush_interval: u32,
     },
 
@@ -177,9 +177,40 @@ pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize, flush_interval
         .get("total_dids")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
-    if total_dids > 0 && !force {
-        log::info!("DID index already exists (use --force to rebuild)");
-        log::info!("Total DIDs: {}", total_dids);
+    let index_exists = did_index
+        .get("exists")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    
+    if index_exists && total_dids > 0 && !force {
+        let last_bundle = manager.get_last_bundle();
+        let index_last_bundle = did_index
+            .get("last_bundle")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as u32;
+        let shards_with_data = did_index
+            .get("shards_with_data")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        
+        eprintln!("\n✅ DID Index Already Built");
+        eprintln!("   Total DIDs:    {}", utils::format_number(total_dids as u64));
+        eprintln!("   Last bundle:   {} / {}", index_last_bundle, last_bundle);
+        eprintln!("   Shards:        {} with data", shards_with_data);
+        eprintln!("   Location:      {}/{}/", utils::display_path(&dir).display(), constants::DID_INDEX_DIR);
+        
+        if index_last_bundle < last_bundle {
+            let missing = last_bundle - index_last_bundle;
+            eprintln!();
+            eprintln!("   ⚠️  Index is {} bundles behind", missing);
+            eprintln!("   💡 Run: {} index repair", constants::BINARY_NAME);
+        } else if index_last_bundle == last_bundle {
+            eprintln!();
+            eprintln!("   ✓ Index is up-to-date");
+        }
+        
+        eprintln!();
+        eprintln!("   💡 Use --force to rebuild from scratch");
         return Ok(());
     }
 
@@ -451,9 +482,22 @@ pub fn cmd_index_stats(dir: PathBuf, json: bool) -> Result<()> {
 
     // Get raw stats from did_index
     let stats_map = manager.get_did_index_stats();
+    
+    // Check if index has been built
+    let is_built = stats_map
+        .get("exists")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     if json {
-        let json_str = sonic_rs::to_string_pretty(&stats_map)?;
+        // Add built status to JSON output
+        use serde_json::json;
+        let mut json_output = serde_json::Map::new();
+        for (k, v) in stats_map {
+            json_output.insert(k, v);
+        }
+        json_output.insert("is_built".to_string(), json!(is_built));
+        let json_str = serde_json::to_string_pretty(&json_output)?;
         println!("{}", json_str);
         return Ok(());
     }
@@ -533,6 +577,13 @@ pub fn cmd_index_stats(dir: PathBuf, json: bool) -> Result<()> {
         utils::display_path(&dir).display(),
         constants::DID_INDEX_DIR
     );
+    use super::utils::colors;
+    let status = if is_built {
+        format!("{}✓ Built{}", colors::GREEN, colors::RESET)
+    } else {
+        format!("{}✗ Not built{}", colors::RED, colors::RESET)
+    };
+    println!("  Status:        {}", status);
     println!(
         "  Total DIDs:    {}",
         utils::format_number(total_dids as u64)
@@ -618,11 +669,11 @@ fn rebuild_and_compare_index(
     let progress = ProgressBar::with_bytes(last_bundle as usize, total_uncompressed_size);
 
     // Stream bundles directly from disk - memory efficient!
-    // Use default flush interval of 10 for verify
+    // Use default flush interval for verify
     temp_did_index.build_from_scratch(
         manager.directory(),
         last_bundle,
-        10, // flush_interval
+        constants::DID_INDEX_FLUSH_INTERVAL, // flush_interval
         Some(|current, _total, bytes_processed, _stage| {
             progress.set_with_bytes(current as usize, bytes_processed);
         }),

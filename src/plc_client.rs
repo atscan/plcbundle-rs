@@ -3,7 +3,7 @@ use crate::constants;
 use crate::resolver::DIDDocument;
 use anyhow::{Context, Result};
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 // Import PLCOperation from sync module (needed for fetch_operations)

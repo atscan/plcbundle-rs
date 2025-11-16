@@ -665,8 +665,8 @@ impl BundleManager {
             .bundles
             .retain(|b| b.bundle_number <= spec.target_bundle);
 
-        // Use default flush interval of 10 for rollback
-        self.build_did_index(10, None::<fn(u32, u32, u64, u64)>)?;
+        // Use default flush interval for rollback
+        self.build_did_index(crate::constants::DID_INDEX_FLUSH_INTERVAL, None::<fn(u32, u32, u64, u64)>)?;
 
         Ok(RollbackResult {
             success: true,
@@ -735,7 +735,13 @@ impl BundleManager {
         eprintln!("   Strategy: Streaming (memory-efficient)");
         eprintln!("   Bundles:  {}", last_bundle);
         if flush_interval > 0 {
-            eprintln!("   Flush:    Every {} bundles", flush_interval);
+            if flush_interval == crate::constants::DID_INDEX_FLUSH_INTERVAL {
+                // Default value - show with tuning hint
+                eprintln!("   Flush:    Every {} bundles (tune with --flush-interval)", flush_interval);
+            } else {
+                // Non-default value - show with tuning hint
+                eprintln!("   Flush:    {} bundles (you can tune with --flush-interval)", flush_interval);
+            }
         } else {
             eprintln!("   Flush:    Only at end (maximum memory usage)");
         }
@@ -783,7 +789,7 @@ impl BundleManager {
 
         let total_duration = build_start.elapsed();
 
-        eprintln!();
+        eprintln!("\n");
         eprintln!("✅ Index Build Complete");
         eprintln!("   Time:       {:.1}s", total_duration.as_secs_f64());
         eprintln!("   Operations: {}", crate::format::format_number(total_operations));

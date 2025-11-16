@@ -1170,6 +1170,7 @@ struct ForkPoint {
     operations: Vec<ForkOperation>,
 
     /// The winning operation (after fork resolution)
+    #[allow(dead_code)]
     winner_cid: String,
 }
 
@@ -1177,6 +1178,7 @@ struct ForkPoint {
 #[derive(Debug, Clone)]
 struct ForkOperation {
     cid: String,
+    #[allow(dead_code)]
     operation: Operation,
     timestamp: chrono::DateTime<chrono::Utc>,
     signing_key_index: Option<usize>,

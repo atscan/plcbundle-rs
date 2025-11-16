@@ -849,7 +849,7 @@ impl Manager {
         let mut metrics_string_alloc = std::time::Duration::ZERO;
         let mut metrics_hashmap_ops = std::time::Duration::ZERO;
         let mut metrics_io_read = std::time::Duration::ZERO;
-        let mut metrics_decompress = std::time::Duration::ZERO;
+        let mut metrics_decompress; // Initialized later from metrics_line_read
         let mut metrics_line_read = std::time::Duration::ZERO;
         let mut metrics_location_create = std::time::Duration::ZERO;
         let mut metrics_bundle_total = std::time::Duration::ZERO;
@@ -984,14 +984,19 @@ impl Manager {
             };
             
             // Merge results from batch into main shard_entries
-            for result in batch_results {
-                let (mut batch_entries, batch_bytes, batch_ops) = result?;
+            // Zip batch with results to track bundle numbers (rayon preserves order)
+            for (bundle_num, result) in batch.iter().zip(batch_results.iter()) {
+                let (mut batch_entries, batch_bytes, batch_ops) = match result {
+                    Ok(r) => r.clone(),
+                    Err(e) => return Err(anyhow::anyhow!("Error processing bundle {}: {}", bundle_num, e)),
+                };
                 bytes_processed.fetch_add(batch_bytes, Ordering::Relaxed);
                 
                 // Track basic metrics from batch results (works in both parallel and sequential mode)
                 if use_parallel {
                     metrics_ops += batch_ops;
                     metrics_bytes += batch_bytes;
+                    total_operations += batch_ops; // Count operations in parallel mode too
                 }
                 
                 // Merge batch entries into main shard_entries
@@ -1000,18 +1005,15 @@ impl Manager {
                         .or_insert_with(Vec::new)
                         .append(&mut entries);
                 }
-            }
-            
-            // Update progress and check for flush
-            let last_bundle_in_batch = batch.last().copied().unwrap_or(0);
-            if last_bundle_in_batch > 0 {
+                
+                // Update progress after each bundle (more granular updates)
                 let current_bytes = bytes_processed.load(Ordering::Relaxed);
                 if let Some(ref cb) = progress_callback {
-                    cb(last_bundle_in_batch, last_bundle, current_bytes, Some("Stage 1: Processing bundles".to_string()));
+                    cb(*bundle_num, last_bundle, current_bytes, Some("Stage 1/2: Processing bundles".to_string()));
                 }
                 
-                // Flush to disk periodically to avoid excessive memory
-                if flush_interval > 0 && last_bundle_in_batch % flush_interval == 0 {
+                // Flush to disk periodically to avoid excessive memory (check after each bundle)
+                if flush_interval > 0 && *bundle_num % flush_interval == 0 {
                     let flush_start = Instant::now();
                     let mem_before = shard_entries.values().map(|v| v.len()).sum::<usize>();
                     let shards_used = shard_entries.len();
@@ -1027,11 +1029,16 @@ impl Manager {
                         flush_count,
                         mem_before,
                         shards_used,
-                        last_bundle_in_batch,
+                        bundle_num,
                         last_bundle,
                         flush_duration.as_secs_f64()
                     );
                 }
+            }
+            
+            // Check for metrics logging (using last bundle in batch)
+            let last_bundle_in_batch = batch.last().copied().unwrap_or(0);
+            if last_bundle_in_batch > 0 {
                 
                 // Log detailed metrics every N bundles
                 if last_bundle_in_batch % metrics_interval == 0 || last_bundle_in_batch == last_bundle {
@@ -1167,7 +1174,8 @@ impl Manager {
                     metrics_string_alloc = std::time::Duration::ZERO;
                     metrics_hashmap_ops = std::time::Duration::ZERO;
                     metrics_io_read = std::time::Duration::ZERO;
-                    metrics_decompress = std::time::Duration::ZERO;
+                    // metrics_decompress is derived from metrics_line_read in sequential mode,
+                    // so no need to reset it here - it will be reassigned before use
                     metrics_line_read = std::time::Duration::ZERO;
                     metrics_location_create = std::time::Duration::ZERO;
                     metrics_bundle_total = std::time::Duration::ZERO;
@@ -1188,18 +1196,27 @@ impl Manager {
         }
 
         // Pass 2: Consolidate all temporary files for each shard
-        eprintln!("\n📊 Stage 2: Consolidating shards...");
+        eprintln!("\n📊 Stage 2/2: Consolidating shards...");
         log::debug!("[DID Index] Pass 2: Consolidating shards...");
         let pass2_start = Instant::now();
 
+        let mut total_dids = 0i64;
         for shard_num in 0..DID_SHARD_COUNT {
             // Update progress callback for consolidation phase
             if let Some(ref cb) = progress_callback {
                 // For consolidation, we use shard number as progress indicator
                 // Total is DID_SHARD_COUNT, current is shard_num + 1
-                cb((shard_num + 1) as u32, DID_SHARD_COUNT as u32, 0, Some("Stage 2: Consolidating shards".to_string()));
+                cb((shard_num + 1) as u32, DID_SHARD_COUNT as u32, 0, Some("Stage 2/2: Consolidating shards".to_string()));
             }
-            self.consolidate_shard(shard_num as u8)?;
+            let shard_did_count = self.consolidate_shard(shard_num as u8)?;
+            total_dids += shard_did_count;
+            
+            // Update shard metadata with did_count
+            self.modify_config(|config| {
+                if let Some(shard_meta) = config.shards.get_mut(shard_num as usize) {
+                    shard_meta.did_count = shard_did_count as u32;
+                }
+            })?;
         }
 
         let pass2_duration = pass2_start.elapsed();
@@ -1209,18 +1226,19 @@ impl Manager {
             pass2_duration.as_secs_f64()
         );
 
-        // Update config with last_bundle and reset delta segments
+        // Update config with last_bundle, total_dids, and reset delta segments
         self.modify_config(|config| {
             config.last_bundle = last_bundle as i32;
+            config.total_dids = total_dids;
             config.delta_segments_total = 0;
         })?;
 
         let total_duration = build_start.elapsed();
         log::info!(
-            "[DID Index] Streaming build complete: {} bundles, {} operations, {} valid DIDs in {:.3}s ({:.0} ops/sec)",
+            "[DID Index] Streaming build complete: {} bundles, {} operations, {} DIDs in {:.3}s ({:.0} ops/sec)",
             last_bundle,
             total_operations,
-            total_valid_dids,
+            total_dids,
             total_duration.as_secs_f64(),
             total_operations as f64 / total_duration.as_secs_f64()
         );

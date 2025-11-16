@@ -20,6 +20,7 @@ pub mod colors {
     pub const DIM: &str = "\x1b[2m";
     
     /// Bold text
+    #[allow(dead_code)]
     pub const BOLD: &str = "\x1b[1m";
 }
 

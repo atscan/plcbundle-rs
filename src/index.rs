@@ -53,12 +53,62 @@ impl Index {
             index.last_bundle,
             elapsed_ms
         );
+
+        // Validate bundle sequence integrity
+        index.validate_bundle_sequence()?;
+
         Ok(index)
+    }
+
+    /// Validate that bundles form a consecutive sequence starting from 1
+    /// This ensures no gaps in the bundle chain and that the first bundle is always 1
+    fn validate_bundle_sequence(&self) -> Result<()> {
+        if self.bundles.is_empty() {
+            return Ok(()); // Empty index is valid
+        }
+
+        // First bundle must be 1
+        let first_bundle = self.bundles.first().unwrap().bundle_number;
+        if first_bundle != 1 {
+            anyhow::bail!(
+                "Invalid bundle sequence: first bundle is {} but must be 1",
+                first_bundle
+            );
+        }
+
+        // Check for gaps in sequence
+        for i in 0..self.bundles.len() {
+            let expected = (i + 1) as u32;
+            let actual = self.bundles[i].bundle_number;
+            if actual != expected {
+                anyhow::bail!(
+                    "Gap detected in bundle sequence: expected bundle {}, found bundle {}",
+                    expected,
+                    actual
+                );
+            }
+        }
+
+        // Verify last_bundle matches the last bundle in the array
+        let last_in_array = self.bundles.last().unwrap().bundle_number;
+        if self.last_bundle != last_in_array {
+            anyhow::bail!(
+                "Inconsistent last_bundle: index says {}, but last bundle in array is {}",
+                self.last_bundle,
+                last_in_array
+            );
+        }
+
+        Ok(())
     }
 
     /// Save index to disk atomically
     pub fn save<P: AsRef<Path>>(&self, directory: P) -> Result<()> {
         use anyhow::Context;
+
+        // Validate bundle sequence before saving
+        self.validate_bundle_sequence()
+            .context("Cannot save invalid index")?;
 
         let index_path = directory.as_ref().join("plc_bundles.json");
         let temp_path = index_path.with_extension("json.tmp");
@@ -183,6 +233,28 @@ impl Index {
 
         // Sort by bundle number
         bundle_files.sort_by_key(|(num, _)| *num);
+
+        // Validate that first bundle is 1
+        let first_bundle_num = bundle_files[0].0;
+        if first_bundle_num != 1 {
+            anyhow::bail!(
+                "Invalid bundle sequence: first bundle file is {:06}.jsonl.zst but must be 000001.jsonl.zst",
+                first_bundle_num
+            );
+        }
+
+        // Validate no gaps in bundle sequence
+        for i in 0..bundle_files.len() {
+            let expected = (i + 1) as u32;
+            let actual = bundle_files[i].0;
+            if actual != expected {
+                anyhow::bail!(
+                    "Gap detected in bundle files: expected {:06}.jsonl.zst, found {:06}.jsonl.zst",
+                    expected,
+                    actual
+                );
+            }
+        }
 
         // Pre-calculate total bytes for progress tracking (parallel)
         use rayon::prelude::*;
@@ -368,5 +440,242 @@ impl Index {
                 })
                 .sum()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_empty_index() {
+        let index = Index {
+            version: "1.0".to_string(),
+            origin: "test".to_string(),
+            last_bundle: 0,
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            total_size_bytes: 0,
+            total_uncompressed_size_bytes: 0,
+            bundles: Vec::new(),
+        };
+
+        assert!(index.validate_bundle_sequence().is_ok());
+    }
+
+    #[test]
+    fn test_validate_single_bundle_correct() {
+        let index = Index {
+            version: "1.0".to_string(),
+            origin: "test".to_string(),
+            last_bundle: 1,
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            total_size_bytes: 100,
+            total_uncompressed_size_bytes: 200,
+            bundles: vec![BundleMetadata {
+                bundle_number: 1,
+                start_time: "2024-01-01T00:00:00Z".to_string(),
+                end_time: "2024-01-01T01:00:00Z".to_string(),
+                operation_count: 10,
+                did_count: 5,
+                hash: "hash1".to_string(),
+                content_hash: "content1".to_string(),
+                parent: String::new(),
+                compressed_hash: "comp1".to_string(),
+                compressed_size: 100,
+                uncompressed_size: 200,
+                cursor: String::new(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+            }],
+        };
+
+        assert!(index.validate_bundle_sequence().is_ok());
+    }
+
+    #[test]
+    fn test_validate_first_bundle_not_one() {
+        let index = Index {
+            version: "1.0".to_string(),
+            origin: "test".to_string(),
+            last_bundle: 2,
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            total_size_bytes: 100,
+            total_uncompressed_size_bytes: 200,
+            bundles: vec![BundleMetadata {
+                bundle_number: 2,
+                start_time: "2024-01-01T00:00:00Z".to_string(),
+                end_time: "2024-01-01T01:00:00Z".to_string(),
+                operation_count: 10,
+                did_count: 5,
+                hash: "hash1".to_string(),
+                content_hash: "content1".to_string(),
+                parent: String::new(),
+                compressed_hash: "comp1".to_string(),
+                compressed_size: 100,
+                uncompressed_size: 200,
+                cursor: String::new(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+            }],
+        };
+
+        let result = index.validate_bundle_sequence();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("first bundle is 2 but must be 1"));
+    }
+
+    #[test]
+    fn test_validate_gap_in_sequence() {
+        let index = Index {
+            version: "1.0".to_string(),
+            origin: "test".to_string(),
+            last_bundle: 3,
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            total_size_bytes: 200,
+            total_uncompressed_size_bytes: 400,
+            bundles: vec![
+                BundleMetadata {
+                    bundle_number: 1,
+                    start_time: "2024-01-01T00:00:00Z".to_string(),
+                    end_time: "2024-01-01T01:00:00Z".to_string(),
+                    operation_count: 10,
+                    did_count: 5,
+                    hash: "hash1".to_string(),
+                    content_hash: "content1".to_string(),
+                    parent: String::new(),
+                    compressed_hash: "comp1".to_string(),
+                    compressed_size: 100,
+                    uncompressed_size: 200,
+                    cursor: String::new(),
+                    created_at: "2024-01-01T00:00:00Z".to_string(),
+                },
+                BundleMetadata {
+                    bundle_number: 3, // Gap: missing bundle 2
+                    start_time: "2024-01-01T01:00:00Z".to_string(),
+                    end_time: "2024-01-01T02:00:00Z".to_string(),
+                    operation_count: 10,
+                    did_count: 5,
+                    hash: "hash3".to_string(),
+                    content_hash: "content3".to_string(),
+                    parent: "hash1".to_string(),
+                    compressed_hash: "comp3".to_string(),
+                    compressed_size: 100,
+                    uncompressed_size: 200,
+                    cursor: "2024-01-01T01:00:00Z".to_string(),
+                    created_at: "2024-01-01T01:00:00Z".to_string(),
+                },
+            ],
+        };
+
+        let result = index.validate_bundle_sequence();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("expected bundle 2, found bundle 3"));
+    }
+
+    #[test]
+    fn test_validate_consecutive_sequence() {
+        let index = Index {
+            version: "1.0".to_string(),
+            origin: "test".to_string(),
+            last_bundle: 3,
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            total_size_bytes: 300,
+            total_uncompressed_size_bytes: 600,
+            bundles: vec![
+                BundleMetadata {
+                    bundle_number: 1,
+                    start_time: "2024-01-01T00:00:00Z".to_string(),
+                    end_time: "2024-01-01T01:00:00Z".to_string(),
+                    operation_count: 10,
+                    did_count: 5,
+                    hash: "hash1".to_string(),
+                    content_hash: "content1".to_string(),
+                    parent: String::new(),
+                    compressed_hash: "comp1".to_string(),
+                    compressed_size: 100,
+                    uncompressed_size: 200,
+                    cursor: String::new(),
+                    created_at: "2024-01-01T00:00:00Z".to_string(),
+                },
+                BundleMetadata {
+                    bundle_number: 2,
+                    start_time: "2024-01-01T01:00:00Z".to_string(),
+                    end_time: "2024-01-01T02:00:00Z".to_string(),
+                    operation_count: 10,
+                    did_count: 5,
+                    hash: "hash2".to_string(),
+                    content_hash: "content2".to_string(),
+                    parent: "hash1".to_string(),
+                    compressed_hash: "comp2".to_string(),
+                    compressed_size: 100,
+                    uncompressed_size: 200,
+                    cursor: "2024-01-01T01:00:00Z".to_string(),
+                    created_at: "2024-01-01T01:00:00Z".to_string(),
+                },
+                BundleMetadata {
+                    bundle_number: 3,
+                    start_time: "2024-01-01T02:00:00Z".to_string(),
+                    end_time: "2024-01-01T03:00:00Z".to_string(),
+                    operation_count: 10,
+                    did_count: 5,
+                    hash: "hash3".to_string(),
+                    content_hash: "content3".to_string(),
+                    parent: "hash2".to_string(),
+                    compressed_hash: "comp3".to_string(),
+                    compressed_size: 100,
+                    uncompressed_size: 200,
+                    cursor: "2024-01-01T02:00:00Z".to_string(),
+                    created_at: "2024-01-01T02:00:00Z".to_string(),
+                },
+            ],
+        };
+
+        assert!(index.validate_bundle_sequence().is_ok());
+    }
+
+    #[test]
+    fn test_validate_last_bundle_mismatch() {
+        let index = Index {
+            version: "1.0".to_string(),
+            origin: "test".to_string(),
+            last_bundle: 5, // Incorrect: actual last bundle is 2
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            total_size_bytes: 200,
+            total_uncompressed_size_bytes: 400,
+            bundles: vec![
+                BundleMetadata {
+                    bundle_number: 1,
+                    start_time: "2024-01-01T00:00:00Z".to_string(),
+                    end_time: "2024-01-01T01:00:00Z".to_string(),
+                    operation_count: 10,
+                    did_count: 5,
+                    hash: "hash1".to_string(),
+                    content_hash: "content1".to_string(),
+                    parent: String::new(),
+                    compressed_hash: "comp1".to_string(),
+                    compressed_size: 100,
+                    uncompressed_size: 200,
+                    cursor: String::new(),
+                    created_at: "2024-01-01T00:00:00Z".to_string(),
+                },
+                BundleMetadata {
+                    bundle_number: 2,
+                    start_time: "2024-01-01T01:00:00Z".to_string(),
+                    end_time: "2024-01-01T02:00:00Z".to_string(),
+                    operation_count: 10,
+                    did_count: 5,
+                    hash: "hash2".to_string(),
+                    content_hash: "content2".to_string(),
+                    parent: "hash1".to_string(),
+                    compressed_hash: "comp2".to_string(),
+                    compressed_size: 100,
+                    uncompressed_size: 200,
+                    cursor: "2024-01-01T01:00:00Z".to_string(),
+                    created_at: "2024-01-01T01:00:00Z".to_string(),
+                },
+            ],
+        };
+
+        let result = index.validate_bundle_sequence();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("last_bundle: index says 5, but last bundle in array is 2"));
     }
 }

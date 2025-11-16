@@ -112,3 +112,11 @@ pub const DEFAULT_ORIGIN: &str = "local";
 
 /// Zstd compression level (1 = fast, 3 = balanced, 19 = maximum)
 pub const ZSTD_COMPRESSION_LEVEL: i32 = 1;
+
+// ============================================================================
+// DID Index Constants
+// ============================================================================
+
+/// Default flush interval for DID index building (number of bundles before flushing to disk)
+/// A value of 0 means flush only at the end (maximum memory usage)
+pub const DID_INDEX_FLUSH_INTERVAL: u32 = 64;

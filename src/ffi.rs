@@ -588,8 +588,8 @@ pub unsafe extern "C" fn bundle_manager_rebuild_did_index(
         }) as Box<dyn Fn(u32, u32, u64, u64) + Send + Sync>
     });
 
-    // Use default flush interval of 10 for FFI
-    match manager.manager.build_did_index(10, callback) {
+    // Use default flush interval for FFI
+    match manager.manager.build_did_index(constants::DID_INDEX_FLUSH_INTERVAL, callback) {
         Ok(stats) => {
             if !out_stats.is_null() {
                 unsafe {
