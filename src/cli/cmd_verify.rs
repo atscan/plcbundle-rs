@@ -1,8 +1,8 @@
 use super::progress::ProgressBar;
-use super::utils::{format_bytes, format_number, parse_bundle_range_simple, HasGlobalFlags};
+use super::utils::{format_bytes, format_bytes_per_sec, format_number, parse_bundle_range_simple, HasGlobalFlags};
 use anyhow::{Result, bail};
 use clap::Args;
-use plcbundle::{BundleManager, VerifySpec};
+use plcbundle::{BundleManager, VerifyResult, VerifySpec};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -20,7 +20,7 @@ use std::time::Instant;
             # Verbose output\n  \
             plcbundle verify --chain -v\n\n  \
             # Parallel verification (faster for ranges)\n  \
-            plcbundle verify --range 1-1000 --parallel --workers 8"
+            plcbundle verify --range 1-1000 -j 8"
 )]
 pub struct VerifyCommand {
     /// Verify specific bundle number
@@ -34,14 +34,6 @@ pub struct VerifyCommand {
     /// Verify entire chain (default)
     #[arg(short, long)]
     pub chain: bool,
-
-    /// Use parallel verification for ranges
-    #[arg(long)]
-    pub parallel: bool,
-
-    /// Number of parallel workers (0 = auto-detect)
-    #[arg(long, default_value = "0")]
-    pub workers: usize,
 
     /// Verbose output
     #[arg(short, long)]
@@ -97,8 +89,6 @@ pub fn run(mut cmd: VerifyCommand, dir: PathBuf, global_verbose: bool) -> Result
             &manager,
             &range_str,
             cmd.verbose,
-            cmd.parallel,
-            cmd.workers,
             cmd.full,
             cmd.fast,
             num_threads,
@@ -311,12 +301,17 @@ fn verify_chain(
                 match job {
                     Ok((idx, bundle_num)) => {
                         let result = manager.verify_bundle(bundle_num, spec.clone());
-                        let valid = match &result {
-                            Ok(r) => r.valid,
-                            Err(_) => false,
+                        let verify_result = match result {
+                            Ok(vr) => vr,
+                            Err(e) => {
+                                // Convert error to VerifyResult for consistency
+                                VerifyResult {
+                                    valid: false,
+                                    errors: vec![e.to_string()],
+                                }
+                            }
                         };
-                        let err = result.err();
-                        result_tx.send((idx, bundle_num, valid, err)).unwrap();
+                        result_tx.send((idx, bundle_num, verify_result)).unwrap();
                     }
                     Err(_) => break, // Channel closed, worker done
                 }
@@ -331,19 +326,19 @@ fn verify_chain(
     drop(job_tx); // Close sender, workers will finish
 
     // Collect results and update progress in real-time
-    let mut results: Vec<(usize, u32, bool, Option<anyhow::Error>)> = Vec::new();
+    let mut results: Vec<(usize, u32, VerifyResult)> = Vec::new();
     results.reserve(bundles.len());
 
     let mut verified_count = 0;
     let mut error_count = 0;
     let mut first_error: Option<anyhow::Error> = None;
-    let mut failed_bundles = Vec::new();
+    let mut failed_bundles: Vec<(u32, Vec<String>)> = Vec::new();
     let mut completed = 0;
 
     // Collect results as they arrive and update progress immediately
     let mut total_uncompressed_processed = 0u64;
     for _ in 0..bundles.len() {
-        let (idx, bundle_num, valid, err) = result_rx.recv()?;
+        let (idx, bundle_num, verify_result) = result_rx.recv()?;
         completed += 1;
 
         // Track uncompressed bytes processed
@@ -356,38 +351,46 @@ fn verify_chain(
             pb.set_with_bytes(completed, total_uncompressed_processed);
         }
 
-        if !valid {
+        if !verify_result.valid {
             error_count += 1;
-            failed_bundles.push(bundle_num);
+            let errors = verify_result.errors.clone();
+            failed_bundles.push((bundle_num, errors.clone()));
 
             // Only print per-bundle errors in verbose mode
             if verbose {
                 eprintln!("\n❌ Bundle {:06} verification failed", bundle_num);
-                if let Some(ref e) = err {
-                    let err_msg = e.to_string();
-                    eprintln!("  ⚠️  Error: {}", err_msg);
+                if !errors.is_empty() {
+                    eprintln!("  ⚠️  Errors:");
+                    for err in &errors {
+                        eprintln!("     • {}", err);
+                    }
 
                     // Provide helpful hint for common issues
-                    if err_msg.contains("hash") && err_msg.contains("mismatch") {
+                    let has_hash_mismatch = errors.iter().any(|e| {
+                        e.contains("hash") && e.contains("mismatch")
+                    });
+                    if has_hash_mismatch {
                         eprintln!(
                             "  💡 Hint: Bundle file may have been migrated but index wasn't updated."
                         );
                         eprintln!("          Run 'migrate --force' to recalculate all hashes.");
                     }
+                } else {
+                    eprintln!("  ⚠️  Verification failed (no error details available)");
                 }
             }
 
             // Store first error for summary
             if first_error.is_none() {
-                if let Some(e) = err.as_ref() {
-                    first_error = Some(anyhow::anyhow!("{}", e));
+                if let Some(first_err) = errors.first() {
+                    first_error = Some(anyhow::anyhow!("{}", first_err));
                 }
             }
         } else {
             verified_count += 1;
         }
 
-        results.push((idx, bundle_num, valid, err));
+        results.push((idx, bundle_num, verify_result));
     }
 
     // Sort results by index for consistent error reporting
@@ -499,20 +502,18 @@ fn verify_chain(
             eprintln!("   Throughput: {:.1} bundles/sec", bundles_per_sec);
 
             if total_size > 0 {
-                let mb_per_sec_compressed =
-                    total_size as f64 / elapsed.as_secs_f64() / (1024.0 * 1024.0);
+                let bytes_per_sec_compressed = total_size as f64 / elapsed.as_secs_f64();
                 eprintln!(
-                    "   Data rate:  {:.1} MB/sec (compressed)",
-                    mb_per_sec_compressed
+                    "   Data rate:  {} (compressed)",
+                    format_bytes_per_sec(bytes_per_sec_compressed)
                 );
             }
 
             if total_uncompressed_size > 0 {
-                let mb_per_sec_uncompressed =
-                    total_uncompressed_size as f64 / elapsed.as_secs_f64() / (1024.0 * 1024.0);
+                let bytes_per_sec_uncompressed = total_uncompressed_size as f64 / elapsed.as_secs_f64();
                 eprintln!(
-                    "   Data rate:  {:.1} MB/sec (uncompressed)",
-                    mb_per_sec_uncompressed
+                    "   Data rate:  {} (uncompressed)",
+                    format_bytes_per_sec(bytes_per_sec_uncompressed)
                 );
             }
         }
@@ -521,14 +522,45 @@ fn verify_chain(
         eprintln!("\n❌ Chain verification failed");
         eprintln!("   Verified: {}/{} bundles", verified_count, bundles.len());
         eprintln!("   Errors:   {}", error_count);
-        if !failed_bundles.is_empty() && failed_bundles.len() <= 10 {
-            eprintln!("   ⚠️  Failed bundles: {:?}", failed_bundles);
-        } else if !failed_bundles.is_empty() {
-            eprintln!(
-                "   ⚠️  Failed bundles: {} (too many to list)",
-                failed_bundles.len()
-            );
+        
+        // Show failed bundles with their error messages
+        if !failed_bundles.is_empty() {
+            if failed_bundles.len() <= 10 {
+                eprintln!("\n   ⚠️  Failed bundles:");
+                for (bundle_num, errors) in &failed_bundles {
+                    eprintln!("      Bundle {:06}:", bundle_num);
+                    if errors.is_empty() {
+                        eprintln!("         • Verification failed (no error details)");
+                    } else {
+                        for err in errors {
+                            eprintln!("         • {}", err);
+                        }
+                    }
+                }
+            } else {
+                eprintln!(
+                    "   ⚠️  Failed bundles: {} (too many to list)",
+                    failed_bundles.len()
+                );
+                // Show first few with details
+                eprintln!("\n   First few failures:");
+                for (bundle_num, errors) in failed_bundles.iter().take(5) {
+                    eprintln!("      Bundle {:06}:", bundle_num);
+                    if errors.is_empty() {
+                        eprintln!("         • Verification failed (no error details)");
+                    } else {
+                        for err in errors.iter().take(3) {
+                            eprintln!("         • {}", err);
+                        }
+                        if errors.len() > 3 {
+                            eprintln!("         • ... and {} more error(s)", errors.len() - 3);
+                        }
+                    }
+                }
+                eprintln!("      ... and {} more failed bundles", failed_bundles.len() - 5);
+            }
         }
+        
         eprintln!("   Time:     {:?}", elapsed);
 
         // Show helpful hint if hash mismatch detected
@@ -542,7 +574,9 @@ fn verify_chain(
             }
         }
 
-        eprintln!("\n   Use --verbose to see details of each failed bundle.");
+        if !verbose {
+            eprintln!("\n   Use --verbose to see details of each failed bundle as they are found.");
+        }
 
         if let Some(err) = first_error {
             Err(err)
@@ -556,8 +590,6 @@ fn verify_range(
     manager: &BundleManager,
     range_str: &str,
     verbose: bool,
-    parallel: bool,
-    workers: usize,
     full: bool,
     fast: bool,
     num_threads: usize,
@@ -565,24 +597,23 @@ fn verify_range(
     let last_bundle = manager.get_last_bundle();
     let (start, end) = parse_bundle_range_simple(range_str, last_bundle)?;
 
-    // Auto-detect workers if 0
-    let actual_workers = if workers == 0 { num_threads } else { workers };
-
+    let use_parallel = num_threads > 1;
+    
     eprintln!("\n🔬 Verifying bundles {:06} - {:06}", start, end);
-    if parallel {
-        eprintln!("   Using {} worker thread(s)", actual_workers);
+    if use_parallel {
+        eprintln!("   Using {} worker thread(s)", num_threads);
     }
     eprintln!();
 
     let total = end - start + 1;
     let overall_start = Instant::now();
 
-    let verify_err = if parallel {
+    let verify_err = if use_parallel {
         verify_range_parallel(
             manager,
             start,
             end,
-            num_threads.min(actual_workers),
+            num_threads,
             verbose,
             full,
             fast,
@@ -644,7 +675,7 @@ fn verify_range_sequential(
 
     let mut verified = 0;
     let mut failed = 0;
-    let mut failed_bundles = Vec::new();
+    let mut failed_bundles: Vec<(u32, Vec<String>)> = Vec::new();
 
     // Verify compressed hash, content hash only if --full
     let spec = VerifySpec {
@@ -663,24 +694,27 @@ fn verify_range_sequential(
 
         match result {
             Err(e) => {
+                let errors = vec![e.to_string()];
                 if verbose {
-                    eprintln!("❌ ERROR - {}", e);
+                    eprintln!("❌ ERROR - {}", errors[0]);
                 }
                 failed += 1;
-                failed_bundles.push(bundle_num);
+                failed_bundles.push((bundle_num, errors));
             }
             Ok(result) => {
                 if !result.valid {
                     if verbose {
-                        let err_msg = if result.errors.is_empty() {
-                            "invalid".to_string()
+                        if result.errors.is_empty() {
+                            eprintln!("❌ INVALID - verification failed (no error details)");
                         } else {
-                            result.errors[0].clone()
-                        };
-                        eprintln!("❌ INVALID - {}", err_msg);
+                            eprintln!("❌ INVALID:");
+                            for err in &result.errors {
+                                eprintln!("   • {}", err);
+                            }
+                        }
                     }
                     failed += 1;
-                    failed_bundles.push(bundle_num);
+                    failed_bundles.push((bundle_num, result.errors));
                 } else {
                     if verbose {
                         eprintln!("✅");
@@ -716,22 +750,41 @@ fn verify_range_sequential(
         eprintln!("   Verified: {}/{}", verified, total);
         eprintln!("   Failed:   {}", failed);
 
-        if !failed_bundles.is_empty() && failed_bundles.len() <= 20 {
-            eprint!("\n   ⚠️  Failed bundles: ");
-            for (i, num) in failed_bundles.iter().enumerate() {
-                if i > 0 {
-                    eprint!(", ");
+        if !failed_bundles.is_empty() {
+            if failed_bundles.len() <= 20 {
+                eprintln!("\n   ⚠️  Failed bundles:");
+                for (bundle_num, errors) in &failed_bundles {
+                    eprintln!("      Bundle {:06}:", bundle_num);
+                    if errors.is_empty() {
+                        eprintln!("         • Verification failed (no error details)");
+                    } else {
+                        for err in errors {
+                            eprintln!("         • {}", err);
+                        }
+                    }
                 }
-                eprint!("{:06}", num);
+            } else {
+                eprintln!(
+                    "\n   ⚠️  Failed bundles: {} (too many to list)",
+                    failed_bundles.len()
+                );
+                // Show first few with details
+                eprintln!("\n   First few failures:");
+                for (bundle_num, errors) in failed_bundles.iter().take(5) {
+                    eprintln!("      Bundle {:06}:", bundle_num);
+                    if errors.is_empty() {
+                        eprintln!("         • Verification failed (no error details)");
+                    } else {
+                        for err in errors.iter().take(3) {
+                            eprintln!("         • {}", err);
+                        }
+                        if errors.len() > 3 {
+                            eprintln!("         • ... and {} more error(s)", errors.len() - 3);
+                        }
+                    }
+                }
+                eprintln!("      ... and {} more failed bundles", failed_bundles.len() - 5);
             }
-            eprintln!();
-        } else if failed_bundles.len() > 20 {
-            eprintln!(
-                "\n   ⚠️  Failed bundles: {:06}, {:06}, ... and {} more",
-                failed_bundles[0],
-                failed_bundles[1],
-                failed_bundles.len() - 2
-            );
         }
 
         bail!("verification failed for {} bundles", failed)
