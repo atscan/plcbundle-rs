@@ -12,13 +12,13 @@ use super::utils;
     alias = "info",
     after_help = "Examples:\n  \
             # Show repository status\n  \
-            plcbundle status\n\n  \
+            {bin} status\n\n  \
             # Show detailed status with recent bundles\n  \
-            plcbundle status --detailed\n\n  \
+            {bin} status --detailed\n\n  \
             # JSON output for scripting\n  \
-            plcbundle status --json\n\n  \
+            {bin} status --json\n\n  \
             # Using legacy 'info' alias\n  \
-            plcbundle info"
+            {bin} info"
 )]
 pub struct StatusCommand {
     /// Show detailed information

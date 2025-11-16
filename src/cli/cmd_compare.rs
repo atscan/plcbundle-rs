@@ -26,15 +26,15 @@ use super::utils::colors;
                     • Local file path (e.g., /path/to/plc_bundles.json)",
     after_help = "Examples:\n  \
         # High-level comparison\n  \
-        plcbundle compare https://plc.example.com\n\n  \
+        {bin} compare https://plc.example.com\n\n  \
         # Show all differences (verbose)\n  \
-        plcbundle compare https://plc.example.com -v\n\n  \
+        {bin} compare https://plc.example.com -v\n\n  \
         # Deep dive into specific bundle\n  \
-        plcbundle compare https://plc.example.com --bundles 23\n\n  \
+        {bin} compare https://plc.example.com --bundles 23\n\n  \
         # Compare bundle with operation samples\n  \
-        plcbundle compare https://plc.example.com --bundles 23 --show-operations\n\n  \
+        {bin} compare https://plc.example.com --bundles 23 --show-operations\n\n  \
         # Show first 50 operations\n  \
-        plcbundle compare https://plc.example.com --bundles 23 --sample 50"
+        {bin} compare https://plc.example.com --bundles 23 --sample 50"
 )]
 pub struct CompareCommand {
     /// Target to compare against (URL or local path)

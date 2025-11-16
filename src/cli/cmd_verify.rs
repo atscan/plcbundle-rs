@@ -11,18 +11,18 @@ use std::time::Instant;
     about = "Verify bundle integrity and chain",
     after_help = "Examples:\n  \
             # Verify entire chain\n  \
-            plcbundle verify\n  \
-            plcbundle verify --chain\n\n  \
+            {bin} verify\n  \
+            {bin} verify --chain\n\n  \
             # Verify specific bundle\n  \
-            plcbundle verify --bundles 42\n\n  \
+            {bin} verify --bundles 42\n\n  \
             # Verify range of bundles\n  \
-            plcbundle verify --bundles 1-100\n\n  \
+            {bin} verify --bundles 1-100\n\n  \
             # Verify multiple ranges\n  \
-            plcbundle verify --bundles 1-10,20-30\n\n  \
+            {bin} verify --bundles 1-10,20-30\n\n  \
             # Verbose output\n  \
-            plcbundle verify --chain -v\n\n  \
+            {bin} verify --chain -v\n\n  \
             # Parallel verification (faster for ranges)\n  \
-            plcbundle verify --bundles 1-1000 -j 8"
+            {bin} verify --bundles 1-1000 -j 8"
 )]
 pub struct VerifyCommand {
     /// Bundle range to verify (e.g., "42", "1-100", or "1-10,20-30")

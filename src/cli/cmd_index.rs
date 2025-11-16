@@ -12,13 +12,13 @@ use std::time::Instant;
     long_about = "Manage the DID position index which maps DIDs to their bundle locations.\nThis index enables fast O(1) DID lookups and is required for DID\nresolution and query operations.",
     after_help = "Examples:\n  \
             # Build DID position index\n  \
-            plcbundle index build\n\n  \
+            {bin} index build\n\n  \
             # Repair DID index (rebuild from bundles)\n  \
-            plcbundle index repair\n\n  \
+            {bin} index repair\n\n  \
             # Show DID index statistics\n  \
-            plcbundle index stats\n\n  \
+            {bin} index stats\n\n  \
             # Verify DID index integrity\n  \
-            plcbundle index verify"
+            {bin} index verify"
 )]
 pub struct IndexCommand {
     #[command(subcommand)]
@@ -30,15 +30,15 @@ pub enum IndexCommands {
     /// Build DID position index
     #[command(after_help = "Examples:\n  \
             # Build index (default: flush every 64 bundles)\n  \
-            plcbundle index build\n\n  \
+            {bin} index build\n\n  \
             # Force rebuild from scratch\n  \
-            plcbundle index build --force\n\n  \
+            {bin} index build --force\n\n  \
             # Use 8 parallel threads\n  \
-            plcbundle index build -j 8\n\n  \
+            {bin} index build -j 8\n\n  \
             # Flush every 100 bundles (reduce memory usage)\n  \
-            plcbundle index build --flush-interval 100\n\n  \
+            {bin} index build --flush-interval 100\n\n  \
             # No intermediate flushes (maximum speed, high memory)\n  \
-            plcbundle index build --flush-interval 0")]
+            {bin} index build --flush-interval 0")]
     Build {
         /// Rebuild even if index exists
         #[arg(short, long)]
@@ -62,9 +62,9 @@ pub enum IndexCommands {
             - Compacting delta segments (if > 50 segments)\n\n  \
             Use this after syncing new bundles or if index is corrupted.\n\n  \
             Examples:\n  \
-            plcbundle index repair\n  \
-            plcbundle index repair -j 8\n  \
-            plcbundle index repair --flush-interval 100"
+            {bin} index repair\n  \
+            {bin} index repair -j 8\n  \
+            {bin} index repair --flush-interval 100"
     )]
     Repair {
         /// Number of threads to use (0 = auto-detect)
@@ -107,9 +107,9 @@ pub enum IndexCommands {
     /// Compact delta segments in DID index
     #[command(after_help = "Examples:\n  \
             # Compact all shards\n  \
-            plcbundle index compact\n\n  \
+            {bin} index compact\n\n  \
             # Compact specific shards\n  \
-            plcbundle index compact --shards 0xac 0x12 0xff")]
+            {bin} index compact --shards 0xac 0x12 0xff")]
     Compact {
         /// Specific shards to compact (0-255 or hex like 0xac)
         #[arg(short, long, value_delimiter = ' ')]

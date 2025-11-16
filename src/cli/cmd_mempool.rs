@@ -15,15 +15,15 @@ use std::path::PathBuf;
     alias = "mp",
     after_help = "Examples:\n  \
             # Show mempool status\n  \
-            plcbundle mempool\n  \
-            plcbundle mempool status\n\n  \
+            {bin} mempool\n  \
+            {bin} mempool status\n\n  \
             # Clear all operations\n  \
-            plcbundle mempool clear\n\n  \
+            {bin} mempool clear\n\n  \
             # Export operations as JSONL\n  \
-            plcbundle mempool dump\n  \
-            plcbundle mempool dump > operations.jsonl\n\n  \
+            {bin} mempool dump\n  \
+            {bin} mempool dump > operations.jsonl\n\n  \
             # Using alias\n  \
-            plcbundle mp status"
+            {bin} mp status"
 )]
 pub struct MempoolCommand {
     #[command(subcommand)]

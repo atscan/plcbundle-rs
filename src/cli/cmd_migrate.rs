@@ -29,21 +29,21 @@ The migration:
 Original files are replaced atomically. Use --dry-run to preview.",
     after_help = "Examples:\n  \
         # Preview migration (recommended first)\n  \
-        plcbundle migrate --dry-run\n\n  \
+        {bin} migrate --dry-run\n\n  \
         # Migrate all legacy bundles (auto-detects CPU cores)\n  \
-        plcbundle migrate\n\n  \
+        {bin} migrate\n\n  \
         # Migrate specific bundle range\n  \
-        plcbundle migrate --bundles 1-100\n\n  \
+        {bin} migrate --bundles 1-100\n\n  \
         # Migrate single bundle\n  \
-        plcbundle migrate --bundles 42\n\n  \
+        {bin} migrate --bundles 42\n\n  \
         # Migrate multiple ranges\n  \
-        plcbundle migrate --bundles 1-10,20-30,50\n\n  \
+        {bin} migrate --bundles 1-10,20-30,50\n\n  \
         # Force migration even if frame metadata exists\n  \
-        plcbundle migrate --force\n\n  \
+        {bin} migrate --force\n\n  \
         # Limit threads (if needed for resource constraints)\n  \
-        plcbundle migrate -j 4\n\n  \
+        {bin} migrate -j 4\n\n  \
         # Verbose output\n  \
-        plcbundle migrate -v"
+        {bin} migrate -v"
 )]
 pub struct MigrateCommand {
     /// Show what would be migrated without migrating

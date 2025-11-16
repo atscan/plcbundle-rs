@@ -12,13 +12,13 @@ use std::time::Instant;
     alias = "record",
     after_help = "Examples:\n  \
             # Get operation as JSON\n  \
-            plcbundle op get 42 1337\n  \
-            plcbundle op get 420000\n\n  \
+            {bin} op get 42 1337\n  \
+            {bin} op get 420000\n\n  \
             # Show operation (formatted)\n  \
-            plcbundle op show 42 1337\n  \
-            plcbundle op show 88410345\n\n  \
+            {bin} op show 42 1337\n  \
+            {bin} op show 88410345\n\n  \
             # Find by CID\n  \
-            plcbundle op find bafyreig3..."
+            {bin} op find bafyreig3..."
 )]
 pub struct OpCommand {
     #[command(subcommand)]
@@ -40,17 +40,17 @@ pub enum OpCommands {
     /// Use -q/--query to extract a value using JMESPath.
     #[command(after_help = "Examples:\n  \
             # By bundle + position (auto pretty-print in terminal)\n  \
-            plcbundle op get 42 1337\n\n  \
+            {bin} op get 42 1337\n\n  \
             # By global position\n  \
-            plcbundle op get 88410345\n\n  \
+            {bin} op get 88410345\n\n  \
             # Query with JMESPath\n  \
-            plcbundle op get 42 1337 -q 'operation.type'\n  \
-            plcbundle op get 42 1337 -q 'did'\n  \
-            plcbundle op get 88410345 -q 'did'\n\n  \
+            {bin} op get 42 1337 -q 'operation.type'\n  \
+            {bin} op get 42 1337 -q 'did'\n  \
+            {bin} op get 88410345 -q 'did'\n\n  \
             # Force raw JSON output\n  \
-            plcbundle op get 42 1337 --raw\n\n  \
+            {bin} op get 42 1337 --raw\n\n  \
             # Pipe to jq (auto-detects non-TTY, uses raw)\n  \
-            plcbundle op get 42 1337 | jq .did")]
+            {bin} op get 42 1337 | jq .did")]
     Get {
         /// Bundle number (or global position if only one arg provided)
         bundle: u32,
@@ -85,11 +85,11 @@ pub enum OpCommands {
     ///   • Performance metrics (when not quiet)
     #[command(after_help = "Examples:\n  \
             # By bundle + position\n  \
-            plcbundle op show 42 1337\n\n  \
+            {bin} op show 42 1337\n\n  \
             # By global position\n  \
-            plcbundle op show 88410345\n\n  \
+            {bin} op show 88410345\n\n  \
             # Quiet mode (minimal output)\n  \
-            plcbundle op show 42 1337 -q")]
+            {bin} op show 42 1337 -q")]
     Show {
         /// Bundle number (or global position if only one arg)
         bundle: u32,
@@ -106,9 +106,9 @@ pub enum OpCommands {
     /// Note: This performs a full scan and can be slow on large repositories.
     #[command(after_help = "Examples:\n  \
             # Find by CID\n  \
-            plcbundle op find bafyreig3tg4k...\n\n  \
+            {bin} op find bafyreig3tg4k...\n\n  \
             # Use with op get\n  \
-            plcbundle op find bafyreig3... | awk '{print $3, $5}' | xargs plcbundle op get")]
+            {bin} op find bafyreig3... | awk '{print $3, $5}' | xargs {bin} op get")]
     Find {
         /// CID to search for
         cid: String,

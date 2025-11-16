@@ -19,13 +19,13 @@ use std::path::PathBuf;
                   for cleaning up leftover temporary files from interrupted operations.",
     after_help = "Examples:\n  \
             # Clean all temporary files (with confirmation)\n  \
-            plcbundle clean\n\n  \
+            {bin} clean\n\n  \
             # Clean without confirmation prompt\n  \
-            plcbundle clean --force\n\n  \
+            {bin} clean --force\n\n  \
             # Clean with verbose output\n  \
-            plcbundle clean --verbose\n\n  \
+            {bin} clean --verbose\n\n  \
             # Using alias\n  \
-            plcbundle cleanup"
+            {bin} cleanup"
 )]
 pub struct CleanCommand {
     /// Show verbose output

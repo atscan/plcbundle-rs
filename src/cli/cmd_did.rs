@@ -10,11 +10,11 @@ use std::path::PathBuf;
     long_about = "Query and analyze DIDs in the bundle repository. All commands\nrequire a DID index to be built for optimal performance.",
     after_help = "Examples:\n  \
             # Resolve DID to current document\n  \
-            plcbundle did resolve did:plc:524tuhdhh3m7li5gycdn6boe\n\n  \
+            {bin} did resolve did:plc:524tuhdhh3m7li5gycdn6boe\n\n  \
             # Show DID operation log\n  \
-            plcbundle did log did:plc:524tuhdhh3m7li5gycdn6boe\n\n  \
+            {bin} did log did:plc:524tuhdhh3m7li5gycdn6boe\n\n  \
             # Show complete audit log\n  \
-            plcbundle did history did:plc:524tuhdhh3m7li5gycdn6boe"
+            {bin} did history did:plc:524tuhdhh3m7li5gycdn6boe"
 )]
 pub struct DidCommand {
     #[command(subcommand)]
@@ -47,13 +47,13 @@ pub enum DIDCommands {
         alias = "document",
         after_help = "Examples:\n  \
             # Resolve DID to full document\n  \
-            plcbundle did resolve did:plc:524tuhdhh3m7li5gycdn6boe\n\n  \
+            {bin} did resolve did:plc:524tuhdhh3m7li5gycdn6boe\n\n  \
             # Query with JMESPath\n  \
-            plcbundle did resolve did:plc:524tuhdhh3m7li5gycdn6boe -q 'id'\n  \
-            plcbundle did resolve did:plc:524tuhdhh3m7li5gycdn6boe -q 'verificationMethod[0].id'\n  \
-            plcbundle did resolve did:plc:524tuhdhh3m7li5gycdn6boe -q 'service[].id'\n\n  \
+            {bin} did resolve did:plc:524tuhdhh3m7li5gycdn6boe -q 'id'\n  \
+            {bin} did resolve did:plc:524tuhdhh3m7li5gycdn6boe -q 'verificationMethod[0].id'\n  \
+            {bin} did resolve did:plc:524tuhdhh3m7li5gycdn6boe -q 'service[].id'\n\n  \
             # Force raw JSON output\n  \
-            plcbundle did resolve did:plc:524tuhdhh3m7li5gycdn6boe --raw"
+            {bin} did resolve did:plc:524tuhdhh3m7li5gycdn6boe --raw"
     )]
     Resolve {
         /// DID or handle to resolve

@@ -16,11 +16,11 @@ use std::sync::Arc;
                     • Target directory: Where to create the new repository",
     after_help = "Examples:\n  \
             # Clone from remote instance\n  \
-            plcbundle clone https://plc.example.com /path/to/local\n\n  \
+            {bin} clone https://plc.example.com /path/to/local\n\n  \
             # Clone to current directory\n  \
-            plcbundle clone https://plc.example.com .\n\n  \
+            {bin} clone https://plc.example.com .\n\n  \
             # Clone with custom parallelism\n  \
-            plcbundle clone https://plc.example.com /path/to/local --parallel 8"
+            {bin} clone https://plc.example.com /path/to/local --parallel 8"
 )]
 pub struct CloneCommand {
     /// Remote plcbundle instance URL

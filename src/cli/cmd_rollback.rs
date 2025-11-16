@@ -10,15 +10,15 @@ use std::path::PathBuf;
     about = "Rollback repository to earlier state",
     after_help = "Examples:\n  \
             # Rollback TO bundle 100 (keeps 1-100, removes 101+)\n  \
-            plcbundle rollback --to 100\n\n  \
+            {bin} rollback --to 100\n\n  \
             # Remove last 5 bundles\n  \
-            plcbundle rollback --last 5\n\n  \
+            {bin} rollback --last 5\n\n  \
             # Rollback without confirmation\n  \
-            plcbundle rollback --to 50 -f\n\n  \
+            {bin} rollback --to 50 -f\n\n  \
             # Rollback and rebuild DID index\n  \
-            plcbundle rollback --to 100 --rebuild-did-index\n\n  \
+            {bin} rollback --to 100 --rebuild-did-index\n\n  \
             # Rollback but keep bundle files (index-only)\n  \
-            plcbundle rollback --to 100 --keep-files"
+            {bin} rollback --to 100 --keep-files"
 )]
 pub struct RollbackCommand {
     /// Rollback TO this bundle (keeps it)

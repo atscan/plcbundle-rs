@@ -35,7 +35,7 @@ The server provides:
   - Live mempool (in sync mode)
 
 Sync mode (--sync) runs as a daemon, continuously fetching new bundles.
-For one-time sync, use 'plcbundle sync' command instead."
+For one-time sync, use '{bin} sync' command instead."
 )]
 pub struct ServerCommand {
     /// HTTP server port

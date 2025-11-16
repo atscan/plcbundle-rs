@@ -37,9 +37,9 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[derive(Parser)]
 #[command(name = "plcbundle")]
 #[command(version = VERSION)]
-#[command(about = concat!("plcbundle v", env!("CARGO_PKG_VERSION"), " (rust) - DID PLC Bundle Management"))]
+#[command(about = concat!("{name} v{version} (rust) - DID PLC Bundle Management"))]
 #[command(long_about = concat!(
-    "plcbundle v", env!("CARGO_PKG_VERSION"), " - DID PLC Bundle Management\n\n",
+    "{bin} v{version} - DID PLC Bundle Management\n\n",
     "Tool for archiving AT Protocol's DID PLC Directory operations\n",
     "into immutable, cryptographically-chained bundles of 10,000\n",
     "operations each.\n\n",

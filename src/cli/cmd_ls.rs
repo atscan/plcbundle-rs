@@ -8,23 +8,23 @@ use std::path::PathBuf;
     about = "List bundles (machine-readable)",
     after_help = "Examples:\n  \
             # List all bundles\n  \
-            plcbundle ls\n\n  \
+            {bin} ls\n\n  \
             # Human-readable sizes\n  \
-            plcbundle ls -h\n\n  \
+            {bin} ls -h\n\n  \
             # Last 10 bundles\n  \
-            plcbundle ls -n 10\n\n  \
+            {bin} ls -n 10\n\n  \
             # Oldest first\n  \
-            plcbundle ls --reverse\n\n  \
+            {bin} ls --reverse\n\n  \
             # Custom format\n  \
-            plcbundle ls --format \"bundle,hash,date,size\"\n\n  \
+            {bin} ls --format \"bundle,hash,date,size\"\n\n  \
             # CSV format\n  \
-            plcbundle ls --separator \",\"\n\n  \
+            {bin} ls --separator \",\"\n\n  \
             # Scripting examples\n  \
-            plcbundle ls | awk '{print $1}'           # Just bundle numbers\n  \
-            plcbundle ls | grep 000150                # Find specific bundle\n  \
-            plcbundle ls -n 5 | cut -f1,4             # First and 4th columns\n  \
-            plcbundle ls --format bundle,hash         # Custom columns\n  \
-            plcbundle ls --separator \",\" > bundles.csv # Export to CSV"
+            {bin} ls | awk '{print $1}'           # Just bundle numbers\n  \
+            {bin} ls | grep 000150                # Find specific bundle\n  \
+            {bin} ls -n 5 | cut -f1,4             # First and 4th columns\n  \
+            {bin} ls --format bundle,hash         # Custom columns\n  \
+            {bin} ls --separator \",\" > bundles.csv # Export to CSV"
 )]
 pub struct LsCommand {
     /// Show only last N bundles (0 = all)

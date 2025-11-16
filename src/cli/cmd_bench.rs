@@ -12,15 +12,15 @@ use std::time::Instant;
     about = "Benchmark bundle operations",
     after_help = "Examples:\n  \
             # Run all benchmarks with default iterations\n  \
-            plcbundle bench\n\n  \
+            {bin} bench\n\n  \
             # Benchmark specific operation\n  \
-            plcbundle bench --op-read --iterations 1000\n\n  \
+            {bin} bench --op-read --iterations 1000\n\n  \
             # Benchmark DID lookup\n  \
-            plcbundle bench --did-lookup -n 500\n\n  \
+            {bin} bench --did-lookup -n 500\n\n  \
             # Run on specific bundle\n  \
-            plcbundle bench --bundles 100\n\n  \
+            {bin} bench --bundles 100\n\n  \
             # JSON output for analysis\n  \
-            plcbundle bench --json > benchmark.json"
+            {bin} bench --json > benchmark.json"
 )]
 pub struct BenchCommand {
     /// Number of iterations for each benchmark

@@ -24,7 +24,7 @@ pub fn run(cmd: RandomCommand, dir: PathBuf) -> Result<()> {
     let dids = manager.sample_random_dids(count, cmd.seed)?;
 
     if cmd.json {
-        println!("{}", sonic_rs::to_string_pretty(&dids)?);
+        println!("{}", serde_json::to_string_pretty(&dids)?);
     } else {
         for did in dids {
             println!("{}", did);

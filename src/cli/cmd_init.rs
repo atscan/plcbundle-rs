@@ -9,13 +9,13 @@ use std::path::PathBuf;
     long_about = "Creates a new repository with an empty index file. Similar to 'git init'.",
     after_help = "Examples:\n  \
             # Initialize in current directory\n  \
-            plcbundle init\n\n  \
+            {bin} init\n\n  \
             # Initialize in specific directory\n  \
-            plcbundle init /path/to/bundles\n\n  \
+            {bin} init /path/to/bundles\n\n  \
             # Set custom origin identifier\n  \
-            plcbundle init --origin my-node\n\n  \
+            {bin} init --origin my-node\n\n  \
             # Force reinitialize existing repository\n  \
-            plcbundle init --force"
+            {bin} init --force"
 )]
 pub struct InitCommand {
     /// Directory to initialize (default: current directory)

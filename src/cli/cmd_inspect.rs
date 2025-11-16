@@ -24,16 +24,16 @@ use std::path::PathBuf;
                   Can inspect either by bundle number (from repository) or direct file path.",
     after_help = "Examples:\n  \
             # Inspect from repository\n  \
-            plcbundle inspect 42\n\n  \
+            {bin} inspect 42\n\n  \
             # Inspect specific file\n  \
-            plcbundle inspect /path/to/000042.jsonl.zst\n  \
-            plcbundle inspect 000042.jsonl.zst\n\n  \
+            {bin} inspect /path/to/000042.jsonl.zst\n  \
+            {bin} inspect 000042.jsonl.zst\n\n  \
             # Skip certain analysis sections\n  \
-            plcbundle inspect 42 --skip-patterns\n\n  \
+            {bin} inspect 42 --skip-patterns\n\n  \
             # Show sample operations\n  \
-            plcbundle inspect 42 --samples --sample-count 20\n\n  \
+            {bin} inspect 42 --samples --sample-count 20\n\n  \
             # JSON output (for scripting)\n  \
-            plcbundle inspect 42 --json"
+            {bin} inspect 42 --json"
 )]
 pub struct InspectCommand {
     /// Bundle number or file path to inspect

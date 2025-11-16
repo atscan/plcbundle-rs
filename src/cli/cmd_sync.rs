@@ -18,13 +18,13 @@ use std::time::Duration;
     alias = "fetch",
     after_help = "Examples:\n  \
             # Fetch new bundles once\n  \
-            plcbundle sync\n\n  \
+            {bin} sync\n\n  \
             # Run continuously (daemon mode)\n  \
-            plcbundle sync --continuous\n\n  \
+            {bin} sync --continuous\n\n  \
             # Custom sync interval\n  \
-            plcbundle sync --continuous --interval 30s\n\n  \
+            {bin} sync --continuous --interval 30s\n\n  \
             # Fetch maximum 10 bundles then stop\n  \
-            plcbundle sync --max-bundles 10"
+            {bin} sync --max-bundles 10"
 )]
 pub struct SyncCommand {
     /// PLC directory URL

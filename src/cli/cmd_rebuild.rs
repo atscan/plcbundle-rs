@@ -26,13 +26,13 @@ Note: This only works with bundles that have embedded metadata (modern format).
 Legacy bundles without metadata frames cannot be reconstructed this way.",
     after_help = "Examples:\n  \
         # Rebuild index from current directory\n  \
-        plcbundle rebuild\n\n  \
+        {bin} rebuild\n\n  \
         # Rebuild from specific directory\n  \
-        plcbundle rebuild -C /path/to/bundles\n\n  \
+        {bin} rebuild -C /path/to/bundles\n\n  \
         # Show verbose output\n  \
-        plcbundle rebuild -v\n\n  \
+        {bin} rebuild -v\n\n  \
         # Dry-run (just scan, don't write)\n  \
-        plcbundle rebuild --dry-run"
+        {bin} rebuild --dry-run"
 )]
 pub struct RebuildCommand {
     /// Show what would be done without writing index
