@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::{Args, ValueEnum};
+use clap::Args;
 use indicatif::HumanDuration;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};

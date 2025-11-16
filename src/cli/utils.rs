@@ -29,21 +29,6 @@ pub fn parse_bundle_spec(spec: Option<String>, max_bundle: u32) -> Result<Vec<u3
     }
 }
 
-/// Parse a simple bundle range string (e.g., "1-100") into (start, end)
-pub fn parse_bundle_range_simple(spec: &str, max_bundle: u32) -> Result<(u32, u32)> {
-    let (start, end) = if let Some((start, end)) = spec.split_once('-') {
-        (start.trim().parse()?, end.trim().parse()?)
-    } else {
-        let num: u32 = spec.trim().parse()?;
-        (num, num)
-    };
-
-    if start == 0 || end == 0 || start > end || end > max_bundle {
-        anyhow::bail!("Invalid range: {}-{}", start, end);
-    }
-
-    Ok((start, end))
-}
 
 /// Display path resolving "." to absolute path
 /// Per RULES.md: NEVER display "." in user-facing output
