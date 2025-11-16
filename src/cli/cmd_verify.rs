@@ -1,5 +1,5 @@
 use super::progress::ProgressBar;
-use super::utils::{format_bytes, format_number, parse_bundle_range_simple};
+use super::utils::{format_bytes, format_number, parse_bundle_range_simple, HasGlobalFlags};
 use anyhow::{Result, bail};
 use clap::Args;
 use plcbundle::{BundleManager, VerifySpec};
@@ -7,6 +7,21 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 #[derive(Args)]
+#[command(
+    about = "Verify bundle integrity and chain",
+    after_help = "Examples:\n  \
+            # Verify entire chain\n  \
+            plcbundle verify\n  \
+            plcbundle verify --chain\n\n  \
+            # Verify specific bundle\n  \
+            plcbundle verify --bundle 42\n\n  \
+            # Verify range of bundles\n  \
+            plcbundle verify --range 1-100\n\n  \
+            # Verbose output\n  \
+            plcbundle verify --chain -v\n\n  \
+            # Parallel verification (faster for ranges)\n  \
+            plcbundle verify --range 1-1000 --parallel --workers 8"
+)]
 pub struct VerifyCommand {
     /// Verify specific bundle number
     #[arg(short, long)]
@@ -45,8 +60,15 @@ pub struct VerifyCommand {
     pub threads: usize,
 }
 
-pub fn run(cmd: VerifyCommand, dir: PathBuf) -> Result<()> {
-    let manager = BundleManager::new(dir.clone())?;
+impl HasGlobalFlags for VerifyCommand {
+    fn verbose(&self) -> bool { self.verbose }
+    fn quiet(&self) -> bool { false }
+}
+
+pub fn run(mut cmd: VerifyCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
+    // Merge global verbose flag with command's verbose flag
+    cmd.verbose = cmd.verbose || global_verbose;
+    let manager = super::utils::create_manager_from_cmd(dir.clone(), &cmd)?;
 
     // Determine number of threads
     let num_threads = if cmd.threads == 0 {

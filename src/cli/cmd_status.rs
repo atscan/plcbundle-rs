@@ -3,9 +3,24 @@ use clap::Parser;
 use plcbundle::*;
 use std::path::PathBuf;
 
+use super::cmd_stats::InfoFormat;
 use super::utils;
 
 #[derive(Parser)]
+#[command(
+    about = "Show comprehensive repository status",
+    long_about = "Displays an overview of the repository including bundle statistics,\nDID index status, mempool state, and health recommendations.",
+    alias = "info",
+    after_help = "Examples:\n  \
+            # Show repository status\n  \
+            plcbundle status\n\n  \
+            # Show detailed status with recent bundles\n  \
+            plcbundle status --detailed\n\n  \
+            # JSON output for scripting\n  \
+            plcbundle status --format json\n\n  \
+            # Using legacy 'info' alias\n  \
+            plcbundle info"
+)]
 pub struct StatusCommand {
     /// Show detailed information
     #[arg(short, long)]
@@ -13,16 +28,16 @@ pub struct StatusCommand {
 
     /// Output format
     #[arg(short = 'f', long, default_value = "human")]
-    pub format: super::InfoFormat,
+    pub format: InfoFormat,
 }
 
 pub fn run(cmd: StatusCommand, dir: PathBuf) -> Result<()> {
-    let manager = utils::create_manager(dir.clone(), false)?;
+    let manager = utils::create_manager(dir.clone(), false, false)?;
     let index = manager.get_index();
 
     match cmd.format {
-        super::InfoFormat::Human => print_human_status(&manager, &index, &dir, cmd.detailed)?,
-        super::InfoFormat::Json => print_json_status(&manager, &index, &dir)?,
+        InfoFormat::Human => print_human_status(&manager, &index, &dir, cmd.detailed)?,
+        InfoFormat::Json => print_json_status(&manager, &index, &dir)?,
         _ => {
             anyhow::bail!("Only 'human' and 'json' formats are supported");
         }

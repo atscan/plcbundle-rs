@@ -1,6 +1,6 @@
 use anyhow::Result;
+use clap::{Args, ValueEnum};
 use indicatif::HumanDuration;
-use plcbundle::BundleManager;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
@@ -10,27 +10,72 @@ use std::time::Instant;
 
 use super::progress::ProgressBar;
 use super::utils;
-// ExportFormat is defined in plcbundle-rs.rs
-// Access it via the parent module
-use super::ExportFormat;
 
-pub fn cmd_export(
-    dir: PathBuf,
-    range: Option<String>,
-    all: bool,
-    bundles: Option<String>, // Legacy flag
-    format: ExportFormat,
-    output: Option<PathBuf>,
-    count: Option<usize>,
-    after: Option<String>,
-    did: Option<String>,
-    op_type: Option<String>,
-    _compress: bool,
-    quiet: bool,
-    verbose: bool,
-) -> Result<()> {
+#[derive(Args)]
+#[command(about = "Export operations to different formats")]
+pub struct ExportCommand {
+    /// Bundle range (e.g., "1-100")
+    #[arg(short, long)]
+    pub range: Option<String>,
+
+    /// Export all bundles
+    #[arg(long)]
+    pub all: bool,
+
+    /// Bundle range (legacy, use --range instead)
+    #[arg(long, hide = true)]
+    pub bundles: Option<String>,
+
+    /// Output format
+    #[arg(short = 'f', long, default_value = "jsonl")]
+    pub format: ExportFormat,
+
+    /// Output file (default: stdout)
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+
+    /// Limit number of operations to export
+    #[arg(long)]
+    pub count: Option<usize>,
+
+    /// Export operations after this timestamp (ISO 8601 format)
+    #[arg(long)]
+    pub after: Option<String>,
+
+    /// Filter by DID
+    #[arg(long)]
+    pub did: Option<String>,
+
+    /// Filter by operation type
+    #[arg(long)]
+    pub op_type: Option<String>,
+
+    /// Compression
+    #[arg(short = 'z', long)]
+    pub compress: bool,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum ExportFormat {
+    Jsonl,
+    Json,
+    Csv,
+    Parquet,
+}
+
+pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Result<()> {
+    let range = cmd.range;
+    let all = cmd.all;
+    let bundles = cmd.bundles;
+    let format = cmd.format;
+    let output = cmd.output;
+    let count = cmd.count;
+    let after = cmd.after;
+    let did = cmd.did;
+    let op_type = cmd.op_type;
+    let _compress = cmd.compress;
     // Create BundleManager (follows RULES.md - NO direct file access from CLI)
-    let manager = BundleManager::new(dir.clone())?;
+    let manager = super::utils::create_manager(dir.clone(), verbose, quiet)?;
     let index = manager.get_index();
     let max_bundle = index.last_bundle;
 
@@ -130,7 +175,7 @@ pub fn cmd_export(
     let start = Instant::now();
     let mut exported_count = 0;
     let mut bundles_processed = 0;
-    let mut bytes_written = Arc::new(Mutex::new(0u64));
+    let bytes_written = Arc::new(Mutex::new(0u64));
     let mut output_buffer = String::with_capacity(1024 * 1024); // 1MB buffer
     const BATCH_SIZE: usize = 10000;
 

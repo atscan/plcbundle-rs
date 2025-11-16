@@ -60,7 +60,7 @@ pub struct DiffCommand {
 }
 
 pub fn run(cmd: DiffCommand, dir: PathBuf) -> Result<()> {
-    let manager = BundleManager::new(dir.clone())?;
+    let manager = super::utils::create_manager(dir.clone(), false, false)?;
 
     let rt = Runtime::new()?;
 
@@ -249,8 +249,7 @@ async fn diff_specific_bundle(
         };
 
         // Try to load bundle from target directory
-        let target_manager = BundleManager::new(target_dir.to_path_buf())
-            .context("Failed to create manager for target directory")?;
+        let target_manager = super::utils::create_manager(target_dir.to_path_buf(), false, false)?;
         let target_result = target_manager
             .load_bundle(bundle_num, plcbundle::LoadOptions::default())
             .context("Failed to load bundle from target directory")?;

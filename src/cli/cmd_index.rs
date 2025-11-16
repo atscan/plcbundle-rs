@@ -1,12 +1,135 @@
 // DID Index CLI commands
 use super::utils;
 use anyhow::Result;
+use clap::{Args, Subcommand};
 use plcbundle::{BundleManager, constants};
 use std::path::PathBuf;
 use std::time::Instant;
 
+#[derive(Args)]
+#[command(
+    about = "DID index management",
+    long_about = "Manage the DID position index which maps DIDs to their bundle locations.\nThis index enables fast O(1) DID lookups and is required for DID\nresolution and query operations.",
+    after_help = "Examples:\n  \
+            # Build DID position index\n  \
+            plcbundle index build\n\n  \
+            # Repair DID index (rebuild from bundles)\n  \
+            plcbundle index repair\n\n  \
+            # Show DID index statistics\n  \
+            plcbundle index stats\n\n  \
+            # Verify DID index integrity\n  \
+            plcbundle index verify"
+)]
+pub struct IndexCommand {
+    #[command(subcommand)]
+    pub command: IndexCommands,
+}
+
+#[derive(Subcommand)]
+pub enum IndexCommands {
+    /// Build DID position index
+    #[command(after_help = "Examples:\n  \
+            # Build index\n  \
+            plcbundle index build\n\n  \
+            # Force rebuild from scratch\n  \
+            plcbundle index build --force")]
+    Build {
+        /// Rebuild even if index exists
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Repair DID index
+    #[command(alias = "rebuild")]
+    Repair {},
+
+    /// Show DID index statistics
+    #[command(alias = "info")]
+    Stats {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Verify DID index integrity
+    #[command(alias = "check")]
+    Verify {
+        /// Verbose output
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Debug and inspect DID index internals
+    #[command(alias = "inspect")]
+    Debug {
+        /// Show specific shard (0-255 or hex like 0xac)
+        #[arg(short, long)]
+        shard: Option<String>,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Compact delta segments in DID index
+    #[command(after_help = "Examples:\n  \
+            # Compact all shards\n  \
+            plcbundle index compact\n\n  \
+            # Compact specific shards\n  \
+            plcbundle index compact --shards 0xac 0x12 0xff")]
+    Compact {
+        /// Specific shards to compact (0-255 or hex like 0xac)
+        #[arg(short, long, value_delimiter = ' ')]
+        shards: Option<Vec<String>>,
+    },
+}
+
+pub fn run(cmd: IndexCommand, dir: PathBuf) -> Result<()> {
+    match cmd.command {
+        IndexCommands::Build { force } => {
+            cmd_index_build(dir, force)?;
+        }
+        IndexCommands::Repair {} => {
+            cmd_index_repair(dir)?;
+        }
+        IndexCommands::Stats { json } => {
+            cmd_index_stats(dir, json)?;
+        }
+        IndexCommands::Verify { verbose } => {
+            cmd_index_verify(dir, verbose)?;
+        }
+        IndexCommands::Debug { shard, json } => {
+            let shard_num = shard.map(|s| parse_shard(&s)).transpose()?;
+            cmd_index_debug(dir, shard_num, json)?;
+        }
+        IndexCommands::Compact { shards } => {
+            let shard_nums = shards
+                .map(|shard_list| {
+                    shard_list
+                        .iter()
+                        .map(|s| parse_shard(s))
+                        .collect::<Result<Vec<u8>>>()
+                })
+                .transpose()?;
+            cmd_index_compact(dir, shard_nums)?;
+        }
+    }
+    Ok(())
+}
+
+/// Parse shard number from string (supports hex 0xac or decimal)
+fn parse_shard(s: &str) -> Result<u8> {
+    if s.starts_with("0x") || s.starts_with("0X") {
+        u8::from_str_radix(&s[2..], 16)
+            .map_err(|_| anyhow::anyhow!("Invalid shard number: {}", s))
+    } else {
+        s.parse::<u8>()
+            .map_err(|_| anyhow::anyhow!("Invalid shard number: {}", s))
+    }
+}
+
 pub fn cmd_index_build(dir: PathBuf, force: bool) -> Result<()> {
-    let manager = BundleManager::new(dir.clone())?;
+    let manager = super::utils::create_manager(dir.clone(), false, false)?;
 
     // Check if index exists
     let did_index = manager.get_did_index_stats();
@@ -63,7 +186,7 @@ pub fn cmd_index_build(dir: PathBuf, force: bool) -> Result<()> {
 }
 
 pub fn cmd_index_repair(dir: PathBuf) -> Result<()> {
-    let manager = BundleManager::new(dir.clone())?;
+    let manager = super::utils::create_manager(dir.clone(), false, false)?;
 
     // Check if index config exists (even if corrupted)
     let did_index = manager.get_did_index();
@@ -116,7 +239,7 @@ pub fn cmd_index_repair(dir: PathBuf) -> Result<()> {
 }
 
 pub fn cmd_index_stats(dir: PathBuf, json: bool) -> Result<()> {
-    let manager = BundleManager::new(dir.clone())?;
+    let manager = super::utils::create_manager(dir.clone(), false, false)?;
 
     // Get raw stats from did_index
     let did_index = manager.get_did_index();
@@ -472,7 +595,7 @@ fn rebuild_and_compare_index(
 }
 
 pub fn cmd_index_verify(dir: PathBuf, verbose: bool) -> Result<()> {
-    let manager = BundleManager::new(dir.clone())?;
+    let manager = super::utils::create_manager(dir.clone(), false, false)?;
 
     let did_index = manager.get_did_index();
     let stats_map = did_index.read().unwrap().get_stats();
@@ -724,7 +847,7 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool) -> Result<()> {
 }
 
 pub fn cmd_index_debug(dir: PathBuf, shard: Option<u8>, json: bool) -> Result<()> {
-    let manager = BundleManager::new(dir.clone())?;
+    let manager = super::utils::create_manager(dir.clone(), false, false)?;
 
     let did_index = manager.get_did_index();
     let stats_map = did_index.read().unwrap().get_stats();
@@ -952,9 +1075,8 @@ pub fn cmd_index_debug(dir: PathBuf, shard: Option<u8>, json: bool) -> Result<()
     Ok(())
 }
 
-#[allow(dead_code)]
 pub fn cmd_index_compact(dir: PathBuf, shards: Option<Vec<u8>>) -> Result<()> {
-    let manager = BundleManager::new(dir.clone())?;
+    let manager = super::utils::create_manager(dir.clone(), false, false)?;
 
     let did_index = manager.get_did_index();
     let stats_map = did_index.read().unwrap().get_stats();

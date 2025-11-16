@@ -1,11 +1,122 @@
 // DID Resolution and Query commands
 use anyhow::Result;
+use clap::{Args, Subcommand};
 use plcbundle::{BundleManager, DIDLookupStats, DIDLookupTimings};
 use std::path::PathBuf;
 
-// ============================================================================
+#[derive(Args)]
+#[command(
+    about = "DID operations and queries",
+    long_about = "Query and analyze DIDs in the bundle repository. All commands\nrequire a DID index to be built for optimal performance.",
+    after_help = "Examples:\n  \
+            # Resolve DID to current document\n  \
+            plcbundle did resolve did:plc:524tuhdhh3m7li5gycdn6boe\n\n  \
+            # Show DID operation log\n  \
+            plcbundle did log did:plc:524tuhdhh3m7li5gycdn6boe\n\n  \
+            # Show complete audit log\n  \
+            plcbundle did history did:plc:524tuhdhh3m7li5gycdn6boe"
+)]
+pub struct DidCommand {
+    #[command(subcommand)]
+    pub command: DIDCommands,
+}
+
+#[derive(Args)]
+#[command(
+    about = "Resolve handle to DID",
+    long_about = "Resolves an AT Protocol handle to its DID using the handle resolver."
+)]
+pub struct HandleCommand {
+    /// Handle to resolve (e.g., tree.fail)
+    pub handle: String,
+
+    /// Handle resolver URL (defaults to quickdid.smokesignal.tools)
+    #[arg(long)]
+    pub handle_resolver: Option<String>,
+}
+
+#[derive(Subcommand)]
+pub enum DIDCommands {
+    /// Resolve DID to current W3C DID document
+    #[command(alias = "doc", alias = "document")]
+    Resolve {
+        /// DID or handle to resolve
+        did: String,
+
+        /// Handle resolver URL (e.g., https://quickdid.smokesignal.tools)
+        #[arg(long)]
+        handle_resolver: Option<String>,
+
+        /// Verbose output
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Show DID operation log
+    #[command(alias = "lookup", alias = "find", alias = "get", alias = "history")]
+    Log {
+        /// DID to show log for
+        did: String,
+
+        /// Verbose output
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Process multiple DIDs from file or stdin (TODO)
+    Batch {
+        /// Action: lookup, resolve, export
+        #[arg(long, default_value = "lookup")]
+        action: String,
+
+        /// Number of parallel workers
+        #[arg(long, default_value = "4")]
+        workers: usize,
+
+        /// Output file
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Read from stdin
+        #[arg(long)]
+        stdin: bool,
+    },
+}
+
+pub fn run_did(cmd: DidCommand, dir: PathBuf) -> Result<()> {
+    match cmd.command {
+        DIDCommands::Resolve {
+            did,
+            handle_resolver,
+            verbose,
+        } => {
+            cmd_did_resolve(dir, did, handle_resolver, verbose)?;
+        }
+        DIDCommands::Log { did, verbose, json } => {
+            cmd_did_lookup(dir, did, verbose, json)?;
+        }
+        DIDCommands::Batch {
+            action,
+            workers,
+            output,
+            stdin,
+        } => {
+            cmd_did_batch(dir, action, workers, output, stdin)?;
+        }
+    }
+    Ok(())
+}
+
+pub fn run_handle(cmd: HandleCommand, dir: PathBuf) -> Result<()> {
+    cmd_did_handle(dir, cmd.handle, cmd.handle_resolver)?;
+    Ok(())
+}
+
 // DID RESOLVE - Convert DID to W3C DID Document
-// ============================================================================
 
 pub fn cmd_did_resolve(
     dir: PathBuf,
@@ -178,9 +289,7 @@ fn calculate_shard_for_display(identifier: &str) -> u8 {
     (hash % 256) as u8
 }
 
-// ============================================================================
 // DID HANDLE - Resolve handle to DID
-// ============================================================================
 
 pub fn cmd_did_handle(
     dir: PathBuf,
@@ -209,9 +318,7 @@ pub fn cmd_did_handle(
     Ok(())
 }
 
-// ============================================================================
 // DID LOOKUP - Find all operations for a DID
-// ============================================================================
 
 pub fn cmd_did_lookup(dir: PathBuf, input: String, verbose: bool, json: bool) -> Result<()> {
     use plcbundle::constants;
@@ -567,9 +674,7 @@ fn show_operation_details(op: &plcbundle::Operation) {
     }
 }
 
-// ============================================================================
 // DID BATCH - Process multiple DIDs (TODO)
-// ============================================================================
 
 pub fn cmd_did_batch(
     _dir: PathBuf,

@@ -1,10 +1,9 @@
 use anyhow::Result;
 use clap::Args;
-use plcbundle::BundleManager;
 use std::path::PathBuf;
 
-/// Sample random DIDs without touching bundle files.
 #[derive(Args, Debug)]
+#[command(about = "Output random DIDs sampled from the index")]
 pub struct RandomCommand {
     /// Number of random DIDs to output
     #[arg(short = 'n', long = "count", default_value = "10")]
@@ -20,7 +19,7 @@ pub struct RandomCommand {
 }
 
 pub fn run(cmd: RandomCommand, dir: PathBuf) -> Result<()> {
-    let manager = BundleManager::new(dir)?;
+    let manager = super::utils::create_manager(dir, false, false)?;
     let count = cmd.count.max(1);
     let dids = manager.sample_random_dids(count, cmd.seed)?;
 

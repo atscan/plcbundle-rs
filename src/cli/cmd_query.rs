@@ -1,4 +1,5 @@
 use anyhow::Result;
+use clap::{Args, ValueEnum};
 use plcbundle::*;
 use std::io::Write;
 use std::path::PathBuf;
@@ -7,48 +8,81 @@ use std::time::Instant;
 
 use super::progress::ProgressBar as CustomProgressBar;
 use super::utils;
-// QueryModeArg and OutputFormat are defined in plcbundle-rs.rs
-// Access them via the parent module
-use super::{OutputFormat, QueryModeArg};
+
+#[derive(Args)]
+#[command(
+    about = "Query bundles with JMESPath or simple path",
+    alias = "q"
+)]
+pub struct QueryCommand {
+    /// Query expression (e.g., "did", "operation.type", etc.)
+    pub expression: String,
+
+    /// Bundle range (e.g., "1-10,15,20-25" or "latest:10" for last 10)
+    #[arg(short, long)]
+    pub bundles: Option<String>,
+
+    /// Number of threads (0 = auto)
+    #[arg(short = 'j', long, default_value = "0")]
+    pub threads: usize,
+
+    /// Query mode
+    #[arg(short = 'm', long, default_value = "auto")]
+    pub mode: QueryModeArg,
+
+    /// Batch size for output
+    #[arg(long, default_value = "2000")]
+    pub batch_size: usize,
+
+    /// Output format
+    #[arg(short = 'f', long, default_value = "jsonl")]
+    pub format: OutputFormat,
+
+    /// Output file (default: stdout)
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+
+    /// Show statistics only, don't output results
+    #[arg(long)]
+    pub stats_only: bool,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum QueryModeArg {
+    /// Auto-detect based on query
+    Auto,
+    /// Simple path mode (faster)
+    Simple,
+    /// JMESPath mode (flexible)
+    Jmespath,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum OutputFormat {
+    /// JSON Lines (one per line)
+    Jsonl,
+    /// Pretty JSON
+    Json,
+    /// CSV
+    Csv,
+    /// Plain text (values only)
+    Plain,
+}
 
 pub struct StdoutHandler {
     lock: Mutex<()>,
     stats_only: bool,
 }
 
-impl StdoutHandler {
-    pub fn new(stats_only: bool) -> Self {
-        Self {
-            lock: Mutex::new(()),
-            stats_only,
-        }
-    }
-}
-
-impl OutputHandler for StdoutHandler {
-    fn write_batch(&self, batch: &str) -> Result<()> {
-        if self.stats_only {
-            return Ok(());
-        }
-        let _lock = self.lock.lock().unwrap();
-        std::io::stdout().write_all(batch.as_bytes())?;
-        Ok(())
-    }
-}
-
-pub fn cmd_query(
-    expression: String,
-    dir: PathBuf,
-    bundles_spec: Option<String>,
-    threads: usize,
-    mode: QueryModeArg,
-    batch_size: usize,
-    _format: OutputFormat,
-    _output: Option<PathBuf>,
-    stats_only: bool,
-    quiet: bool,
-    verbose: bool,
-) -> Result<()> {
+pub fn run(cmd: QueryCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Result<()> {
+    let expression = cmd.expression;
+    let bundles_spec = cmd.bundles;
+    let threads = cmd.threads;
+    let mode = cmd.mode;
+    let batch_size = cmd.batch_size;
+    let _format = cmd.format;
+    let _output = cmd.output;
+    let stats_only = cmd.stats_only;
     let num_threads = if threads == 0 {
         std::thread::available_parallelism()
             .map(|n| n.get())
@@ -184,4 +218,24 @@ pub fn cmd_query(
     }
 
     Ok(())
+}
+
+impl StdoutHandler {
+    pub fn new(stats_only: bool) -> Self {
+        Self {
+            lock: Mutex::new(()),
+            stats_only,
+        }
+    }
+}
+
+impl OutputHandler for StdoutHandler {
+    fn write_batch(&self, batch: &str) -> Result<()> {
+        if self.stats_only {
+            return Ok(());
+        }
+        let _lock = self.lock.lock().unwrap();
+        std::io::stdout().write_all(batch.as_bytes())?;
+        Ok(())
+    }
 }

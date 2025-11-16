@@ -162,18 +162,13 @@ impl Config {
 // ============================================================================
 
 struct Shard {
-    #[allow(dead_code)]
-    shard_num: u8,
     base: Option<Mmap>,
-    #[allow(dead_code)]
-    base_file: Option<File>,
     segments: Vec<SegmentLayer>,
     last_used: AtomicU64,
     access_count: AtomicU64,
 }
 
 struct SegmentLayer {
-    #[allow(dead_code)]
     meta: DeltaSegmentMeta,
     mmap: Mmap,
     _file: File,
@@ -186,25 +181,21 @@ impl SegmentLayer {
 }
 
 impl Shard {
-    fn new_empty(shard_num: u8) -> Self {
+    fn new_empty(_shard_num: u8) -> Self {
         Shard {
-            shard_num,
             base: None,
-            base_file: None,
             segments: Vec::new(),
             last_used: AtomicU64::new(unix_timestamp()),
             access_count: AtomicU64::new(0),
         }
     }
 
-    fn load(shard_num: u8, shard_path: &Path) -> Result<Self> {
-        let file = File::open(shard_path)?;
-        let mmap = unsafe { MmapOptions::new().map(&file)? };
+    fn load(_shard_num: u8, shard_path: &Path) -> Result<Self> {
+        let _file = File::open(shard_path)?;
+        let mmap = unsafe { MmapOptions::new().map(&_file)? };
 
         Ok(Shard {
-            shard_num,
             base: Some(mmap),
-            base_file: Some(file),
             segments: Vec::new(),
             last_used: AtomicU64::new(unix_timestamp()),
             access_count: AtomicU64::new(1),
@@ -2068,14 +2059,6 @@ impl Manager {
         }
 
         Ok(())
-    }
-
-    #[allow(dead_code)]
-    fn update_config(&self, total_dids: i64, last_bundle: i32) -> Result<()> {
-        self.modify_config(|config| {
-            config.total_dids = total_dids;
-            config.last_bundle = last_bundle;
-        })
     }
 
     fn modify_config<F>(&self, mutator: F) -> Result<()>

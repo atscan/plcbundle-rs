@@ -6,6 +6,20 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 #[derive(Args)]
+#[command(
+    about = "Rollback repository to earlier state",
+    after_help = "Examples:\n  \
+            # Rollback TO bundle 100 (keeps 1-100, removes 101+)\n  \
+            plcbundle rollback --to 100\n\n  \
+            # Remove last 5 bundles\n  \
+            plcbundle rollback --last 5\n\n  \
+            # Rollback without confirmation\n  \
+            plcbundle rollback --to 50 --force\n\n  \
+            # Rollback and rebuild DID index\n  \
+            plcbundle rollback --to 100 --rebuild-did-index\n\n  \
+            # Rollback but keep bundle files (index-only)\n  \
+            plcbundle rollback --to 100 --keep-files"
+)]
 pub struct RollbackCommand {
     /// Rollback TO this bundle (keeps it)
     #[arg(long)]
@@ -46,7 +60,7 @@ struct RollbackPlan {
 
 pub fn run(cmd: RollbackCommand, dir: PathBuf) -> Result<()> {
     // Step 1: Validate options and calculate plan
-    let mut manager = BundleManager::new(dir.clone())?;
+    let mut manager = super::utils::create_manager(dir.clone(), false, false)?;
     let plan = calculate_rollback_plan(&manager, &cmd)?;
 
     // Step 2: Display plan and get confirmation

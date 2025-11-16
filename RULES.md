@@ -46,12 +46,18 @@ let index = Index::load(&dir)?;
 Index::init(&dir, origin, force)?;
 Index::rebuild_from_bundles(&dir, origin, callback)?;
 
-// ✅ CORRECT - Via BundleManager API
+// ❌ WRONG - Direct BundleManager::new (no helpful error messages)
+let manager = BundleManager::new(dir)?;
+
+// ✅ CORRECT - Via cli::utils::create_manager (with helpful errors)
+let manager = super::utils::create_manager(dir, verbose)?;
 manager.load_bundle(num, options)?;
 manager.get_operation_raw(bundle, pos)?;
 manager.delete_bundle_files(&[num])?;
-manager.init_repository(origin, force)?;
-manager.rebuild_index(origin, callback)?;
+
+// For static operations (init/rebuild don't need existing repository)
+BundleManager::init_repository(origin, force)?;
+BundleManager::rebuild_index(origin, callback)?;
 ```
 
 ## Architecture

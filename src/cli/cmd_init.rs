@@ -4,6 +4,19 @@ use plcbundle::{constants, BundleManager};
 use std::path::PathBuf;
 
 #[derive(Args)]
+#[command(
+    about = "Initialize a new PLC bundle repository",
+    long_about = "Creates a new repository with an empty index file. Similar to 'git init'.",
+    after_help = "Examples:\n  \
+            # Initialize in current directory\n  \
+            plcbundle init\n\n  \
+            # Initialize in specific directory\n  \
+            plcbundle init /path/to/bundles\n\n  \
+            # Set custom origin identifier\n  \
+            plcbundle init --origin my-node\n\n  \
+            # Force reinitialize existing repository\n  \
+            plcbundle init --force"
+)]
 pub struct InitCommand {
     /// Directory to initialize (default: current directory)
     #[arg(default_value = ".")]

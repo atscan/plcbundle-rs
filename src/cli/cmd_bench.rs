@@ -3,11 +3,25 @@ use super::utils::format_number;
 use anyhow::Result;
 use clap::Args;
 use plcbundle::BundleManager;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::PathBuf;
 use std::time::Instant;
 
 #[derive(Args)]
+#[command(
+    about = "Benchmark bundle operations",
+    after_help = "Examples:\n  \
+            # Run all benchmarks with default iterations\n  \
+            plcbundle bench\n\n  \
+            # Benchmark specific operation\n  \
+            plcbundle bench --op-read --iterations 1000\n\n  \
+            # Benchmark DID lookup\n  \
+            plcbundle bench --did-lookup -n 500\n\n  \
+            # Run on specific bundle\n  \
+            plcbundle bench --bundle 100\n\n  \
+            # JSON output for analysis\n  \
+            plcbundle bench --format json > benchmark.json"
+)]
 pub struct BenchCommand {
     /// Number of iterations for each benchmark
     #[arg(short = 'n', long, default_value = "100")]
@@ -107,7 +121,7 @@ struct BenchmarkResult {
 }
 
 pub fn run(cmd: BenchCommand, dir: PathBuf) -> Result<()> {
-    let manager = BundleManager::new(dir.clone())?;
+    let manager = super::utils::create_manager(dir.clone(), false, false)?;
 
     // Determine which benchmarks to run
     let run_all = cmd.all
@@ -331,7 +345,7 @@ fn bench_bundle_decompress(
     };
 
     let mut processed = 0;
-    for (i, &bundle_num) in bundles.iter().enumerate() {
+    for (_i, &bundle_num) in bundles.iter().enumerate() {
         let size = match bundle_compressed_size(manager, bundle_num)? {
             Some(size) => size,
             None => continue,

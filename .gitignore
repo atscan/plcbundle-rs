@@ -1,5 +1,7 @@
 target
-plcbundle-*
+plcbundle-go
+plcbundle-rs
+plcbundle
 test_bundles
 test_bundles*
 .claude

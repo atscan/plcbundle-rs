@@ -1,8 +1,9 @@
 use super::utils;
+use super::utils::HasGlobalFlags;
 use anyhow::Result;
 use clap::Args;
 use plcbundle::{
-    BundleManager, constants,
+    constants,
     sync::{CliLogger, PLCClient, ServerLogger, SyncConfig, SyncManager},
 };
 use std::path::PathBuf;
@@ -10,6 +11,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Args)]
+#[command(
+    about = "Fetch new bundles from PLC directory",
+    long_about = "Download new operations from the PLC directory and create bundles.\nSimilar to 'git fetch' - updates your local repository with new data.",
+    alias = "fetch",
+    after_help = "Examples:\n  \
+            # Fetch new bundles once\n  \
+            plcbundle sync\n\n  \
+            # Run continuously (daemon mode)\n  \
+            plcbundle sync --continuous\n\n  \
+            # Custom sync interval\n  \
+            plcbundle sync --continuous --interval 30s\n\n  \
+            # Fetch maximum 10 bundles then stop\n  \
+            plcbundle sync --max-bundles 10"
+)]
 pub struct SyncCommand {
     /// PLC directory URL
     #[arg(long, default_value = constants::DEFAULT_PLC_DIRECTORY_URL)]
@@ -40,6 +55,11 @@ pub struct SyncCommand {
     pub quiet: bool,
 }
 
+impl HasGlobalFlags for SyncCommand {
+    fn verbose(&self) -> bool { self.verbose }
+    fn quiet(&self) -> bool { self.quiet }
+}
+
 fn parse_duration(s: &str) -> Result<Duration, String> {
     if let Some(s) = s.strip_suffix('s') {
         s.parse::<u64>()
@@ -68,7 +88,8 @@ pub fn run(cmd: SyncCommand) -> Result<()> {
         }
 
         let client = PLCClient::new(&cmd.plc)?;
-        let manager = Arc::new(BundleManager::new(cmd.dir)?.with_verbose(cmd.verbose));
+        let dir = cmd.dir.clone();
+        let manager = Arc::new(super::utils::create_manager_from_cmd(dir, &cmd)?);
 
         let config = SyncConfig {
             plc_url: cmd.plc.clone(),

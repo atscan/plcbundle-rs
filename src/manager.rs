@@ -1953,13 +1953,6 @@ impl BundleManager {
         ))
     }
 
-    /// Save bundle to disk with compression and index updates (backwards compatibility)
-    #[allow(dead_code)]
-    async fn save_bundle(&self, bundle_num: u32, operations: Vec<Operation>) -> Result<()> {
-        self.save_bundle_with_timing(bundle_num, operations).await?;
-        Ok(())
-    }
-
     /// Migrate a bundle to multi-frame format
     ///
     /// This method loads a bundle and re-saves it with multi-frame compression
@@ -2294,8 +2287,6 @@ impl BundleManager {
 
     /// Rollback repository to a specific bundle
     pub fn rollback_to_bundle(&mut self, target_bundle: u32) -> Result<()> {
-        use anyhow::Context;
-
         let mut index = self.index.write().unwrap();
 
         // Keep only bundles up to target

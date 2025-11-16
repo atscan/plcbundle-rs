@@ -1,10 +1,29 @@
 use anyhow::Result;
 use clap::Args;
-use plcbundle::BundleManager;
 use plcbundle::format::format_duration_compact;
 use std::path::PathBuf;
 
 #[derive(Args)]
+#[command(
+    about = "List bundles (machine-readable)",
+    after_help = "Examples:\n  \
+            # List all bundles\n  \
+            plcbundle ls\n\n  \
+            # Last 10 bundles\n  \
+            plcbundle ls -n 10\n\n  \
+            # Oldest first\n  \
+            plcbundle ls --reverse\n\n  \
+            # Custom format\n  \
+            plcbundle ls --format \"bundle,hash,date,size\"\n\n  \
+            # CSV format\n  \
+            plcbundle ls --separator \",\"\n\n  \
+            # Scripting examples\n  \
+            plcbundle ls | awk '{print $1}'           # Just bundle numbers\n  \
+            plcbundle ls | grep 000150                # Find specific bundle\n  \
+            plcbundle ls -n 5 | cut -f1,4             # First and 4th columns\n  \
+            plcbundle ls --format bundle,hash         # Custom columns\n  \
+            plcbundle ls --separator \",\" > bundles.csv # Export to CSV"
+)]
 pub struct LsCommand {
     /// Show only last N bundles (0 = all)
     #[arg(short = 'n', long, default_value = "0")]
@@ -27,8 +46,8 @@ pub struct LsCommand {
     pub separator: String,
 }
 
-pub fn run(cmd: LsCommand, dir: PathBuf) -> Result<()> {
-    let manager = BundleManager::new(dir)?;
+pub fn run(cmd: LsCommand, dir: PathBuf, verbose: bool, quiet: bool) -> Result<()> {
+    let manager = super::utils::create_manager(dir, verbose, quiet)?;
 
     // Get all bundle metadata from the index
     let bundles = super::utils::get_all_bundle_metadata(&manager);

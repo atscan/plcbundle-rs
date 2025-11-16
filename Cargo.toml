@@ -9,7 +9,7 @@ repository = "https://github.com/yourusername/plcbundle-rs"
 
 [[bin]]
 name = "plcbundle-rs"
-path = "src/cli/plcbundle-rs.rs"
+path = "src/cli/mod.rs"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

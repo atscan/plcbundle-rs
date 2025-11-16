@@ -21,7 +21,19 @@ use std::path::PathBuf;
                   • Service endpoint analysis\n  \
                   • Temporal distribution\n  \
                   • Size analysis\n\n\
-                  Can inspect either by bundle number (from repository) or direct file path."
+                  Can inspect either by bundle number (from repository) or direct file path.",
+    after_help = "Examples:\n  \
+            # Inspect from repository\n  \
+            plcbundle inspect 42\n\n  \
+            # Inspect specific file\n  \
+            plcbundle inspect /path/to/000042.jsonl.zst\n  \
+            plcbundle inspect 000042.jsonl.zst\n\n  \
+            # Skip certain analysis sections\n  \
+            plcbundle inspect 42 --skip-patterns\n\n  \
+            # Show sample operations\n  \
+            plcbundle inspect 42 --samples --sample-count 20\n\n  \
+            # JSON output (for scripting)\n  \
+            plcbundle inspect 42 --json"
 )]
 pub struct InspectCommand {
     /// Bundle number or file path to inspect
@@ -165,7 +177,7 @@ struct TimeDistribution {
 }
 
 pub fn run(cmd: InspectCommand, dir: PathBuf) -> Result<()> {
-    let manager = BundleManager::new(dir.clone())?;
+    let manager = super::utils::create_manager(dir.clone(), false, false)?;
 
     // Resolve target to bundle number or file path
     let (bundle_num, file_path) = resolve_target(&cmd.target, &dir)?;

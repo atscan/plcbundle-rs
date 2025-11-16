@@ -1,6 +1,6 @@
 // Rebuild plc_bundles.json from existing bundle files
 use super::progress::ProgressBar;
-use super::utils::format_bytes;
+use super::utils::{format_bytes, HasGlobalFlags};
 use anyhow::Result;
 use clap::Args;
 use plcbundle::BundleManager;
@@ -48,7 +48,14 @@ pub struct RebuildCommand {
     pub verbose: bool,
 }
 
-pub fn run(cmd: RebuildCommand, dir: PathBuf) -> Result<()> {
+impl HasGlobalFlags for RebuildCommand {
+    fn verbose(&self) -> bool { self.verbose }
+    fn quiet(&self) -> bool { false }
+}
+
+pub fn run(mut cmd: RebuildCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
+    // Merge global verbose flag with command's verbose flag
+    cmd.verbose = cmd.verbose || global_verbose;
     eprintln!("Rebuilding bundle index from: {}\n", dir.display());
 
     let start = Instant::now();

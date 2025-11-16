@@ -1,6 +1,6 @@
 // Migrate command - convert bundles to multi-frame format
 use super::progress::ProgressBar;
-use super::utils::format_bytes;
+use super::utils::{format_bytes, HasGlobalFlags};
 use anyhow::{Result, bail};
 use clap::Args;
 use plcbundle::BundleManager;
@@ -57,11 +57,18 @@ pub struct MigrateCommand {
     pub verbose: bool,
 }
 
-pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
-    let manager = super::utils::create_manager(dir.clone(), cmd.verbose)?;
+impl HasGlobalFlags for MigrateCommand {
+    fn verbose(&self) -> bool { self.verbose }
+    fn quiet(&self) -> bool { false }
+}
+
+pub fn run(mut cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
+    // Merge global verbose flag with command's verbose flag
+    cmd.verbose = cmd.verbose || global_verbose;
+    let manager = super::utils::create_manager_from_cmd(dir.clone(), &cmd)?;
 
     // Auto-detect number of workers if 0
-    let workers = super::utils::get_num_workers(cmd.workers, 4);
+    let workers = super::utils::get_worker_threads(cmd.workers, 4);
 
     eprintln!("Scanning for legacy bundles in: {}\n", dir.display());
 
@@ -204,7 +211,7 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
 
                         // Only update progress bar periodically to reduce lock contention
                         if current_count % update_interval == 0 || current_count == 1 {
-                            let mut prog = progress_arc.lock().unwrap();
+                            let prog = progress_arc.lock().unwrap();
                             prog.set_with_bytes(current_count, total_bytes);
                         }
 
@@ -225,7 +232,7 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
                 let total_bytes = bytes_atomic.fetch_add(info.old_size, Ordering::Relaxed) + info.old_size;
 
                 // Update every bundle in sequential mode (no contention)
-                let mut prog = progress_arc.lock().unwrap();
+                let prog = progress_arc.lock().unwrap();
                 prog.set_with_bytes(current_count, total_bytes);
 
                 (info, result)
@@ -285,7 +292,7 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf) -> Result<()> {
     {
         let final_count = count_atomic.load(Ordering::Relaxed);
         let final_bytes = bytes_atomic.load(Ordering::Relaxed);
-        let mut prog = progress_arc.lock().unwrap();
+        let prog = progress_arc.lock().unwrap();
         prog.set_with_bytes(final_count, final_bytes);
         prog.finish();
     }

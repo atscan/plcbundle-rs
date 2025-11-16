@@ -46,21 +46,3 @@ pub fn is_not_found_error(e: &anyhow::Error) -> bool {
     msg.contains("not found") || msg.contains("not in index")
 }
 
-/// Convert a Result to an HTTP response, handling common error cases
-pub fn handle_result<T: IntoResponse>(
-    result: Result<T, anyhow::Error>,
-) -> impl IntoResponse {
-    match result {
-        Ok(response) => response.into_response(),
-        Err(e) => {
-            if e.to_string().contains("deactivated") {
-                gone("DID has been deactivated").into_response()
-            } else if is_not_found_error(&e) {
-                not_found(&e.to_string()).into_response()
-            } else {
-                internal_error(&e.to_string()).into_response()
-            }
-        }
-    }
-}
-

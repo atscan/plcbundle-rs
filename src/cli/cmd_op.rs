@@ -1,7 +1,109 @@
 use anyhow::Result;
-use plcbundle::{BundleManager, LoadOptions, constants};
+use clap::{Args, Subcommand};
+use plcbundle::{LoadOptions, constants};
 use std::path::PathBuf;
 use std::time::Instant;
+
+#[derive(Args)]
+#[command(
+    about = "Operation queries and inspection",
+    long_about = "Direct access to individual operations within bundles using either:\n  • Bundle number + position (e.g., 42 1337)\n  • Global position (e.g., 420000)\n\nGlobal position format: (bundleNumber × 10,000) + position\nExample: 88410345 = bundle 8841, position 345",
+    alias = "operation",
+    alias = "record",
+    after_help = "Examples:\n  \
+            # Get operation as JSON\n  \
+            plcbundle op get 42 1337\n  \
+            plcbundle op get 420000\n\n  \
+            # Show operation (formatted)\n  \
+            plcbundle op show 42 1337\n  \
+            plcbundle op show 88410345\n\n  \
+            # Find by CID\n  \
+            plcbundle op find bafyreig3..."
+)]
+pub struct OpCommand {
+    #[command(subcommand)]
+    pub command: OpCommands,
+}
+
+#[derive(Subcommand)]
+pub enum OpCommands {
+    /// Get operation as JSON (machine-readable)
+    ///
+    /// Supports two input formats:
+    ///   1. Bundle number + position: get 42 1337
+    ///   2. Global position: get 420000
+    ///
+    /// Global position = (bundleNumber × 10,000) + position
+    #[command(after_help = "Examples:\n  \
+            # By bundle + position\n  \
+            plcbundle op get 42 1337\n\n  \
+            # By global position\n  \
+            plcbundle op get 88410345\n\n  \
+            # Pipe to jq\n  \
+            plcbundle op get 42 1337 | jq .did")]
+    Get {
+        /// Bundle number (or global position if only one arg)
+        bundle: u32,
+
+        /// Operation position within bundle (optional if using global position)
+        position: Option<usize>,
+    },
+
+    /// Show operation with formatted output
+    ///
+    /// Displays operation in human-readable format with:
+    ///   • Bundle location and global position
+    ///   • DID and CID
+    ///   • Timestamp
+    ///   • Nullification status
+    ///   • Parsed operation details
+    ///   • Performance metrics (when not quiet)
+    #[command(after_help = "Examples:\n  \
+            # By bundle + position\n  \
+            plcbundle op show 42 1337\n\n  \
+            # By global position\n  \
+            plcbundle op show 88410345\n\n  \
+            # Quiet mode (minimal output)\n  \
+            plcbundle op show 42 1337 -q")]
+    Show {
+        /// Bundle number (or global position if only one arg)
+        bundle: u32,
+
+        /// Operation position within bundle (optional if using global position)
+        position: Option<usize>,
+    },
+
+    /// Find operation by CID across all bundles
+    ///
+    /// Searches the entire repository for an operation with the given CID
+    /// and returns its location (bundle + position).
+    ///
+    /// Note: This performs a full scan and can be slow on large repositories.
+    #[command(after_help = "Examples:\n  \
+            # Find by CID\n  \
+            plcbundle op find bafyreig3tg4k...\n\n  \
+            # Use with op get\n  \
+            plcbundle op find bafyreig3... | awk '{print $3, $5}' | xargs plcbundle op get")]
+    Find {
+        /// CID to search for
+        cid: String,
+    },
+}
+
+pub fn run(cmd: OpCommand, dir: PathBuf, quiet: bool) -> Result<()> {
+    match cmd.command {
+        OpCommands::Get { bundle, position } => {
+            cmd_op_get(dir, bundle, position, quiet)?;
+        }
+        OpCommands::Show { bundle, position } => {
+            cmd_op_show(dir, bundle, position, quiet)?;
+        }
+        OpCommands::Find { cid } => {
+            cmd_op_find(dir, cid, quiet)?;
+        }
+    }
+    Ok(())
+}
 
 /// Parse operation position - supports both global position and bundle + position
 /// Mimics Go version: small numbers (< 10000) are treated as bundle 1, position N
@@ -31,7 +133,7 @@ pub fn parse_op_position(bundle: u32, position: Option<usize>) -> (u32, usize) {
 pub fn cmd_op_get(dir: PathBuf, bundle: u32, position: Option<usize>, quiet: bool) -> Result<()> {
     let (bundle_num, op_index) = parse_op_position(bundle, position);
 
-    let manager = BundleManager::new(dir)?;
+    let manager = super::utils::create_manager(dir, false, quiet)?;
 
     if quiet {
         // Just output JSON - no stats
@@ -61,7 +163,7 @@ pub fn cmd_op_get(dir: PathBuf, bundle: u32, position: Option<usize>, quiet: boo
 pub fn cmd_op_show(dir: PathBuf, bundle: u32, position: Option<usize>, quiet: bool) -> Result<()> {
     let (bundle_num, op_index) = parse_op_position(bundle, position);
 
-    let manager = BundleManager::new(dir)?;
+    let manager = super::utils::create_manager(dir, false, quiet)?;
 
     // Use the new get_operation API instead of loading entire bundle
     let load_start = Instant::now();
@@ -186,7 +288,7 @@ pub fn cmd_op_show(dir: PathBuf, bundle: u32, position: Option<usize>, quiet: bo
 }
 
 pub fn cmd_op_find(dir: PathBuf, cid: String, quiet: bool) -> Result<()> {
-    let manager = BundleManager::new(dir)?;
+    let manager = super::utils::create_manager(dir, false, quiet)?;
     let last_bundle = manager.get_last_bundle();
 
     if !quiet {

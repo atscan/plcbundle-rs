@@ -7,7 +7,6 @@ pub struct ProgressBar {
     pb: IndicatifProgressBar,
     show_bytes: bool,
     current_bytes: Arc<Mutex<u64>>,
-    total_bytes: u64,
 }
 
 impl ProgressBar {
@@ -25,12 +24,11 @@ impl ProgressBar {
             pb,
             show_bytes: false,
             current_bytes: Arc::new(Mutex::new(0)),
-            total_bytes: 0,
         }
     }
 
     /// Create a progress bar with byte tracking
-    pub fn with_bytes(total: usize, total_bytes: u64) -> Self {
+    pub fn with_bytes(total: usize, _total_bytes: u64) -> Self {
         let pb = IndicatifProgressBar::new(total as u64);
         
         // Custom template that shows MB/s calculated from our tracked bytes
@@ -46,7 +44,6 @@ impl ProgressBar {
             pb,
             show_bytes: true,
             current_bytes: Arc::new(Mutex::new(0)),
-            total_bytes,
         }
     }
 
@@ -89,43 +86,6 @@ impl ProgressBar {
         };
         self.pb.set_message(new_msg);
     }
-
-    /// Add bytes to current progress
-    #[allow(dead_code)]
-    pub fn add_bytes(&self, increment: usize, bytes: u64) {
-        self.pb.inc(increment as u64);
-        let mut bytes_guard = self.current_bytes.lock().unwrap();
-        *bytes_guard += bytes;
-        let current_msg = self.pb.message().to_string();
-        drop(bytes_guard);
-        
-        // Update message to include MB/s, preserving user message if present
-        let elapsed = self.pb.elapsed().as_secs_f64();
-        let bytes_guard = self.current_bytes.lock().unwrap();
-        let bytes = *bytes_guard;
-        drop(bytes_guard);
-        
-        let mb_per_sec = if elapsed > 0.0 {
-            (bytes as f64 / 1_000_000.0) / elapsed
-        } else {
-            0.0
-        };
-        
-        // Extract user message (everything after " | " if present)
-        let user_msg = if let Some(pos) = current_msg.find(" | ") {
-            &current_msg[pos + 3..]
-        } else {
-            ""
-        };
-        
-        let new_msg = if user_msg.is_empty() {
-            format!("{:.1} MB/s", mb_per_sec)
-        } else {
-            format!("{:.1} MB/s | {}", mb_per_sec, user_msg)
-        };
-        self.pb.set_message(new_msg);
-    }
-
 
     pub fn set_message<S: Into<String>>(&self, msg: S) {
         let msg_str: String = msg.into();

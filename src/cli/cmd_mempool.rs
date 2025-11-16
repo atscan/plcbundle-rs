@@ -1,5 +1,6 @@
 // src/bin/commands/mempool.rs
 use super::utils;
+use super::utils::HasGlobalFlags;
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use plcbundle::format::format_number;
@@ -8,6 +9,22 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 #[derive(Args)]
+#[command(
+    about = "Manage mempool operations",
+    long_about = "The mempool stores operations waiting to be bundled. It maintains\nstrict chronological order and automatically validates consistency.",
+    alias = "mp",
+    after_help = "Examples:\n  \
+            # Show mempool status\n  \
+            plcbundle mempool\n  \
+            plcbundle mempool status\n\n  \
+            # Clear all operations\n  \
+            plcbundle mempool clear\n\n  \
+            # Export operations as JSONL\n  \
+            plcbundle mempool dump\n  \
+            plcbundle mempool dump > operations.jsonl\n\n  \
+            # Using alias\n  \
+            plcbundle mp status"
+)]
 pub struct MempoolCommand {
     #[command(subcommand)]
     pub command: Option<MempoolSubcommand>,
@@ -48,8 +65,13 @@ pub enum MempoolSubcommand {
     },
 }
 
+impl HasGlobalFlags for MempoolCommand {
+    fn verbose(&self) -> bool { self.verbose }
+    fn quiet(&self) -> bool { false }
+}
+
 pub fn run(cmd: MempoolCommand) -> Result<()> {
-    let manager = utils::create_manager(cmd.dir.clone(), cmd.verbose)?;
+    let manager = utils::create_manager_from_cmd(cmd.dir.clone(), &cmd)?;
 
     match cmd.command {
         Some(MempoolSubcommand::Status { verbose }) => {

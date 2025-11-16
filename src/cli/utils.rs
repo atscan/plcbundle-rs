@@ -6,6 +6,13 @@ use std::path::{Path, PathBuf};
 
 pub use plcbundle::format::{format_bytes, format_number};
 
+/// Trait for extracting global flags from command objects
+/// Commands that have verbose/quiet fields should implement this trait
+pub trait HasGlobalFlags {
+    fn verbose(&self) -> bool;
+    fn quiet(&self) -> bool;
+}
+
 /// Parse bundle specification string into a vector of bundle numbers
 pub fn parse_bundle_spec(spec: Option<String>, max_bundle: u32) -> Result<Vec<u32>> {
     match spec {
@@ -52,18 +59,11 @@ pub fn display_path(path: &Path) -> PathBuf {
 ///
 /// # Returns
 /// Number of worker threads to use
-pub fn get_num_workers(workers: usize, fallback: usize) -> usize {
+pub fn get_worker_threads(workers: usize, fallback: usize) -> usize {
     if workers == 0 {
-        match std::thread::available_parallelism() {
-            Ok(n) => n.get(),
-            Err(e) => {
-                eprintln!(
-                    "Warning: Failed to detect CPU count: {}, using fallback: {}",
-                    e, fallback
-                );
-                fallback
-            }
-        }
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(fallback)
     } else {
         workers
     }
@@ -74,9 +74,26 @@ pub fn is_repository_empty(manager: &BundleManager) -> bool {
     manager.get_last_bundle() == 0
 }
 
-/// Create BundleManager with optional verbose flag
-pub fn create_manager(dir: PathBuf, verbose: bool) -> Result<BundleManager> {
-    Ok(BundleManager::new(dir)?.with_verbose(verbose))
+/// Create BundleManager with verbose/quiet flags
+///
+/// This is the standard way to create a BundleManager from CLI commands.
+/// It respects the verbose and quiet flags for logging.
+pub fn create_manager(dir: PathBuf, verbose: bool, _quiet: bool) -> Result<BundleManager> {
+    let manager = BundleManager::new(dir)?;
+
+    if verbose {
+        Ok(manager.with_verbose(true))
+    } else {
+        Ok(manager)
+    }
+}
+
+/// Create BundleManager with global flags extracted from command
+///
+/// Convenience function for commands that implement `HasGlobalFlags`.
+/// The global flags (verbose, quiet) are automatically extracted from the command.
+pub fn create_manager_from_cmd<C: HasGlobalFlags>(dir: PathBuf, cmd: &C) -> Result<BundleManager> {
+    create_manager(dir, cmd.verbose(), cmd.quiet())
 }
 
 /// Get all bundle metadata from the repository
