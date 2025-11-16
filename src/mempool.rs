@@ -381,7 +381,7 @@ impl Mempool {
             } else {
                 // Fallback: Re-serialize if raw_json is not available
                 // WARNING: This may produce different content_hash than the original!
-                serde_json::to_string(op)?
+                sonic_rs::to_string(op)?
             };
             writeln!(writer, "{}", json)?;
             bytes_written += json.len() + 1;
@@ -428,7 +428,7 @@ impl Mempool {
             // This is required by the V1 specification (docs/specification.md § 4.2)
             // to ensure content_hash remains reproducible.
             // Without this, re-serialization would change the hash.
-            let mut op: Operation = serde_json::from_str(&line)?;
+            let mut op: Operation = sonic_rs::from_str(&line)?;
             op.raw_json = Some(line);
             self.operations.push(op);
         }

@@ -126,7 +126,7 @@ impl ExportIterator {
 
     fn format_operation(&self, op: &Operation) -> Result<String> {
         match self.spec.format {
-            crate::manager::ExportFormat::JsonLines => Ok(serde_json::to_string(op)?),
+            crate::manager::ExportFormat::JsonLines => Ok(sonic_rs::to_string(op)?),
             crate::manager::ExportFormat::Csv => {
                 // Simple CSV format - could be enhanced
                 Ok(format!(
@@ -137,7 +137,7 @@ impl ExportIterator {
             crate::manager::ExportFormat::Parquet => {
                 // Parquet would require additional dependencies
                 // For now, fall back to JSON
-                Ok(serde_json::to_string(op)?)
+                Ok(sonic_rs::to_string(op)?)
             }
         }
     }

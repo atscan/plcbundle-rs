@@ -235,7 +235,7 @@ async fn stream_mempool(
         }
 
         // Send operation as JSON
-        let json = match serde_json::to_string(&mempool_ops[i]) {
+        let json = match sonic_rs::to_string(&mempool_ops[i]) {
             Ok(j) => j,
             Err(_) => continue, // Skip invalid operations
         };

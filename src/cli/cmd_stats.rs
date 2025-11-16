@@ -351,7 +351,7 @@ fn collect_timeline_stats(
 
 fn print_stats(stats: &serde_json::Value, json: bool, stat_type: StatType) -> Result<()> {
     if json {
-        println!("{}", serde_json::to_string_pretty(stats)?);
+        println!("{}", sonic_rs::to_string_pretty(stats)?);
         Ok(())
     } else {
         print_human_stats(stats, stat_type)

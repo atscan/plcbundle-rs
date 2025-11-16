@@ -297,7 +297,7 @@ pub fn run(cmd: InspectCommand, dir: PathBuf) -> Result<()> {
     };
 
     if cmd.json {
-        println!("{}", serde_json::to_string_pretty(&result)?);
+        println!("{}", sonic_rs::to_string_pretty(&result)?);
     } else {
         display_human(&result, &operations, &cmd, bundle_num, &manager)?;
     }

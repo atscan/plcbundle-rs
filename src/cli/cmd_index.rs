@@ -409,7 +409,7 @@ pub fn cmd_index_stats(dir: PathBuf, json: bool) -> Result<()> {
     let stats_map = manager.get_did_index_stats();
 
     if json {
-        let json_str = serde_json::to_string_pretty(&stats_map)?;
+        let json_str = sonic_rs::to_string_pretty(&stats_map)?;
         println!("{}", json_str);
         return Ok(());
     }

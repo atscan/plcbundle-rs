@@ -38,6 +38,9 @@ pub struct HandleCommand {
 #[derive(Subcommand)]
 pub enum DIDCommands {
     /// Resolve DID to current W3C DID document
+    ///
+    /// By default, pretty-prints with colors when outputting to a terminal.
+    /// Use --raw to force raw JSON output (useful for piping).
     #[command(alias = "doc", alias = "document")]
     Resolve {
         /// DID or handle to resolve
@@ -46,6 +49,13 @@ pub enum DIDCommands {
         /// Handle resolver URL (e.g., https://quickdid.smokesignal.tools)
         #[arg(long)]
         handle_resolver: Option<String>,
+
+        /// Force raw JSON output (no pretty printing, no colors)
+        ///
+        /// By default, output is pretty-printed with colors when writing to a terminal.
+        /// Use this flag to force raw JSON output, useful for piping to other tools.
+        #[arg(long = "raw")]
+        raw: bool,
     },
 
     /// Show DID operation log
@@ -103,8 +113,9 @@ pub fn run_did(cmd: DidCommand, dir: PathBuf, global_verbose: bool) -> Result<()
         DIDCommands::Resolve {
             did,
             handle_resolver,
+            raw,
         } => {
-            cmd_did_resolve(dir, did, handle_resolver, global_verbose)?;
+            cmd_did_resolve(dir, did, handle_resolver, global_verbose, raw)?;
         }
         DIDCommands::Log { did, json } => {
             cmd_did_lookup(dir, did, global_verbose, json)?;
@@ -141,6 +152,7 @@ pub fn cmd_did_resolve(
     input: String,
     handle_resolver_url: Option<String>,
     verbose: bool,
+    raw: bool,
 ) -> Result<()> {
     use plcbundle::constants;
 
@@ -291,8 +303,29 @@ pub fn cmd_did_resolve(
     }
 
     // Output document (always to stdout)
-    let json = serde_json::to_string_pretty(&result.document)?;
-    println!("{}", json);
+    // Determine if we should pretty print:
+    // - Pretty print if stdout is a TTY (interactive terminal) and --raw is not set
+    // - Use raw output if --raw is set or if output is piped (not a TTY)
+    #[cfg(feature = "cli")]
+    let should_pretty = !raw && super::utils::is_stdout_tty();
+    #[cfg(not(feature = "cli"))]
+    let should_pretty = !raw;
+
+    if should_pretty {
+        let json = sonic_rs::to_string_pretty(&result.document)?;
+        #[cfg(feature = "cli")]
+        {
+            println!("{}", super::utils::colorize_json(&json));
+        }
+        #[cfg(not(feature = "cli"))]
+        {
+            println!("{}", json);
+        }
+    } else {
+        // Raw JSON output (compact, no colors)
+        let json = sonic_rs::to_string(&result.document)?;
+        println!("{}", json);
+    }
 
     Ok(())
 }
@@ -582,7 +615,7 @@ fn output_lookup_json(
         "mempool": mempool,
     });
 
-    println!("{}", serde_json::to_string_pretty(&output)?);
+    println!("{}", sonic_rs::to_string_pretty(&output)?);
     Ok(())
 }
 

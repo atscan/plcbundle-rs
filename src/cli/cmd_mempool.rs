@@ -242,7 +242,7 @@ fn dump(manager: &BundleManager, output: Option<PathBuf>) -> Result<()> {
 
     // Write JSONL
     for op in &ops {
-        let json = serde_json::to_string(op)?;
+        let json = sonic_rs::to_string(op)?;
         writeln!(writer, "{}", json)?;
     }
 

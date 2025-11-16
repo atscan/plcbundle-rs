@@ -34,12 +34,17 @@ pub enum OpCommands {
     ///   2. Global position: get 420000
     ///
     /// Global position = (bundleNumber × 10,000) + position
+    ///
+    /// By default, pretty-prints with colors when outputting to a terminal.
+    /// Use --raw to force raw JSON output (useful for piping).
     #[command(after_help = "Examples:\n  \
-            # By bundle + position\n  \
+            # By bundle + position (auto pretty-print in terminal)\n  \
             plcbundle op get 42 1337\n\n  \
             # By global position\n  \
             plcbundle op get 88410345\n\n  \
-            # Pipe to jq\n  \
+            # Force raw JSON output\n  \
+            plcbundle op get 42 1337 --raw\n\n  \
+            # Pipe to jq (auto-detects non-TTY, uses raw)\n  \
             plcbundle op get 42 1337 | jq .did")]
     Get {
         /// Bundle number (or global position if only one arg)
@@ -47,6 +52,13 @@ pub enum OpCommands {
 
         /// Operation position within bundle (optional if using global position)
         position: Option<usize>,
+
+        /// Force raw JSON output (no pretty printing, no colors)
+        ///
+        /// By default, output is pretty-printed with colors when writing to a terminal.
+        /// Use this flag to force raw JSON output, useful for piping to other tools.
+        #[arg(long = "raw")]
+        raw: bool,
     },
 
     /// Show operation with formatted output
@@ -92,8 +104,8 @@ pub enum OpCommands {
 
 pub fn run(cmd: OpCommand, dir: PathBuf, quiet: bool) -> Result<()> {
     match cmd.command {
-        OpCommands::Get { bundle, position } => {
-            cmd_op_get(dir, bundle, position, quiet)?;
+        OpCommands::Get { bundle, position, raw } => {
+            cmd_op_get(dir, bundle, position, raw, quiet)?;
         }
         OpCommands::Show { bundle, position } => {
             cmd_op_show(dir, bundle, position, quiet)?;
@@ -130,15 +142,36 @@ pub fn parse_op_position(bundle: u32, position: Option<usize>) -> (u32, usize) {
     }
 }
 
-pub fn cmd_op_get(dir: PathBuf, bundle: u32, position: Option<usize>, quiet: bool) -> Result<()> {
+pub fn cmd_op_get(dir: PathBuf, bundle: u32, position: Option<usize>, raw: bool, quiet: bool) -> Result<()> {
     let (bundle_num, op_index) = parse_op_position(bundle, position);
 
     let manager = super::utils::create_manager(dir, false, quiet)?;
 
+    // Determine if we should pretty print:
+    // - Pretty print if stdout is a TTY (interactive terminal) and --raw is not set
+    // - Use raw output if --raw is set or if output is piped (not a TTY)
+    #[cfg(feature = "cli")]
+    let should_pretty = !raw && super::utils::is_stdout_tty();
+    #[cfg(not(feature = "cli"))]
+    let should_pretty = false; // No TTY detection without CLI feature
+
     if quiet {
         // Just output JSON - no stats
         let json = manager.get_operation_raw(bundle_num, op_index)?;
-        println!("{}", json);
+        if should_pretty {
+            let parsed: sonic_rs::Value = sonic_rs::from_str(&json)?;
+            let pretty_json = sonic_rs::to_string_pretty(&parsed)?;
+            #[cfg(feature = "cli")]
+            {
+                println!("{}", super::utils::colorize_json(&pretty_json));
+            }
+            #[cfg(not(feature = "cli"))]
+            {
+                println!("{}", pretty_json);
+            }
+        } else {
+            println!("{}", json);
+        }
     } else {
         // Output with stats
         let result = manager.get_operation_with_stats(bundle_num, op_index)?;
@@ -154,7 +187,20 @@ pub fn cmd_op_get(dir: PathBuf, bundle: u32, position: Option<usize>, quiet: boo
             result.size_bytes
         );
 
-        println!("{}", result.raw_json);
+        if should_pretty {
+            let parsed: sonic_rs::Value = sonic_rs::from_str(&result.raw_json)?;
+            let pretty_json = sonic_rs::to_string_pretty(&parsed)?;
+            #[cfg(feature = "cli")]
+            {
+                println!("{}", super::utils::colorize_json(&pretty_json));
+            }
+            #[cfg(not(feature = "cli"))]
+            {
+                println!("{}", pretty_json);
+            }
+        } else {
+            println!("{}", result.raw_json);
+        }
     }
 
     Ok(())
@@ -242,7 +288,7 @@ pub fn cmd_op_show(dir: PathBuf, bundle: u32, position: Option<usize>, quiet: bo
     // Performance metrics (when not quiet)
     if !quiet {
         let total_time = load_duration + parse_duration;
-        let json_size = serde_json::to_string(&op).map(|s| s.len()).unwrap_or(0);
+        let json_size = sonic_rs::to_string(&op).map(|s| s.len()).unwrap_or(0);
 
         println!("Performance");
         println!("───────────");
@@ -280,7 +326,7 @@ pub fn cmd_op_show(dir: PathBuf, bundle: u32, position: Option<usize>, quiet: bo
     if !quiet {
         println!("Raw JSON");
         println!("────────");
-        let json = serde_json::to_string_pretty(&op)?;
+        let json = sonic_rs::to_string_pretty(&op)?;
         println!("{}\n", json);
     }
 

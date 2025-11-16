@@ -280,7 +280,7 @@ fn print_json_status(
     }
     status["health"] = json!(health);
 
-    println!("{}", serde_json::to_string_pretty(&status)?);
+    println!("{}", sonic_rs::to_string_pretty(&status)?);
 
     Ok(())
 }

@@ -111,7 +111,7 @@ pub fn read_skippable_frame<R: Read>(reader: &mut R) -> Result<(u32, Vec<u8>)> {
 
 /// Write metadata as skippable frame
 pub fn write_metadata_frame<W: Write>(writer: &mut W, metadata: &BundleMetadata) -> Result<usize> {
-    let json_data = serde_json::to_vec(metadata)?;
+    let json_data = sonic_rs::to_vec(metadata)?;
     write_skippable_frame(writer, SKIPPABLE_MAGIC_METADATA, &json_data)
 }
 
@@ -127,7 +127,7 @@ pub fn read_metadata_frame<R: Read>(reader: &mut R) -> Result<BundleMetadata> {
         );
     }
 
-    let metadata: BundleMetadata = serde_json::from_slice(&data)?;
+    let metadata: BundleMetadata = sonic_rs::from_slice(&data)?;
     Ok(metadata)
 }
 

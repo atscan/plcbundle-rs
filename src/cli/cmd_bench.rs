@@ -754,7 +754,7 @@ fn print_human_results(results: &[BenchmarkResult]) {
 }
 
 fn print_json_results(results: &[BenchmarkResult]) -> Result<()> {
-    let json = serde_json::to_string_pretty(results)?;
+    let json = sonic_rs::to_string_pretty(results)?;
     println!("{}", json);
     Ok(())
 }

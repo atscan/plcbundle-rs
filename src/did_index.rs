@@ -338,7 +338,7 @@ impl Manager {
 
         let mut config = if config_path.exists() {
             let data = fs::read_to_string(&config_path)?;
-            match serde_json::from_str::<Config>(&data) {
+            match sonic_rs::from_str::<Config>(&data) {
                 Ok(mut loaded_config) => {
                     // Log if config needs repair
                     if loaded_config.shards.len() != DID_SHARD_COUNT {

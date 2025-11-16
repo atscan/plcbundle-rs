@@ -130,7 +130,7 @@ pub async fn handle_mempool(State(state): State<ServerState>) -> impl IntoRespon
             // Convert operations to JSONL
             let mut jsonl = Vec::new();
             for op in ops {
-                if let Ok(json) = serde_json::to_string(&op) {
+                if let Ok(json) = sonic_rs::to_string(&op) {
                     jsonl.extend_from_slice(json.as_bytes());
                     jsonl.push(b'\n');
                 }

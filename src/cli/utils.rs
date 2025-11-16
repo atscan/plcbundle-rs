@@ -4,6 +4,36 @@ use anyhow::Result;
 use plcbundle::BundleManager;
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "cli")]
+mod colorize {
+    use colored_json::prelude::*;
+
+    /// Colorize pretty-printed JSON string with syntax highlighting
+    ///
+    /// Uses the colored_json crate which provides jq-compatible colorization.
+    /// Automatically detects if output is a terminal and applies colors accordingly.
+    pub fn colorize_json(json: &str) -> String {
+        // Use to_colored_json_auto which automatically detects terminal and applies colors
+        // This matches jq's behavior of only coloring when output is to a terminal
+        json.to_colored_json_auto()
+            .unwrap_or_else(|_| json.to_string())
+    }
+}
+
+#[cfg(feature = "cli")]
+pub use colorize::colorize_json;
+
+/// Check if stdout is connected to an interactive terminal (TTY)
+///
+/// Returns true if stdout is a TTY, false otherwise.
+/// This is useful for automatically enabling pretty printing and colors
+/// when outputting to a terminal, while using raw output when piping.
+#[cfg(feature = "cli")]
+pub fn is_stdout_tty() -> bool {
+    use is_terminal::IsTerminal;
+    std::io::stdout().is_terminal()
+}
+
 pub use plcbundle::format::{format_bytes, format_bytes_per_sec, format_number};
 
 /// Trait for extracting global flags from command objects

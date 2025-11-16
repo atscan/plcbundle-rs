@@ -162,7 +162,7 @@ impl PLCClient {
             if line.trim().is_empty() {
                 continue;
             }
-            match serde_json::from_str::<PLCOperation>(line) {
+            match sonic_rs::from_str::<PLCOperation>(line) {
                 Ok(mut op) => {
                     // CRITICAL: Store raw JSON to preserve exact byte content
                     // This is required by the V1 specification (docs/specification.md § 4.2)

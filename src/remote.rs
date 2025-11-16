@@ -17,7 +17,7 @@ pub async fn fetch_index(target: &str) -> Result<Index> {
         if path.is_file() {
             // Direct file path
             let file = std::fs::File::open(path)?;
-            Ok(serde_json::from_reader(file)?)
+            Ok(sonic_rs::from_reader(file)?)
         } else {
             // Directory path - look for index file
             Index::load(path)
@@ -54,7 +54,7 @@ async fn fetch_index_from_url(url: &str) -> Result<Index> {
     }
 
     let data = response.text().await?;
-    let index: Index = serde_json::from_str(&data).context("Failed to parse index JSON")?;
+    let index: Index = sonic_rs::from_str(&data).context("Failed to parse index JSON")?;
 
     Ok(index)
 }
@@ -101,7 +101,7 @@ pub async fn fetch_bundle_operations(base_url: &str, bundle_num: u32) -> Result<
             continue;
         }
 
-        match serde_json::from_str::<PLCOperation>(line) {
+        match sonic_rs::from_str::<PLCOperation>(line) {
             Ok(plc_op) => {
                 let op: Operation = plc_op.into();
                 operations.push(op);
@@ -133,6 +133,6 @@ pub async fn fetch_operation(base_url: &str, bundle_num: u32, position: usize) -
     if let Some(ref raw) = operations[position].raw_json {
         Ok(raw.clone())
     } else {
-        serde_json::to_string(&operations[position]).context("Failed to serialize operation")
+        sonic_rs::to_string(&operations[position]).context("Failed to serialize operation")
     }
 }

@@ -235,7 +235,7 @@ impl BundleManager {
         // Read the actual metadata
         let mut metadata_data = vec![0u8; frame_data_size as usize];
         file.read_exact(&mut metadata_data)?;
-        let metadata: bundle_format::BundleMetadata = serde_json::from_slice(&metadata_data)?;
+        let metadata: bundle_format::BundleMetadata = sonic_rs::from_slice(&metadata_data)?;
 
         if metadata.frame_offsets.is_empty() {
             anyhow::bail!("No frame offsets in metadata");
@@ -278,7 +278,7 @@ impl BundleManager {
     /// Use `get_operation_raw()` if you only need the JSON.
     pub fn get_operation(&self, bundle_num: u32, position: usize) -> Result<Operation> {
         let json = self.get_operation_raw(bundle_num, position)?;
-        let op: Operation = serde_json::from_str(&json)?;
+        let op: Operation = sonic_rs::from_str(&json)?;
         Ok(op)
     }
 
@@ -2834,7 +2834,7 @@ impl BundleManager {
             // This is required by the V1 specification (docs/specification.md § 4.2)
             // to ensure content_hash remains reproducible during migration.
             // Without this, re-serialization would change the hash.
-            let mut op: Operation = serde_json::from_str(&line)?;
+            let mut op: Operation = sonic_rs::from_str(&line)?;
             op.raw_json = Some(line);
             operations.push(op);
         }

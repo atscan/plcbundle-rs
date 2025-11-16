@@ -63,7 +63,7 @@ impl Index {
         let index_path = directory.as_ref().join("plc_bundles.json");
         let temp_path = index_path.with_extension("json.tmp");
 
-        let json = serde_json::to_string_pretty(self)
+        let json = sonic_rs::to_string_pretty(self)
             .context("Failed to serialize index")?;
 
         std::fs::write(&temp_path, json)
