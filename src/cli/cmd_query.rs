@@ -34,9 +34,9 @@ pub struct QueryCommand {
     #[arg(long, default_value = "2000")]
     pub batch_size: usize,
 
-    /// Output format
-    #[arg(short = 'f', long, default_value = "jsonl")]
-    pub format: OutputFormat,
+    /// Output as pretty-printed JSON (default: JSONL, one JSON object per line)
+    #[arg(long)]
+    pub json: bool,
 
     /// Output file (default: stdout)
     #[arg(short, long)]
@@ -57,18 +57,6 @@ pub enum QueryModeArg {
     Jmespath,
 }
 
-#[derive(Debug, Clone, ValueEnum)]
-pub enum OutputFormat {
-    /// JSON Lines (one per line)
-    Jsonl,
-    /// Pretty JSON
-    Json,
-    /// CSV
-    Csv,
-    /// Plain text (values only)
-    Plain,
-}
-
 pub struct StdoutHandler {
     lock: Mutex<()>,
     stats_only: bool,
@@ -80,7 +68,6 @@ pub fn run(cmd: QueryCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resul
     let threads = cmd.threads;
     let mode = cmd.mode;
     let batch_size = cmd.batch_size;
-    let _format = cmd.format;
     let _output = cmd.output;
     let stats_only = cmd.stats_only;
     let num_threads = if threads == 0 {

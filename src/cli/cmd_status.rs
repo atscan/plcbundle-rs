@@ -1,17 +1,9 @@
 use anyhow::Result;
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use plcbundle::*;
 use std::path::PathBuf;
 
 use super::utils;
-
-#[derive(Debug, Clone, ValueEnum)]
-pub enum InfoFormat {
-    /// Human-readable output
-    Human,
-    /// JSON output
-    Json,
-}
 
 #[derive(Parser)]
 #[command(
@@ -24,7 +16,7 @@ pub enum InfoFormat {
             # Show detailed status with recent bundles\n  \
             plcbundle status --detailed\n\n  \
             # JSON output for scripting\n  \
-            plcbundle status --format json\n\n  \
+            plcbundle status --json\n\n  \
             # Using legacy 'info' alias\n  \
             plcbundle info"
 )]
@@ -33,18 +25,19 @@ pub struct StatusCommand {
     #[arg(short, long)]
     pub detailed: bool,
 
-    /// Output format
-    #[arg(short = 'f', long, default_value = "human")]
-    pub format: InfoFormat,
+    /// Output as JSON
+    #[arg(long)]
+    pub json: bool,
 }
 
 pub fn run(cmd: StatusCommand, dir: PathBuf) -> Result<()> {
     let manager = utils::create_manager(dir.clone(), false, false)?;
     let index = manager.get_index();
 
-    match cmd.format {
-        InfoFormat::Human => print_human_status(&manager, &index, &dir, cmd.detailed)?,
-        InfoFormat::Json => print_json_status(&manager, &index, &dir)?,
+    if cmd.json {
+        print_json_status(&manager, &index, &dir)?;
+    } else {
+        print_human_status(&manager, &index, &dir, cmd.detailed)?;
     }
 
     Ok(())

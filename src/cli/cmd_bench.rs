@@ -20,7 +20,7 @@ use std::time::Instant;
             # Run on specific bundle\n  \
             plcbundle bench --bundles 100\n\n  \
             # JSON output for analysis\n  \
-            plcbundle bench --format json > benchmark.json"
+            plcbundle bench --json > benchmark.json"
 )]
 pub struct BenchCommand {
     /// Number of iterations for each benchmark
@@ -63,30 +63,13 @@ pub struct BenchCommand {
     #[arg(long, default_value = "10")]
     pub warmup: usize,
 
-    /// Output format (human or json)
-    #[arg(long, default_value = "human")]
-    pub format: OutputFormat,
-
     /// Show interactive progress during benchmarks
     #[arg(long)]
     pub interactive: bool,
-}
 
-#[derive(Clone, Debug)]
-pub enum OutputFormat {
-    Human,
-    Json,
-}
-
-impl std::str::FromStr for OutputFormat {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "human" => Ok(OutputFormat::Human),
-            "json" => Ok(OutputFormat::Json),
-            _ => Err(format!("Invalid format: {}", s)),
-        }
-    }
+    /// Output as JSON
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -208,9 +191,10 @@ pub fn run(cmd: BenchCommand, dir: PathBuf, global_verbose: bool) -> Result<()> 
     }
 
     // Output results
-    match cmd.format {
-        OutputFormat::Human => print_human_results(&results),
-        OutputFormat::Json => print_json_results(&results)?,
+    if cmd.json {
+        print_json_results(&results)?;
+    } else {
+        print_human_results(&results);
     }
 
     Ok(())

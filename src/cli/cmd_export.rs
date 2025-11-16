@@ -22,9 +22,9 @@ pub struct ExportCommand {
     #[arg(long)]
     pub all: bool,
 
-    /// Output format
-    #[arg(short = 'f', long, default_value = "jsonl")]
-    pub format: ExportFormat,
+    /// Output as pretty-printed JSON (default: JSONL, one JSON object per line)
+    #[arg(long)]
+    pub json: bool,
 
     /// Output file (default: stdout)
     #[arg(short, long)]
@@ -55,16 +55,8 @@ pub struct ExportCommand {
     pub compress: bool,
 }
 
-#[derive(Debug, Clone, ValueEnum)]
-pub enum ExportFormat {
-    Jsonl,
-    Json,
-    Csv,
-    Parquet,
-}
 
 pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Result<()> {
-    let format = cmd.format;
     let output = cmd.output;
     let count = cmd.count;
     let after = cmd.after;
@@ -178,14 +170,11 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
         };
         let reader = BufReader::with_capacity(1024 * 1024, decoder);
 
-        // Fast path: no filters and Jsonl format - just pass through lines
+        // Fast path: no filters and JSONL format (default) - just pass through lines
         let needs_parsing = after.is_some()
             || did.is_some()
             || op_type.is_some()
-            || matches!(
-                format,
-                ExportFormat::Json | ExportFormat::Csv | ExportFormat::Parquet
-            );
+            || cmd.json;
 
         if !needs_parsing {
             // Fast path: no parsing needed, just copy lines
@@ -303,36 +292,12 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
                 }
 
                 // Format operation
-                let formatted = match format {
-                    ExportFormat::Jsonl => {
-                        // Already have the JSON string, use it directly
-                        line
-                    }
-                    ExportFormat::Json => {
-                        // Pretty print using sonic-rs
-                        sonic_rs::to_string_pretty(&data)?
-                    }
-                    ExportFormat::Csv => {
-                        let did = data.get("did").and_then(|v| v.as_str()).unwrap_or("");
-                        let op = data
-                            .get("operation")
-                            .map(|v| sonic_rs::to_string(v).unwrap_or_default())
-                            .unwrap_or_default();
-                        let created_at = data
-                            .get("createdAt")
-                            .or_else(|| data.get("created_at"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        let nullified = data
-                            .get("nullified")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false);
-                        format!("{},{},{},{}", did, op, created_at, nullified)
-                    }
-                    ExportFormat::Parquet => {
-                        // Fall back to JSON for now
-                        sonic_rs::to_string(&data)?
-                    }
+                let formatted = if cmd.json {
+                    // Pretty print using sonic-rs
+                    sonic_rs::to_string_pretty(&data)?
+                } else {
+                    // Already have the JSON string, use it directly (JSONL format)
+                    line
                 };
 
                 output_buffer.push_str(&formatted);
