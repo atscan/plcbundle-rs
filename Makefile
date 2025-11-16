@@ -1,4 +1,4 @@
-.PHONY: build install release clean test run help version patch minor major
+.PHONY: build install release clean test run help version patch minor major alpha beta rc
 
 # Default target
 help:
@@ -63,3 +63,13 @@ release-dry-run: ## Dry run of release (no changes)
 
 release-preview: ## Preview what would change in a release
 	cargo release patch --no-publish --no-push --no-tag --allow-dirty
+
+# Pre-release version bumping with cargo-release
+alpha: ## Bump alpha version (0.9.0-alpha.0 -> 0.9.0-alpha.1)
+	cargo release alpha --execute
+
+beta: ## Bump beta version (0.9.0-beta.0 -> 0.9.0-beta.1)
+	cargo release beta --execute
+
+rc: ## Bump release candidate version (0.9.0-rc.0 -> 0.9.0-rc.1)
+	cargo release rc --execute
