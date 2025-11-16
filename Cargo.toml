@@ -2,10 +2,10 @@
 name = "plcbundle"
 version = "0.9.0-alpha.0"
 edition = "2024"
-authors = ["Your Name <you@example.com>"]
-description = "High-performance PLC bundle query library"
+authors = ["Tree <tree@tree.fail>"]
+description = "DID PLC Bundle Management Tool"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/yourusername/plcbundle-rs"
+repository = "https://tangled.org/atscan.net/plcbundle-rs"
 
 [[bin]]
 name = "plcbundle-rs"
