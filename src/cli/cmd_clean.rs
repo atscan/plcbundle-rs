@@ -9,14 +9,18 @@ use std::path::PathBuf;
 #[command(
     about = "Remove all temporary files from the repository",
     alias = "cleanup",
-    long_about = "Cleans up all temporary files (.tmp) from the repository.\n\n\
-                  This includes:\n\
-                  - Temporary index files (plc_bundles.json.tmp)\n\
-                  - Temporary DID index files (.plcbundle/config.json.tmp)\n\
-                  - Temporary shard files (.plcbundle/shards/*.tmp)\n\n\
-                  Temporary files are created during atomic write operations and\n\
-                  should normally be cleaned up automatically. This command is useful\n\
-                  for cleaning up leftover temporary files from interrupted operations.",
+    long_about = "Remove temporary files created during atomic write operations. These files
+have .tmp extensions and are used to ensure data integrity when writing index
+files, DID index shards, and other critical repository data.
+
+Temporary files should normally be cleaned up automatically when operations
+complete successfully. However, if a process is interrupted (e.g., by Ctrl+C
+or a crash), temporary files may remain on disk. This command safely removes
+all such files after showing you what will be deleted.
+
+This is a safe operation that only affects temporary files. Your actual bundle
+data and index files are never touched. Use this command periodically or after
+interrupted operations to keep your repository clean.",
     after_help = "Examples:\n  \
             # Clean all temporary files (with confirmation)\n  \
             {bin} clean\n\n  \

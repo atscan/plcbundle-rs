@@ -7,13 +7,21 @@ use std::sync::Arc;
 #[derive(Args)]
 #[command(
     about = "Clone a remote PLC bundle repository",
-    long_about = "Download all bundles from a remote plcbundle instance in parallel.\n\n\
-                  Similar to 'git clone' - creates a complete copy of the remote repository.\n\n\
-                  This command downloads bundles in parallel for maximum speed and\n\
-                  reconstructs the plc_bundles.json index file during the process.\n\n\
-                  The command should be run outside the repository. It takes:\n  \
-                    • Source URL: The remote plcbundle instance URL\n  \
-                    • Target directory: Where to create the new repository",
+    long_about = "Download all bundles from a remote plcbundle HTTP server to create a complete
+local copy of the repository. Similar to 'git clone', this command creates a new
+repository directory and populates it with all bundles from the remote source.
+
+Bundles are downloaded in parallel for maximum speed, and the plc_bundles.json index
+file is automatically reconstructed during the process. The command checks available
+disk space before starting and warns if there's insufficient space.
+
+Use --resume to continue a partial clone that was interrupted, skipping bundles that
+already exist. The command validates bundle integrity during download to ensure data
+correctness.
+
+This is the fastest way to create a local copy of an existing repository, whether
+for backup, local development, or creating a mirror. After cloning, the repository
+is immediately ready to use with all standard commands.",
     after_help = "Examples:\n  \
             # Clone from remote instance\n  \
             {bin} clone https://plc.example.com /path/to/local\n\n  \

@@ -11,7 +11,22 @@ use std::path::PathBuf;
 #[derive(Args)]
 #[command(
     about = "Manage mempool operations",
-    long_about = "The mempool stores operations waiting to be bundled. It maintains\nstrict chronological order and automatically validates consistency.",
+    long_about = "Manage the mempool, which stores operations waiting to be bundled into the next
+bundle file. The mempool maintains strict chronological order and automatically
+validates operation consistency to ensure data integrity.
+
+Operations accumulate in the mempool until there are enough (10,000) to create a
+new bundle. The 'status' subcommand shows how many operations are currently in the
+mempool and whether a new bundle can be created. The 'dump' subcommand exports all
+mempool operations as JSONL for backup or analysis.
+
+The 'clear' subcommand removes all operations from the mempool, useful for resetting
+the state or removing invalid operations. This is typically done automatically when
+a bundle is created, but can be done manually if needed.
+
+Mempool operations are stored in a temporary file that gets converted to a bundle
+file when the threshold is reached. The mempool ensures operations are processed
+in the correct order and maintains consistency with the bundle chain.",
     alias = "mp",
     after_help = "Examples:\n  \
             # Show mempool status\n  \

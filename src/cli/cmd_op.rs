@@ -7,7 +7,22 @@ use std::time::Instant;
 #[derive(Args)]
 #[command(
     about = "Operation queries and inspection",
-    long_about = "Direct access to individual operations within bundles using either:\n  • Bundle number + position (e.g., 42 1337)\n  • Global position (e.g., 420000)\n\nGlobal position format: (bundleNumber × 10,000) + position\nExample: 88410345 = bundle 8841, position 345",
+    long_about = "Access individual operations within bundles using flexible addressing schemes.
+You can reference operations by bundle number and position (e.g., '42 1337' for
+bundle 42, position 1337), or by global position (e.g., '420000' which represents
+bundle 42, position 0).
+
+Global positions are calculated as (bundleNumber × 10,000) + position, making it
+easy to reference operations across the entire repository with a single number.
+For example, 88410345 means bundle 8841, position 345.
+
+The 'get' subcommand retrieves operations as JSON, with automatic pretty-printing
+and syntax highlighting when outputting to a terminal. The 'show' subcommand
+displays operations in a human-readable format with detailed metadata. The 'find'
+subcommand searches across all bundles for an operation with a specific CID.
+
+All subcommands support JMESPath queries to extract specific fields from operations,
+making it easy to script and process operation data.",
     alias = "operation",
     alias = "record",
     after_help = "Examples:\n  \

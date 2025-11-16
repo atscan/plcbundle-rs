@@ -8,7 +8,23 @@ use super::utils;
 #[derive(Parser)]
 #[command(
     about = "Show comprehensive repository status",
-    long_about = "Displays an overview of the repository including bundle statistics,\nDID index status, mempool state, and health recommendations.",
+    long_about = "Display a comprehensive overview of the repository's current state, including
+bundle statistics, DID index status, mempool state, and actionable health
+recommendations.
+
+This command provides a quick way to understand your repository's health and
+configuration. It shows total bundles, operations, unique DIDs, storage usage,
+compression ratios, and the status of optional components like the DID index
+and mempool.
+
+Use --detailed to see additional information like recent bundles and more
+comprehensive statistics. Use --json for machine-readable output suitable for
+monitoring systems or automated health checks.
+
+The command automatically identifies potential issues (like missing DID index)
+and suggests next steps to improve repository functionality. This makes it an
+excellent starting point for understanding repository state and planning
+maintenance tasks.",
     alias = "info",
     after_help = "Examples:\n  \
             # Show repository status\n  \

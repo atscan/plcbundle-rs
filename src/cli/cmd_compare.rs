@@ -12,18 +12,24 @@ use super::utils::colors;
 #[command(
     alias = "diff",
     about = "Compare repositories",
-    long_about = "Compare local repository against remote or local target\n\n\
-                  Compares bundle indexes to find differences such as:\n  \
-                    • Missing bundles (in target but not local)\n  \
-                    • Extra bundles (in local but not target)\n  \
-                    • Hash mismatches (different content)\n  \
-                    • Content mismatches (different data)\n\n\
-                  For deeper analysis of specific bundles, use --bundles flag to see\n\
-                  detailed differences in metadata and operations.\n\n\
-                  The target can be:\n  \
-                    • Remote HTTP URL (e.g., https://plc.example.com)\n  \
-                    • Remote index URL (e.g., https://plc.example.com/index.json)\n  \
-                    • Local file path (e.g., /path/to/plc_bundles.json)",
+    long_about = "Compare your local repository against a remote instance or another local
+repository to identify differences, missing bundles, or integrity issues.
+
+Performs a comprehensive comparison of bundle indexes, detecting missing bundles
+(in target but not local), extra bundles (in local but not target), hash
+mismatches (indicating different content), and content hash differences.
+
+The command automatically detects when repositories are from different origins
+(PLC directory sources) and warns you that differences are expected in such cases.
+When origins match, hash mismatches indicate potential data corruption or
+synchronization issues that require investigation.
+
+Use --bundles with a specific bundle number for deep analysis that compares
+metadata and operations in detail. Use --show-operations to see operation-level
+differences and --sample to control how many operations are displayed.
+
+The target can be a remote HTTP URL (e.g., https://plc.example.com), a remote
+index URL, or a local file path to another repository's index file.",
     after_help = "Examples:\n  \
         # High-level comparison\n  \
         {bin} compare https://plc.example.com\n\n  \

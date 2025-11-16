@@ -9,6 +9,25 @@ use std::time::Instant;
 #[derive(Args)]
 #[command(
     about = "Verify bundle integrity and chain",
+    long_about = "Validates the cryptographic integrity of bundles and ensures the chain
+of bundles is properly linked. This is essential for verifying that your
+repository hasn't been corrupted or tampered with.
+
+Verification operates in three modes:
+  • fast   - Only check metadata frame (fastest, least thorough)
+  • normal - Verify compressed hash (default, balanced)
+  • full   - Verify compressed + content hash (slowest, most thorough)
+
+Fast mode is useful for quick checks, while full mode provides complete
+assurance that bundle contents match their cryptographic commitments.
+
+When verifying the entire chain, the command performs a two-pass validation:
+first verifying all bundle hashes in parallel, then sequentially checking
+that each bundle correctly references its parent's hash. This ensures both
+individual bundle integrity and chain continuity.
+
+Use --bundles to verify specific bundles or ranges, or omit it to verify
+the entire repository chain.",
     after_help = "Examples:\n  \
             # Verify entire chain\n  \
             {bin} verify\n  \
@@ -19,8 +38,10 @@ use std::time::Instant;
             {bin} verify --bundles 1-100\n\n  \
             # Verify multiple ranges\n  \
             {bin} verify --bundles 1-10,20-30\n\n  \
-            # Verbose output\n  \
-            {bin} verify --chain -v\n\n  \
+            # Fast verification (metadata only)\n  \
+            {bin} verify --fast\n\n  \
+            # Full verification (content hash)\n  \
+            {bin} verify --full\n\n  \
             # Parallel verification (faster for ranges)\n  \
             {bin} verify --bundles 1-1000 -j 8"
 )]

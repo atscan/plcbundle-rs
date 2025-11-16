@@ -9,7 +9,24 @@ use std::time::Instant;
 #[derive(Args)]
 #[command(
     about = "DID index management",
-    long_about = "Manage the DID position index which maps DIDs to their bundle locations.\nThis index enables fast O(1) DID lookups and is required for DID\nresolution and query operations.",
+    long_about = "Manage the DID position index, a critical data structure that maps DIDs to
+their bundle locations. This index enables fast O(1) DID lookups and is required
+for efficient DID resolution, operation history queries, and many other DID-based
+operations.
+
+The index is organized into 256 shards based on DID identifier hashes, allowing
+for efficient distribution and parallel access. The 'build' subcommand creates
+the index from scratch by scanning all bundles. The 'repair' subcommand intelligently
+updates the index when new bundles are added or when the index becomes corrupted.
+
+Use 'stats' to see index statistics including total DIDs, shard distribution,
+and storage usage. Use 'verify' to validate index integrity by rebuilding it
+in memory and comparing with the existing index. Use 'compact' to merge delta
+segments and optimize index performance.
+
+Regular index maintenance ensures optimal performance for DID lookups. The index
+is automatically updated during sync operations, but manual repair or compaction
+may be needed for optimal performance.",
     after_help = "Examples:\n  \
             # Build DID position index\n  \
             {bin} index build\n\n  \
@@ -18,7 +35,9 @@ use std::time::Instant;
             # Show DID index statistics\n  \
             {bin} index stats\n\n  \
             # Verify DID index integrity\n  \
-            {bin} index verify"
+            {bin} index verify\n\n  \
+            # Compact index segments\n  \
+            {bin} index compact"
 )]
 pub struct IndexCommand {
     #[command(subcommand)]

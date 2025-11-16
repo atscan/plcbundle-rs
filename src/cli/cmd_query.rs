@@ -12,6 +12,24 @@ use super::utils;
 #[derive(Args)]
 #[command(
     about = "Query bundles with JMESPath or simple path",
+    long_about = "Extract and filter operations from bundles using powerful query expressions.
+
+The command supports three query modes:
+  • auto     - Automatically detect based on query syntax (default)
+  • simple   - Fast path extraction (e.g., 'did', 'operation.type')
+  • jmespath - Full JMESPath expressions for complex filtering and transformation
+
+Simple path mode is optimized for fast single-field access, while JMESPath mode
+enables complex queries with filtering, projection, and transformation. The
+command automatically detects which mode to use based on the query syntax, or you
+can explicitly specify with --mode.
+
+Queries are executed in parallel across multiple bundles for maximum
+performance. Results are streamed as JSONL (one JSON object per line) by
+default, making it easy to pipe to other tools like jq or process in scripts.
+
+Use --json for pretty-printed JSON output, or --stats-only to see query
+statistics without outputting results.",
     alias = "q"
 )]
 pub struct QueryCommand {

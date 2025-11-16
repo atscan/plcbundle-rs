@@ -6,6 +6,21 @@ use std::path::PathBuf;
 #[derive(Args)]
 #[command(
     about = "List bundles (machine-readable)",
+    long_about = "List bundle metadata in a structured, machine-readable format designed for
+scripting and data processing. Output is tab-separated by default, making it
+easy to parse with standard Unix tools like awk, cut, or process in scripts.
+
+You can customize the output format using --format to select which fields
+to display, and --separator to change the delimiter (useful for CSV export).
+The --human-readable flag automatically converts size fields to human-friendly
+units like KB, MB, or GB.
+
+By default shows the most recent bundles first (like a log), but use --reverse
+to show oldest first. Use --last to limit output to the most recent N bundles.
+
+This command is optimized for programmatic use: output is consistent, fields
+are well-defined, and the format is designed to be easily parsed by both
+humans and machines.",
     after_help = "Examples:\n  \
             # List all bundles\n  \
             {bin} ls\n\n  \

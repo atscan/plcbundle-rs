@@ -14,7 +14,23 @@ use std::time::Duration;
 #[derive(Args)]
 #[command(
     about = "Fetch new bundles from PLC directory",
-    long_about = "Download new operations from the PLC directory and create bundles.\nSimilar to 'git fetch' - updates your local repository with new data.",
+    long_about = "Download new operations from the PLC directory and create bundles in your
+local repository. Similar to 'git fetch', this command updates your repository
+with new data from the remote source without modifying existing bundles.
+
+The command fetches operations starting from where your repository left off,
+creates new bundles when 10,000 operations accumulate, and updates the index.
+Use --max-bundles to limit how many bundles are fetched in a single run, or
+use --continuous to run as a daemon that periodically checks for and fetches
+new bundles.
+
+In continuous mode, the command runs indefinitely, checking for new bundles
+at the specified interval (default 60 seconds). This is useful for keeping
+a repository up-to-date automatically. For one-time syncs, omit --continuous.
+
+This is the primary way to populate and update your repository with data from
+the PLC directory. The command handles rate limiting, error recovery, and
+maintains chain integrity throughout the sync process.",
     alias = "fetch",
     after_help = "Examples:\n  \
             # Fetch new bundles once\n  \

@@ -13,15 +13,22 @@ use std::path::PathBuf;
 #[derive(Args)]
 #[command(
     about = "Deep analysis of bundle contents",
-    long_about = "Performs comprehensive analysis of a bundle including:\n  \
-                  • Embedded metadata (from skippable frame)\n  \
-                  • Operation type breakdown\n  \
-                  • DID activity patterns\n  \
-                  • Handle and domain statistics\n  \
-                  • Service endpoint analysis\n  \
-                  • Temporal distribution\n  \
-                  • Size analysis\n\n\
-                  Can inspect either by bundle number (from repository) or direct file path.",
+    long_about = "Perform comprehensive analysis of a bundle's contents, structure, and patterns.
+This command provides detailed insights into what operations are stored, how DIDs
+are distributed, what handles and domains are present, and how operations are
+distributed over time.
+
+The analysis includes embedded metadata extraction (from the zstd skippable frame),
+operation type distribution, DID activity patterns (which DIDs appear most frequently),
+handle and domain statistics, service endpoint analysis, temporal distribution
+(peak hours, time spans), and detailed size analysis.
+
+You can inspect bundles either by bundle number (from the repository index) or by
+direct file path. Use --skip-patterns to speed up analysis by skipping handle and
+service pattern extraction. Use --samples to see example operations from the bundle.
+
+This command is invaluable for understanding bundle composition, identifying data
+quality issues, and analyzing patterns in the PLC directory data.",
     after_help = "Examples:\n  \
             # Inspect from repository\n  \
             {bin} inspect 42\n\n  \

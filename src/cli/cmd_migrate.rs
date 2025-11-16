@@ -11,22 +11,23 @@ use std::time::Instant;
 #[derive(Args)]
 #[command(
     about = "Migrate bundles to new zstd frame format",
-    long_about = "Migrate old single-frame zstd bundles to new multi-frame format
+    long_about = "Convert bundles from the legacy single-frame zstd format to the modern
+multi-frame format with embedded frame offsets. This migration enables faster
+random access to individual operations, reduces memory usage when loading specific
+positions, and improves performance for DID lookups and operation queries.
 
-This command converts bundles from the legacy single-frame zstd format
-to the new multi-frame format with frame offsets. This enables:
-  • Faster random access to individual operations
-  • Reduced memory usage when loading specific positions
-  • Better performance for DID lookups
+The migration process scans for bundles missing frame metadata (indicating legacy
+format), re-compresses them using the multi-frame format (100 operations per frame),
+generates a frame offset index in the metadata, and preserves all cryptographic
+hashes and metadata. Content integrity is verified throughout the process.
 
-The migration:
-  1. Scans for bundles missing frame metadata (legacy format)
-  2. Re-compresses them using multi-frame format (100 ops/frame)
-  3. Generates frame offset index in metadata
-  4. Preserves all hashes and metadata
-  5. Verifies content integrity
+Original bundle files are replaced atomically to ensure data safety. The command
+automatically detects which bundles need migration and processes them in parallel
+for efficiency. Use --dry-run to preview what would be migrated without making
+changes.
 
-Original files are replaced atomically. Use --dry-run to preview.",
+After migration, bundles benefit from improved random access performance and lower
+memory footprint when accessing individual operations rather than loading entire bundles.",
     after_help = "Examples:\n  \
         # Preview migration (recommended first)\n  \
         {bin} migrate --dry-run\n\n  \

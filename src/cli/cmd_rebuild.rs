@@ -10,20 +10,21 @@ use std::time::Instant;
 #[derive(Args)]
 #[command(
     about = "Rebuild plc_bundles.json from existing bundle files",
-    long_about = "Reconstruct the bundle index (plc_bundles.json) by scanning all bundle files
+    long_about = "Reconstruct the bundle index (plc_bundles.json) by scanning existing bundle
+files and extracting metadata from their embedded metadata frames. This is essential
+when the index file has been lost, corrupted, or needs to be regenerated.
 
-This command is useful when the index file has been lost or corrupted.
-It scans all .jsonl.zst files in the directory and rebuilds the index
-by extracting metadata from each bundle file's embedded metadata frame.
+The command scans all .jsonl.zst files in the directory, reads the metadata frame
+from each bundle (stored in a zstd skippable frame), and reconstructs the complete
+index with proper chain hashes and bundle relationships. The index is written
+atomically to ensure data integrity.
 
-The command:
-  1. Scans directory for bundle files (*.jsonl.zst)
-  2. Extracts metadata from each bundle's skippable frame
-  3. Reconstructs the full index with proper chain hashes
-  4. Writes plc_bundles.json atomically
+This only works with bundles that have embedded metadata frames (the modern format).
+Legacy bundles without metadata frames cannot be reconstructed this way. Use
+--dry-run to preview what would be rebuilt without actually writing the index.
 
-Note: This only works with bundles that have embedded metadata (modern format).
-Legacy bundles without metadata frames cannot be reconstructed this way.",
+After rebuilding, verify the repository with 'verify' to ensure chain integrity
+is correct.",
     after_help = "Examples:\n  \
         # Rebuild index from current directory\n  \
         {bin} rebuild\n\n  \

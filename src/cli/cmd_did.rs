@@ -7,14 +7,31 @@ use std::path::PathBuf;
 #[derive(Args)]
 #[command(
     about = "DID operations and queries",
-    long_about = "Query and analyze DIDs in the bundle repository. All commands\nrequire a DID index to be built for optimal performance.",
+    long_about = "Query and analyze DIDs stored in the bundle repository. These commands provide
+comprehensive DID functionality including resolution to W3C DID documents, operation
+history lookup, and cryptographic validation of DID operation chains.
+
+All commands require a DID index to be built for optimal performance. The index
+enables fast O(1) lookups by mapping DIDs to their bundle locations. Use 'index build'
+to create the index if it doesn't exist.
+
+The 'resolve' subcommand converts a DID (or handle) into a complete W3C DID document
+by following the operation chain and applying all operations. The 'log' subcommand
+shows all operations for a DID in chronological order. The 'audit' subcommand performs
+cryptographic validation of the entire operation chain, detecting forks and verifying
+signatures.
+
+These commands are essential for DID-based applications, identity verification,
+and understanding how DIDs evolve over time through their operation history.",
     after_help = "Examples:\n  \
             # Resolve DID to current document\n  \
             {bin} did resolve did:plc:524tuhdhh3m7li5gycdn6boe\n\n  \
             # Show DID operation log\n  \
             {bin} did log did:plc:524tuhdhh3m7li5gycdn6boe\n\n  \
             # Show complete audit log\n  \
-            {bin} did history did:plc:524tuhdhh3m7li5gycdn6boe"
+            {bin} did history did:plc:524tuhdhh3m7li5gycdn6boe\n\n  \
+            # Validate DID chain\n  \
+            {bin} did validate did:plc:524tuhdhh3m7li5gycdn6boe"
 )]
 pub struct DidCommand {
     #[command(subcommand)]
@@ -24,7 +41,17 @@ pub struct DidCommand {
 #[derive(Args)]
 #[command(
     about = "Resolve handle to DID",
-    long_about = "Resolves an AT Protocol handle to its DID using the handle resolver."
+    long_about = "Resolve an AT Protocol handle (e.g., example.bsky.social) to its
+corresponding DID using a handle resolver service.
+
+Handles are human-readable identifiers that map to DIDs, which are the
+cryptographic identifiers used in the PLC directory. This command queries
+the handle resolver to perform the lookup and displays the resulting DID.
+
+By default uses the quickdid.smokesignal.tools resolver, but you can specify
+a custom resolver URL with --handle-resolver if needed. This is useful for
+testing with different resolver implementations or when the default resolver
+is unavailable."
 )]
 pub struct HandleCommand {
     /// Handle to resolve (e.g., tree.fail)

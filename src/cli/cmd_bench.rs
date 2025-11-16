@@ -10,6 +10,22 @@ use std::time::Instant;
 #[derive(Args)]
 #[command(
     about = "Benchmark bundle operations",
+    long_about = "Measure performance of various bundle operations to understand system
+behavior and identify bottlenecks. Benchmarks cover bundle loading,
+decompression, operation reads, DID index lookups, DID resolution, and
+sequential access patterns.
+
+Each benchmark runs multiple iterations with warmup periods to ensure
+accurate measurements. Results include statistical summaries with percentiles
+(p50, p95, p99), standard deviation, and throughput metrics where applicable.
+
+Use --interactive to see progress bars during benchmarking. Use --json to
+output results in machine-readable format for automated analysis or
+tracking performance over time. The --warmup flag controls how many
+iterations are used to warm up caches before measurement begins.
+
+This tool is essential for performance regression testing, capacity planning,
+and understanding how repository size and access patterns affect performance.",
     after_help = "Examples:\n  \
             # Run all benchmarks with default iterations\n  \
             {bin} bench\n\n  \

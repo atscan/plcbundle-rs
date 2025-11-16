@@ -8,7 +8,26 @@ use std::path::PathBuf;
 use super::utils;
 
 #[derive(Args)]
-#[command(about = "Display statistics about bundles")]
+#[command(
+    about = "Display statistics about bundles",
+    long_about = "Generate comprehensive statistics about bundles, operations, DIDs, and
+timeline patterns. Useful for understanding repository composition, analyzing
+growth trends, and identifying patterns in the data.
+
+Supports multiple statistic types:
+  • summary    - Overall repository metrics (default)
+  • operations - Operation type distribution
+  • dids       - DID activity patterns
+  • timeline   - Temporal distribution and growth rates
+
+Use --stat-type to select which analysis to perform. Statistics can be
+computed for specific bundle ranges using --bundles, or for the entire
+repository if omitted. Use --json for machine-readable output suitable for
+further processing or visualization.
+
+This command provides insights into repository health, data distribution,
+and usage patterns that help with capacity planning and optimization."
+)]
 pub struct StatsCommand {
     /// Bundle range
     #[arg(short, long)]

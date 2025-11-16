@@ -22,20 +22,22 @@ use tokio::task::{JoinHandle, JoinSet};
 #[derive(Args)]
 #[command(
     about = "Start HTTP server",
-    long_about = "Start HTTP server to serve bundles over HTTP
+    long_about = "Start an HTTP server to expose bundle data and repository functionality over
+HTTP. The server provides RESTful endpoints for accessing bundles, operations,
+DID documents, and repository metadata.
 
-Serves bundle data over HTTP with optional live sync mode that continuously
-fetches new bundles from PLC directory.
+In standard mode, the server operates as a read-only archive, serving data from
+existing bundles. Enable --sync to run in daemon mode, where the server continuously
+fetches new bundles from the PLC directory in the background while serving requests.
 
-The server provides:
-  - Bundle index (JSON)
-  - Individual bundle data (compressed or JSONL)
-  - WebSocket streaming (optional)
-  - DID resolution (optional)
-  - Live mempool (in sync mode)
+Optional features include WebSocket streaming (--websocket) for real-time updates
+and DID resolution endpoints (--resolver) that enable W3C DID document resolution
+and handle-to-DID lookups. When resolver is enabled, the server automatically builds
+or updates the DID index on startup if needed.
 
-Sync mode (--sync) runs as a daemon, continuously fetching new bundles.
-For one-time sync, use '{bin} sync' command instead."
+This is the primary way to expose your repository to other systems, applications,
+or users over the network. The server is designed for production use with proper
+error handling, graceful shutdown, and resource management."
 )]
 pub struct ServerCommand {
     /// HTTP server port

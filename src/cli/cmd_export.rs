@@ -49,7 +49,24 @@ fn format_bundle_range(bundles: &[u32]) -> String {
 }
 
 #[derive(Args)]
-#[command(about = "Export operations to different formats")]
+#[command(
+    about = "Export operations to different formats",
+    long_about = "Export operations from bundles as raw JSONL (JSON Lines) format, suitable
+for processing with standard Unix tools or importing into other systems.
+
+This command streams operations directly from compressed bundles without
+loading them fully into memory, making it efficient for large exports.
+Operations are written one per line in JSON format, preserving all original
+operation data including DID, CID, timestamps, and operation payloads.
+
+Use --bundles to export specific bundles or ranges, or --all to export
+everything. The --count flag limits the total number of operations exported,
+useful for sampling or testing. Output goes to stdout by default, or specify
+--output to write to a file.
+
+This is the primary way to extract raw operation data from the repository
+for analysis, backup, or migration to other systems."
+)]
 pub struct ExportCommand {
     /// Bundle range to export (e.g., "42", "1-100", or "1-10,20-30")
     #[arg(value_name = "BUNDLES")]
@@ -66,25 +83,35 @@ pub struct ExportCommand {
     /// Limit number of operations to export
     #[arg(short = 'n', long)]
     pub count: Option<usize>,
+
+    /// Export in reverse order (bundles and operations within bundles)
+    #[arg(long)]
+    pub reverse: bool,
 }
 
 
 pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Result<()> {
     let output = cmd.output;
     let count = cmd.count;
+    let reverse = cmd.reverse;
     // Create BundleManager (follows RULES.md - NO direct file access from CLI)
     let manager = super::utils::create_manager(dir.clone(), verbose, quiet)?;
     let index = manager.get_index();
     let max_bundle = index.last_bundle;
 
     // Determine bundle numbers to process
-    let bundle_numbers: Vec<u32> = if let Some(bundles_str) = cmd.bundles {
+    let mut bundle_numbers: Vec<u32> = if let Some(bundles_str) = cmd.bundles {
         utils::parse_bundle_spec(Some(bundles_str), max_bundle)?
     } else if cmd.all {
         (1..=max_bundle).collect()
     } else {
         anyhow::bail!("Must specify either --bundles or --all");
     };
+
+    // Reverse bundle order if requested
+    if reverse {
+        bundle_numbers.reverse();
+    }
 
     if verbose && !quiet {
         log::debug!("Index: v{} ({})", index.version, index.origin);
@@ -166,18 +193,28 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
         };
         let reader = BufReader::with_capacity(1024 * 1024, decoder);
 
-        // Pass through lines
+        // Collect lines from bundle
+        let mut bundle_lines = Vec::new();
         for line in reader.lines() {
+            let line = line?;
+            if line.is_empty() {
+                continue;
+            }
+            bundle_lines.push(line);
+        }
+
+        // Reverse lines if requested
+        if reverse {
+            bundle_lines.reverse();
+        }
+
+        // Write lines
+        for line in bundle_lines {
             // Check count limit
             if let Some(limit) = count {
                 if exported_count >= limit {
                     break;
                 }
-            }
-
-            let line = line?;
-            if line.is_empty() {
-                continue;
             }
 
             output_buffer.push_str(&line);

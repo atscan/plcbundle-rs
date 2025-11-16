@@ -6,7 +6,18 @@ use std::path::PathBuf;
 #[derive(Args)]
 #[command(
     about = "Initialize a new PLC bundle repository",
-    long_about = "Creates a new repository with an empty index file. Similar to 'git init'.",
+    long_about = "Create a new repository for storing PLC bundle data. This command sets up
+the necessary directory structure and creates an empty index file (plc_bundles.json)
+that will track all bundles in the repository.
+
+During initialization, you'll be prompted to select a PLC directory URL (the source
+of bundle data). You can also specify it directly with --plc to skip the prompt.
+The origin URL is stored in the index and used to verify that bundles come from
+the expected source.
+
+After initialization, use 'sync' to fetch bundles from the PLC directory, or
+'clone' to copy bundles from an existing repository. The repository is ready
+to use immediately after initialization.",
     after_help = "Examples:\n  \
             # Initialize in current directory\n  \
             {bin} init\n\n  \

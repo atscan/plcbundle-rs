@@ -8,6 +8,22 @@ use std::path::PathBuf;
 #[derive(Args)]
 #[command(
     about = "Rollback repository to earlier state",
+    long_about = "Remove bundles from the end of the chain to restore the repository to an
+earlier state. This is useful for undoing recent syncs, removing corrupted
+bundles, or reverting to a known-good state.
+
+You can rollback to a specific bundle number using --to (keeps that bundle
+and all earlier ones), or remove the last N bundles using --last. The command
+shows a detailed plan before execution, including which bundles will be deleted,
+how much data will be removed, and what additional impacts there are (like
+mempool clearing or DID index invalidation).
+
+By default, bundle files are permanently deleted. Use --keep-files to update
+the index only while leaving bundle files on disk. Use --rebuild-did-index
+to automatically rebuild the DID index after rollback.
+
+This operation cannot be undone, so use with caution. The command requires
+explicit confirmation by typing 'rollback' unless --force is used.",
     after_help = "Examples:\n  \
             # Rollback TO bundle 100 (keeps 1-100, removes 101+)\n  \
             {bin} rollback --to 100\n\n  \
