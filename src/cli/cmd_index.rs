@@ -232,14 +232,50 @@ pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize, flush_interval
     let stage2_progress = Arc::new(Mutex::new(None::<ProgressBar>));
     let stage2_started = Arc::new(Mutex::new(false));
     let stage1_finished = Arc::new(Mutex::new(false));
+    
+    // Set up cleanup guard to ensure temp files are deleted on CTRL+C or panic
+    // Use Arc to share manager for cleanup
+    let manager_arc = Arc::new(manager);
+    let manager_for_cleanup = manager_arc.clone();
+    
+    struct IndexBuildCleanup {
+        manager: Arc<BundleManager>,
+    }
+    
+    impl Drop for IndexBuildCleanup {
+        fn drop(&mut self) {
+            // Cleanup temp files on drop (CTRL+C, panic, or normal exit)
+            let did_index = self.manager.get_did_index();
+            if let Some(idx) = did_index.read().unwrap().as_ref() {
+                if let Err(e) = idx.cleanup_temp_files() {
+                    log::warn!("[Index Build] Failed to cleanup temp files: {}", e);
+                }
+            }
+        }
+    }
+    
+    let _cleanup_guard = IndexBuildCleanup {
+        manager: manager_for_cleanup.clone(),
+    };
 
-    manager.build_did_index_with_threads(flush_interval, Some({
+    // Note: CTRL+C handler for cleanup is set up automatically in did_index.rs build_from_scratch()
+    // This follows the API-first design: cleanup logic lives in the core, not in CLI layer
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+    // Wrap build call - cleanup guard will handle CTRL+C and panics
+    let build_result = manager_arc.build_did_index_with_threads(flush_interval, Some({
         let progress = progress.clone();
         let stage2_progress = stage2_progress.clone();
         let stage2_started = stage2_started.clone();
         let stage1_finished = stage1_finished.clone();
         let last_bundle = last_bundle;
         move |current, total, bytes_processed, _total_bytes| {
+            // Stop updating progress bar if interrupted
+            if INTERRUPTED.load(Ordering::Relaxed) {
+                return;
+            }
+            
             // Detect stage change: if total changes from bundle count to shard count (256), we're in stage 2
             let is_stage_2 = total == 256 && current <= 256;
             
@@ -293,7 +329,24 @@ pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize, flush_interval
                 }
             }
         }
-    }), num_threads)?;
+    }), num_threads);
+
+    // Handle build result - ensure cleanup happens on error
+    match build_result {
+        Ok(_) => {
+            // Success - continue
+        }
+        Err(e) => {
+            // Error occurred - explicitly cleanup temp files before returning
+            let did_index = manager_arc.get_did_index();
+            if let Some(idx) = did_index.read().unwrap().as_ref() {
+                if let Err(cleanup_err) = idx.cleanup_temp_files() {
+                    log::warn!("[Index Build] Failed to cleanup temp files after error: {}", cleanup_err);
+                }
+            }
+            return Err(e);
+        }
+    }
 
     // Finish the appropriate progress bar
     if let Some(pb) = progress.lock().unwrap().take() {
@@ -306,7 +359,7 @@ pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize, flush_interval
     eprintln!();
 
     // Show final info
-    let stats = manager.get_did_index_stats();
+    let stats = manager_arc.get_did_index_stats();
     let total_dids = stats
         .get("total_dids")
         .and_then(|v| v.as_i64())

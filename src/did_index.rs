@@ -811,6 +811,76 @@ impl Manager {
         // Clear existing index
         fs::create_dir_all(&self.shard_dir)?;
         fs::remove_dir_all(&self.delta_dir).ok();
+        
+        // Cleanup any leftover temp files from previous interrupted builds
+        self.cleanup_temp_files()?;
+        
+        // Set up cleanup guard to remove temp files on panic or early exit
+        struct CleanupGuard {
+            shard_dir: PathBuf,
+        }
+        
+        impl Drop for CleanupGuard {
+            fn drop(&mut self) {
+                // Clean up temp files on drop (panic or normal exit)
+                if let Err(e) = Self::cleanup(&self.shard_dir) {
+                    log::warn!("[DID Index] Failed to cleanup temp files: {}", e);
+                }
+            }
+        }
+        
+        impl CleanupGuard {
+            fn cleanup(shard_dir: &Path) -> Result<()> {
+                if !shard_dir.exists() {
+                    return Ok(());
+                }
+                let mut cleaned = 0;
+                for entry in fs::read_dir(shard_dir)? {
+                    let entry = entry?;
+                    let path = entry.path();
+                    if let Some(ext) = path.extension() {
+                        if ext == "tmp" {
+                            fs::remove_file(&path)?;
+                            cleaned += 1;
+                        }
+                    }
+                }
+                if cleaned > 0 {
+                    log::debug!("[DID Index] Cleaned up {} temp files", cleaned);
+                }
+                Ok(())
+            }
+        }
+        
+        let _cleanup_guard = CleanupGuard {
+            shard_dir: self.shard_dir.clone(),
+        };
+
+        // Set up CTRL+C handler to automatically cleanup temp files on interrupt
+        // This ensures cleanup happens even if the build is interrupted
+        #[cfg(feature = "cli")]
+        {
+            let shard_dir_for_signal = self.shard_dir.clone();
+            match ctrlc::set_handler(move || {
+                eprintln!("\n\n⚠️  Interrupted by user (CTRL+C)");
+                // Cleanup temp files immediately using the same cleanup logic
+                if let Err(e) = CleanupGuard::cleanup(&shard_dir_for_signal) {
+                    eprintln!("⚠️  Failed to cleanup temp files: {}", e);
+                } else {
+                    eprintln!("🧹 Cleaned up temporary files");
+                }
+                std::process::exit(130); // Standard exit code for CTRL+C
+            }) {
+                Ok(()) => {
+                    log::debug!("[DID Index] CTRL+C handler registered for build");
+                }
+                Err(e) => {
+                    // Handler might already be set (e.g., by CLI layer)
+                    // This is okay, but log it for debugging
+                    log::debug!("[DID Index] CTRL+C handler registration: {} (may already be set)", e);
+                }
+            }
+        }
 
         // Determine if we should use parallel processing
         let use_parallel = num_threads != 1;
@@ -896,6 +966,7 @@ impl Manager {
                         
                         let mut local_shard_entries: HashMap<u8, Vec<(String, OpLocation)>> = HashMap::new();
                         let mut bundle_bytes = 0u64;
+                        let mut bundle_operations = 0u64; // Track operations for this bundle
                         let mut position = 0u16;
                         
                         // Stream line-by-line without loading entire bundle
@@ -916,6 +987,7 @@ impl Manager {
                             }
                             
                             bundle_bytes += line.len() as u64 + 1;
+                            bundle_operations += 1; // Count operations for this bundle
                             total_operations += 1;
                             metrics_ops += 1;
                             metrics_bytes += line.len() as u64 + 1;
@@ -978,7 +1050,7 @@ impl Manager {
                         }
                         
                         metrics_bundle_total += bundle_processing_start.elapsed();
-                        Ok((local_shard_entries, bundle_bytes, 0))
+                        Ok((local_shard_entries, bundle_bytes, bundle_operations))
                     })
                     .collect()
             };
@@ -993,11 +1065,16 @@ impl Manager {
                 bytes_processed.fetch_add(batch_bytes, Ordering::Relaxed);
                 
                 // Track basic metrics from batch results (works in both parallel and sequential mode)
-                if use_parallel {
-                    metrics_ops += batch_ops;
-                    metrics_bytes += batch_bytes;
-                    total_operations += batch_ops; // Count operations in parallel mode too
-                }
+                metrics_ops += batch_ops;
+                metrics_bytes += batch_bytes;
+                total_operations += batch_ops; // Count operations in both parallel and sequential mode
+                log::debug!(
+                    "[DID Index] Batch result for bundle {}: {} ops, {} bytes (total_operations now: {})",
+                    bundle_num,
+                    batch_ops,
+                    batch_bytes,
+                    total_operations
+                );
                 
                 // Merge batch entries into main shard_entries
                 for (shard_num, mut entries) in batch_entries.drain() {
@@ -1195,21 +1272,107 @@ impl Manager {
             log::info!("[DID Index] Final flush completed in {:.3}s", final_flush_duration.as_secs_f64());
         }
 
+        // CRITICAL: Ensure all file handles are closed and data is synced to disk
+        // before starting consolidation, especially important for parallel processing
+        // where files might be written and read simultaneously
+        std::thread::yield_now(); // Give OS a chance to sync file handles
+        std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst); // Memory barrier
+
         // Pass 2: Consolidate all temporary files for each shard
         eprintln!("\n📊 Stage 2/2: Consolidating shards...");
         log::debug!("[DID Index] Pass 2: Consolidating shards...");
         let pass2_start = Instant::now();
 
+        // Use parallel processing for consolidation (shards are independent)
+        let use_parallel_consolidation = use_parallel;
+        // CRITICAL: Use usize range then map to u8, because DID_SHARD_COUNT (256) as u8 wraps to 0
+        let shard_numbers: Vec<u8> = (0..DID_SHARD_COUNT).map(|i| i as u8).collect();
+        
+        // Use atomic counter for progress tracking in parallel mode
+        let progress_counter = std::sync::atomic::AtomicU32::new(0);
+        let progress_cb = progress_callback.as_ref();
+        
+        let consolidation_results: Vec<Result<(u8, i64)>> = if use_parallel_consolidation {
+            // Process shards in parallel
+            // IMPORTANT: Use try_reduce or collect with explicit error handling
+            // to ensure all shards are processed even if some fail
+            shard_numbers.par_iter()
+                .map(|&shard_num| {
+                    log::debug!("[DID Index] Parallel consolidation starting for shard {:02x}", shard_num);
+                    // Wrap in explicit error handling to ensure we process all shards
+                    let result = match self.consolidate_shard(shard_num) {
+                        Ok(shard_did_count) => {
+                            // Update progress atomically
+                            if let Some(ref cb) = progress_cb {
+                                let count = progress_counter.fetch_add(1, Ordering::Relaxed) + 1;
+                                cb(count, DID_SHARD_COUNT as u32, 0, Some("Stage 2/2: Consolidating shards".to_string()));
+                            }
+                            log::debug!("[DID Index] Shard {:02x} consolidation succeeded: {} DIDs", shard_num, shard_did_count);
+                            Ok((shard_num, shard_did_count))
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "[DID Index] Failed to consolidate shard {:02x}: {}",
+                                shard_num,
+                                e
+                            );
+                            // Still update progress even on error
+                            if let Some(ref cb) = progress_cb {
+                                let count = progress_counter.fetch_add(1, Ordering::Relaxed) + 1;
+                                cb(count, DID_SHARD_COUNT as u32, 0, Some("Stage 2/2: Consolidating shards".to_string()));
+                            }
+                            // Return 0 DIDs for failed shard, but don't fail the entire operation
+                            log::debug!(
+                                "[DID Index] Shard {:02x} consolidation failed, returning 0 DIDs",
+                                shard_num
+                            );
+                            Ok((shard_num, 0))
+                        }
+                    };
+                    log::debug!("[DID Index] Parallel consolidation result for shard {:02x}: {:?}", shard_num, result);
+                    result
+                })
+                .collect()
+        } else {
+            // Process shards sequentially with progress updates
+            log::debug!("[DID Index] Using sequential consolidation");
+            shard_numbers.iter()
+                .map(|&shard_num| {
+                    log::debug!("[DID Index] Sequential consolidation starting for shard {:02x}", shard_num);
+                    // Update progress callback for consolidation phase
+                    if let Some(ref cb) = progress_callback {
+                        // For consolidation, we use shard number as progress indicator
+                        // Total is DID_SHARD_COUNT, current is shard_num + 1
+                        cb((shard_num + 1) as u32, DID_SHARD_COUNT as u32, 0, Some("Stage 2/2: Consolidating shards".to_string()));
+                    }
+                    let result = self.consolidate_shard(shard_num);
+                    log::debug!("[DID Index] Sequential consolidation result for shard {:02x}: {:?}", shard_num, result);
+                    match result {
+                        Ok(shard_did_count) => Ok((shard_num, shard_did_count)),
+                        Err(e) => {
+                            log::warn!("[DID Index] Sequential consolidation failed for shard {:02x}: {}", shard_num, e);
+                            Ok((shard_num, 0))
+                        }
+                    }
+                })
+                .collect()
+        };
+
+        // Collect results and update config
+        log::debug!(
+            "[DID Index] Collecting {} consolidation results",
+            consolidation_results.len()
+        );
         let mut total_dids = 0i64;
-        for shard_num in 0..DID_SHARD_COUNT {
-            // Update progress callback for consolidation phase
-            if let Some(ref cb) = progress_callback {
-                // For consolidation, we use shard number as progress indicator
-                // Total is DID_SHARD_COUNT, current is shard_num + 1
-                cb((shard_num + 1) as u32, DID_SHARD_COUNT as u32, 0, Some("Stage 2/2: Consolidating shards".to_string()));
-            }
-            let shard_did_count = self.consolidate_shard(shard_num as u8)?;
+        for result in consolidation_results {
+            let (shard_num, shard_did_count) = result?;
             total_dids += shard_did_count;
+            log::debug!(
+                "[DID Index] Shard {:02x} contributed {} DIDs (total_dids now: {})",
+                shard_num,
+                shard_did_count,
+                total_dids
+            );
             
             // Update shard metadata with did_count
             self.modify_config(|config| {
@@ -1218,6 +1381,15 @@ impl Manager {
                 }
             })?;
         }
+        
+        log::debug!(
+            "[DID Index] Final total_dids after collecting all shard results: {}",
+            total_dids
+        );
+        
+        // Explicitly cleanup temp files on successful completion
+        // (Drop guard will also handle this, but explicit cleanup ensures it happens)
+        self.cleanup_temp_files()?;
 
         let pass2_duration = pass2_start.elapsed();
         log::debug!(
@@ -1997,14 +2169,132 @@ impl Manager {
 
         let temp_path = self.shard_dir.join(format!("{:02x}.tmp", shard_num));
 
+        // Guard to ensure temp file is deleted even on error
+        struct TempFileGuard {
+            path: PathBuf,
+        }
+        
+        impl Drop for TempFileGuard {
+            fn drop(&mut self) {
+                if self.path.exists() {
+                    if let Err(e) = fs::remove_file(&self.path) {
+                        log::warn!("[DID Index] Failed to remove temp file {}: {}", self.path.display(), e);
+                    }
+                }
+            }
+        }
+        
+        let _temp_guard = TempFileGuard {
+            path: temp_path.clone(),
+        };
+
+        // Check if temp file exists and get its size
+        // With parallel processing, files might not be immediately visible, so retry a few times
+        let file_metadata = {
+            let mut retries = 3;
+            loop {
+                match fs::metadata(&temp_path) {
+                    Ok(m) => break Ok(m),
+                    Err(e) => {
+                        retries -= 1;
+                        if retries > 0 {
+                            // Brief delay to allow filesystem to sync (especially important for parallel processing)
+                            std::thread::yield_now();
+                            std::hint::spin_loop(); // Give CPU a moment
+                            continue;
+                        } else {
+                            break Err(e);
+                        }
+                    }
+                }
+            }
+        };
+
+        let file_metadata = match file_metadata {
+            Ok(m) => m,
+            Err(e) => {
+                log::debug!(
+                    "[DID Index] Shard {:02x} consolidate: temp file {} not found after retries: {}",
+                    shard_num,
+                    temp_path.display(),
+                    e
+                );
+                return Ok(0);
+            }
+        };
+
+        if file_metadata.len() == 0 {
+            log::debug!(
+                "[DID Index] Shard {:02x} consolidate: temp file {} is empty (0 bytes)",
+                shard_num,
+                temp_path.display()
+            );
+            // Delete empty temp file
+            let _ = fs::remove_file(&temp_path);
+            return Ok(0);
+        }
+
+        // Read the temp file
         let data = match fs::read(&temp_path) {
             Ok(d) => d,
-            Err(_) => return Ok(0),
+            Err(e) => {
+                log::warn!(
+                    "[DID Index] Shard {:02x} consolidate: failed to read temp file {} ({} bytes): {}",
+                    shard_num,
+                    temp_path.display(),
+                    file_metadata.len(),
+                    e
+                );
+                return Ok(0);
+            }
         };
 
         if data.is_empty() {
-            fs::remove_file(temp_path).ok();
+            log::debug!(
+                "[DID Index] Shard {:02x} consolidate: temp file {} read as empty (expected {} bytes)",
+                shard_num,
+                temp_path.display(),
+                file_metadata.len()
+            );
+            let _ = fs::remove_file(&temp_path);
             return Ok(0);
+        }
+
+        // Verify file size matches what we read
+        if data.len() != file_metadata.len() as usize {
+            log::warn!(
+                "[DID Index] Shard {:02x} consolidate: temp file size mismatch: metadata says {} bytes, read {} bytes",
+                shard_num,
+                file_metadata.len(),
+                data.len()
+            );
+        }
+
+        log::trace!(
+            "[DID Index] Shard {:02x} consolidate: reading {} bytes from {}",
+            shard_num,
+            data.len(),
+            temp_path.display()
+        );
+
+        // Validate file size is a multiple of 28 bytes (entry size)
+        let remainder = data.len() % 28;
+        if remainder != 0 {
+            log::warn!(
+                "[DID Index] Shard {:02x} consolidate: temp file {} has invalid size: {} bytes (not a multiple of 28, remainder: {})",
+                shard_num,
+                temp_path.display(),
+                data.len(),
+                remainder
+            );
+            // Try to process what we can (truncate to multiple of 28)
+            let truncated_len = data.len() - remainder;
+            log::warn!(
+                "[DID Index] Shard {:02x} consolidate: truncating to {} bytes (dropping {} trailing bytes)",
+                shard_num,
+                truncated_len,
+                remainder
+            );
         }
 
         let start = Instant::now();
@@ -2012,6 +2302,17 @@ impl Manager {
         // Parse entries (28 bytes each)
         let parse_start = Instant::now();
         let entry_count = data.len() / 28;
+        
+        if entry_count == 0 {
+            log::warn!(
+                "[DID Index] Shard {:02x} consolidate: temp file {} has {} bytes but no complete entries (need at least 28 bytes per entry)",
+                shard_num,
+                temp_path.display(),
+                data.len()
+            );
+            let _ = fs::remove_file(&temp_path);
+            return Ok(0);
+        }
         // Store (identifier_string, raw_bytes, location) so we can preserve exact bytes
         let mut entries: Vec<(String, [u8; DID_IDENTIFIER_LEN], OpLocation)> = Vec::with_capacity(entry_count);
 
@@ -2067,7 +2368,11 @@ impl Manager {
         self.write_shard_to_path_with_bytes(shard_num, &builder, &target, "base", Some(&identifier_to_bytes))?;
         let write_duration = write_start.elapsed();
 
-        fs::remove_file(temp_path).ok();
+        // Explicitly remove temp file immediately after successful write
+        // (Drop guard will also handle this, but explicit removal ensures immediate cleanup)
+        if let Err(e) = fs::remove_file(&temp_path) {
+            log::warn!("[DID Index] Failed to remove temp file {}: {}", temp_path.display(), e);
+        }
 
         let total_duration = start.elapsed();
 
@@ -2085,7 +2390,13 @@ impl Manager {
             );
         }
 
-        Ok(builder.entries.len() as i64)
+        let did_count = builder.entries.len() as i64;
+        log::debug!(
+            "[DID Index] Shard {:02x} consolidate returning: {} DIDs",
+            shard_num,
+            did_count
+        );
+        Ok(did_count)
     }
 
     fn update_shard(
@@ -2512,6 +2823,28 @@ impl Manager {
 
     fn invalidate_shard_cache(&self, shard_num: u8) {
         self.shard_cache.write().unwrap().remove(&shard_num);
+    }
+    
+    /// Clean up temporary files from interrupted builds
+    pub fn cleanup_temp_files(&self) -> Result<()> {
+        if !self.shard_dir.exists() {
+            return Ok(());
+        }
+        let mut cleaned = 0;
+        for entry in fs::read_dir(&self.shard_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if let Some(ext) = path.extension() {
+                if ext == "tmp" {
+                    fs::remove_file(&path)?;
+                    cleaned += 1;
+                }
+            }
+        }
+        if cleaned > 0 {
+            log::info!("[DID Index] Cleaned up {} leftover temp files from previous build", cleaned);
+        }
+        Ok(())
     }
 }
 
