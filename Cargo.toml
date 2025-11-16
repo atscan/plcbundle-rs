@@ -42,6 +42,7 @@ crossterm = { version = "0.29", optional = true }
 colored = { version = "3.0", optional = true }
 colored_json = { version = "5.0", optional = true }
 is-terminal = { version = "0.4", optional = true }
+similar = { version = "2.7", optional = true }
 sha2 = "0.10.9"
 regex = "1.12"
 atproto-plc = "0.2.0"
@@ -59,5 +60,5 @@ tempfile = "3.23"
 
 [features]
 default = ["cli"]
-cli = ["clap", "indicatif", "log", "env_logger", "dialoguer", "crossterm", "colored", "colored_json", "is-terminal"]
+cli = ["clap", "indicatif", "log", "env_logger", "dialoguer", "crossterm", "colored", "colored_json", "is-terminal", "similar"]
 server = ["axum", "tower", "tower-http", "tokio-tungstenite", "tokio-util", "futures-util", "crossterm"]

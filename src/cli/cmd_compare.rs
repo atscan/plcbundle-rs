@@ -7,9 +7,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::runtime::Runtime;
 
-// ANSI color codes for terminal output
-const GREEN: &str = "\x1b[38;5;154m"; // Light yellow-green
-const RESET: &str = "\x1b[0m";
+use super::utils::colors;
 
 #[derive(Args)]
 #[command(
@@ -117,9 +115,14 @@ async fn diff_indexes(
 
     // Load target index
     eprintln!("📥 Loading target index...");
-    let target_index = remote::fetch_index(target)
-        .await
-        .context("Failed to load target index")?;
+    let target_index = if target.starts_with("http://") || target.starts_with("https://") {
+        let client = remote::RemoteClient::new(target)?;
+        client.fetch_index().await
+            .context("Failed to load target index")?
+    } else {
+        remote::load_local_index(target)
+            .context("Failed to load target index")?
+    };
 
     // Check origins - CRITICAL: must match for valid comparison
     let local_origin = &local_index.origin;
@@ -190,9 +193,14 @@ async fn diff_specific_bundle(
 
     // Load remote index to get metadata and origin
     eprintln!("📥 Loading remote index...");
-    let remote_index = remote::fetch_index(target)
-        .await
-        .context("Failed to load remote index")?;
+    let remote_index = if target.starts_with("http://") || target.starts_with("https://") {
+        let client = remote::RemoteClient::new(target)?;
+        client.fetch_index().await
+            .context("Failed to load remote index")?
+    } else {
+        remote::load_local_index(target)
+            .context("Failed to load remote index")?
+    };
     let target_origin = &remote_index.origin;
 
     // Check origins - CRITICAL: must match for valid comparison
@@ -238,7 +246,8 @@ async fn diff_specific_bundle(
     // Load remote bundle
     eprintln!("📦 Loading remote bundle {:06}...\n", bundle_num);
     let remote_ops = if target.starts_with("http://") || target.starts_with("https://") {
-        remote::fetch_bundle_operations(target, bundle_num)
+        let client = remote::RemoteClient::new(target)?;
+        client.fetch_bundle_operations(bundle_num)
             .await
             .context("Failed to load remote bundle")?
     } else {
@@ -448,9 +457,9 @@ fn display_comparison(c: &IndexComparison, verbose: bool, origins_match: bool) {
     } else {
         eprintln!(
             "  Missing bundles:    {}{} ✓{}",
-            GREEN,
+            colors::GREEN,
             c.missing_bundles.len(),
-            RESET
+            colors::RESET
         );
     }
 
@@ -463,9 +472,9 @@ fn display_comparison(c: &IndexComparison, verbose: bool, origins_match: bool) {
     } else {
         eprintln!(
             "  Extra bundles:      {}{} ✓{}",
-            GREEN,
+            colors::GREEN,
             c.extra_bundles.len(),
-            RESET
+            colors::RESET
         );
     }
 
@@ -485,9 +494,9 @@ fn display_comparison(c: &IndexComparison, verbose: bool, origins_match: bool) {
     } else {
         eprintln!(
             "  Hash mismatches:    {}{} ✓{}",
-            GREEN,
+            colors::GREEN,
             c.hash_mismatches.len(),
-            RESET
+            colors::RESET
         );
     }
 
@@ -507,9 +516,9 @@ fn display_comparison(c: &IndexComparison, verbose: bool, origins_match: bool) {
     } else {
         eprintln!(
             "  Content mismatches: {}{} ✓{}",
-            GREEN,
+            colors::GREEN,
             c.content_mismatches.len(),
-            RESET
+            colors::RESET
         );
     }
 
@@ -522,9 +531,9 @@ fn display_comparison(c: &IndexComparison, verbose: bool, origins_match: bool) {
     } else {
         eprintln!(
             "  Cursor mismatches:  {}{} ✓{}",
-            GREEN,
+            colors::GREEN,
             c.cursor_mismatches.len(),
-            RESET
+            colors::RESET
         );
     }
 

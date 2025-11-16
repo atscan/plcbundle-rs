@@ -349,7 +349,8 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf, global_verbose: bool
         let shutdown_tx_sync = shutdown_tx.clone();
 
         let sync_handle = tokio::spawn(async move {
-            use plcbundle::sync::{PLCClient, SyncConfig, SyncManager};
+            use plcbundle::plc_client::PLCClient;
+            use plcbundle::sync::{SyncConfig, SyncManager};
 
             // Create PLC client
             let client = match PLCClient::new(&plc_url) {

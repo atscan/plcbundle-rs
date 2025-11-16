@@ -4,6 +4,25 @@ use anyhow::Result;
 use plcbundle::BundleManager;
 use std::path::{Path, PathBuf};
 
+/// ANSI color codes for terminal output
+/// These are shared across all CLI commands for consistent coloring
+pub mod colors {
+    /// Standard green color (used for success, matches, etc.)
+    pub const GREEN: &str = "\x1b[32m";
+    
+    /// Standard red color (used for errors, deletions, etc.)
+    pub const RED: &str = "\x1b[31m";
+    
+    /// Reset color code
+    pub const RESET: &str = "\x1b[0m";
+    
+    /// Dim/bright black color (used for context, unchanged lines, etc.)
+    pub const DIM: &str = "\x1b[2m";
+    
+    /// Bold text
+    pub const BOLD: &str = "\x1b[1m";
+}
+
 #[cfg(feature = "cli")]
 mod colorize {
     use colored_json::prelude::*;

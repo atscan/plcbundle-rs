@@ -1,6 +1,5 @@
 use anyhow::Result;
 use clap::Args;
-use indicatif::HumanDuration;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
@@ -10,12 +9,50 @@ use std::time::Instant;
 
 use super::progress::ProgressBar;
 use super::utils;
+use plcbundle::format_std_duration_auto;
+
+/// Format bundle numbers as a compact range string (e.g., "1-10", "1, 5, 10", "1-5, 10-15")
+fn format_bundle_range(bundles: &[u32]) -> String {
+    if bundles.is_empty() {
+        return String::new();
+    }
+    if bundles.len() == 1 {
+        return bundles[0].to_string();
+    }
+
+    let mut ranges = Vec::new();
+    let mut range_start = bundles[0];
+    let mut range_end = bundles[0];
+
+    for &bundle in bundles.iter().skip(1) {
+        if bundle == range_end + 1 {
+            range_end = bundle;
+        } else {
+            if range_start == range_end {
+                ranges.push(range_start.to_string());
+            } else {
+                ranges.push(format!("{}-{}", range_start, range_end));
+            }
+            range_start = bundle;
+            range_end = bundle;
+        }
+    }
+
+    // Add the last range
+    if range_start == range_end {
+        ranges.push(range_start.to_string());
+    } else {
+        ranges.push(format!("{}-{}", range_start, range_end));
+    }
+
+    ranges.join(", ")
+}
 
 #[derive(Args)]
 #[command(about = "Export operations to different formats")]
 pub struct ExportCommand {
     /// Bundle range to export (e.g., "42", "1-100", or "1-10,20-30")
-    #[arg(long)]
+    #[arg(value_name = "BUNDLES")]
     pub bundles: Option<String>,
 
     /// Export all bundles
@@ -29,10 +66,6 @@ pub struct ExportCommand {
     /// Output file (default: stdout)
     #[arg(short, long)]
     pub output: Option<PathBuf>,
-
-    /// Number of threads to use (0 = auto-detect)
-    #[arg(short = 'j', long, default_value = "0")]
-    pub threads: usize,
 
     /// Limit number of operations to export
     #[arg(long)]
@@ -100,17 +133,23 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
     };
 
     if verbose && !quiet {
-        log::debug!("📦 Index: v{} ({})", index.version, index.origin);
-        log::debug!("📊 Processing {} bundles", bundle_numbers.len());
+        log::debug!("Index: v{} ({})", index.version, index.origin);
+        log::debug!("Processing {} bundles", bundle_numbers.len());
         if let Some(ref count) = count {
             log::debug!(
-                "🔢 Export limit: {} operations",
+                "Export limit: {} operations",
                 utils::format_number(*count as u64)
             );
         }
         if let Some(ref after) = after {
-            log::debug!("⏰ After timestamp: {}", after);
+            log::debug!("After timestamp: {}", after);
         }
+    }
+
+    // Display which bundles are being exported (always visible unless quiet)
+    if !quiet {
+        let bundle_range_str = format_bundle_range(&bundle_numbers);
+        eprintln!("Exporting bundles: {} ({})", bundle_range_str, bundle_numbers.len());
     }
 
     // Open output with buffering
@@ -125,11 +164,17 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
     let mut writer = writer;
 
     if !quiet {
-        log::info!("📤 Exporting operations...");
+        log::info!("Exporting operations...");
     }
 
-    // Calculate total uncompressed size for progress tracking
+    // Calculate total uncompressed and compressed sizes for progress tracking
     let total_uncompressed_size = index.total_uncompressed_size_for_bundles(&bundle_numbers);
+    let total_compressed_size: u64 = bundle_numbers
+        .iter()
+        .filter_map(|bundle_num| {
+            index.get_bundle(*bundle_num).map(|meta| meta.compressed_size)
+        })
+        .sum();
     
     // Create progress bar tracking bundles processed
     let pb = if quiet {
@@ -212,7 +257,7 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
                         let total_bytes = *bytes + output_buffer.len() as u64;
                         drop(bytes);
                         pb.set_with_bytes(bundles_processed, total_bytes);
-                        pb.set_message(format!("{} operations", utils::format_number(exported_count as u64)));
+                        pb.set_message(format!("{} ops", utils::format_number(exported_count as u64)));
                     }
                 }
             }
@@ -321,7 +366,7 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
                         let total_bytes = *bytes + output_buffer.len() as u64;
                         drop(bytes);
                         pb.set_with_bytes(bundles_processed, total_bytes);
-                        pb.set_message(format!("{} operations", utils::format_number(exported_count as u64)));
+                        pb.set_message(format!("{} ops", utils::format_number(exported_count as u64)));
                     }
                 }
             }
@@ -334,7 +379,7 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
             let total_bytes = *bytes + output_buffer.len() as u64;
             drop(bytes);
             pb.set_with_bytes(bundles_processed, total_bytes);
-            pb.set_message(format!("{} operations", utils::format_number(exported_count as u64)));
+            pb.set_message(format!("{} ops", utils::format_number(exported_count as u64)));
         }
     }
 
@@ -358,17 +403,27 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
 
     if !quiet {
         let elapsed = start.elapsed();
-        log::info!("✅ Complete in {}", HumanDuration(elapsed));
-        log::info!(
-            "   Exported: {} operations",
-            utils::format_number(exported_count as u64)
-        );
-        if elapsed.as_secs_f64() > 0.0 {
-            log::info!(
-                "   Throughput: {:.0} ops/sec",
-                exported_count as f64 / elapsed.as_secs_f64()
-            );
+        let elapsed_secs = elapsed.as_secs_f64();
+        
+        // Format duration with auto-scaling using utility function
+        let duration_str = format_std_duration_auto(elapsed);
+        
+        let mut parts = Vec::new();
+        parts.push(format!("Exported: {} ops", utils::format_number(exported_count as u64)));
+        parts.push(format!("in {}", duration_str));
+        
+        if elapsed_secs > 0.0 {
+            // Calculate throughputs
+            let uncompressed_throughput_mb = (total_uncompressed_size as f64 / elapsed_secs) / (1024.0 * 1024.0);
+            let compressed_throughput_mb = (total_compressed_size as f64 / elapsed_secs) / (1024.0 * 1024.0);
+            
+            parts.push(format!("({:.1} MB/s uncompressed, {:.1} MB/s compressed)",
+                uncompressed_throughput_mb,
+                compressed_throughput_mb
+            ));
         }
+        
+        eprintln!("{}", parts.join(" "));
     }
 
     Ok(())

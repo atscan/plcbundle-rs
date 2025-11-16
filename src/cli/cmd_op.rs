@@ -315,10 +315,11 @@ pub fn cmd_op_show(dir: PathBuf, bundle: u32, position: Option<usize>, quiet: bo
 
     println!("Status");
     println!("──────");
+    use super::utils::colors;
     let status = if op.nullified {
-        "✗ Nullified"
+        format!("{}✗ Nullified{}", colors::RED, colors::RESET)
     } else {
-        "✓ Active"
+        format!("{}✓ Active{}", colors::GREEN, colors::RESET)
     };
     println!("  {}\n", status);
 
@@ -397,10 +398,11 @@ pub fn cmd_op_find(dir: PathBuf, cid: String, quiet: bool) -> Result<()> {
                 println!("  DID:        {}", op.did);
                 println!("  Created:    {}", op.created_at);
 
+                use super::utils::colors;
                 let status = if op.nullified {
-                    "✗ Nullified"
+                    format!("{}✗ Nullified{}", colors::RED, colors::RESET)
                 } else {
-                    "✓ Active"
+                    format!("{}✓ Active{}", colors::GREEN, colors::RESET)
                 };
                 println!("  Status:     {}", status);
 

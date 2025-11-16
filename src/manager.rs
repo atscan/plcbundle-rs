@@ -1232,7 +1232,7 @@ impl BundleManager {
 
     /// Fetch and save next bundle from PLC directory
     /// DID index is updated on every bundle (fast with delta segments)
-    pub async fn sync_next_bundle(&self, client: &crate::sync::PLCClient) -> Result<SyncResult> {
+    pub async fn sync_next_bundle(&self, client: &crate::plc_client::PLCClient) -> Result<SyncResult> {
         use crate::sync::{get_boundary_cids, strip_boundary_duplicates};
         use std::time::Instant;
 
@@ -1625,7 +1625,7 @@ impl BundleManager {
     /// If max_bundles is None, sync until caught up
     pub async fn sync_once(
         &self,
-        client: &crate::sync::PLCClient,
+        client: &crate::plc_client::PLCClient,
         max_bundles: Option<usize>,
     ) -> Result<usize> {
         let mut synced = 0;
@@ -2344,7 +2344,12 @@ impl BundleManager {
     /// This is an async method that requires a tokio runtime.
     /// For synchronous usage, use the remote module functions directly.
     pub async fn fetch_remote_index(&self, target: &str) -> Result<Index> {
-        crate::remote::fetch_index(target).await
+        if target.starts_with("http://") || target.starts_with("https://") {
+            let client = crate::remote::RemoteClient::new(target)?;
+            client.fetch_index().await
+        } else {
+            crate::remote::load_local_index(target)
+        }
     }
 
     /// Fetch bundle operations from remote URL
@@ -2355,7 +2360,8 @@ impl BundleManager {
         base_url: &str,
         bundle_num: u32,
     ) -> Result<Vec<Operation>> {
-        crate::remote::fetch_bundle_operations(base_url, bundle_num).await
+        let client = crate::remote::RemoteClient::new(base_url)?;
+        client.fetch_bundle_operations(bundle_num).await
     }
 
     /// Fetch a single operation from remote URL
@@ -2367,7 +2373,8 @@ impl BundleManager {
         bundle_num: u32,
         position: usize,
     ) -> Result<String> {
-        crate::remote::fetch_operation(base_url, bundle_num, position).await
+        let client = crate::remote::RemoteClient::new(base_url)?;
+        client.fetch_operation(bundle_num, position).await
     }
 
     /// Rollback repository to a specific bundle

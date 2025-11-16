@@ -129,6 +129,22 @@ pub fn format_std_duration_ms(duration: StdDuration) -> String {
     }
 }
 
+/// Format a duration with auto-scaling units (μs/ms for < 1s, then s/m/h for longer).
+pub fn format_std_duration_auto(duration: StdDuration) -> String {
+    let secs = duration.as_secs_f64();
+    if secs < 0.001 {
+        format!("{:.0}μs", secs * 1_000_000.0)
+    } else if secs < 1.0 {
+        format!("{:.0}ms", secs * 1000.0)
+    } else if secs < 60.0 {
+        format!("{:.1}s", secs)
+    } else {
+        // Use HumanDuration for longer durations (handles m, h, etc.)
+        use indicatif::HumanDuration;
+        HumanDuration(duration).to_string()
+    }
+}
+
 /// Format a bytes-per-second rate as a human-readable string (e.g. "1.23 MB/sec").
 /// Takes bytes per second as a floating point number.
 pub fn format_bytes_per_sec(bytes_per_sec: f64) -> String {

@@ -238,38 +238,69 @@ pub fn cmd_did_resolve(
     // If compare is enabled, fetch remote document and compare
     if let Some(maybe_url) = compare {
         use tokio::runtime::Runtime;
-        use plcbundle::remote;
+        use plcbundle::plc_client::PLCClient;
+        use std::time::Instant;
 
         // Use provided URL, or use repository origin, or fall back to default
         let plc_url = match maybe_url {
-            Some(url) if !url.is_empty() => url,
+            Some(url) if !url.is_empty() => {
+                if verbose {
+                    log::info!("Using provided PLC directory URL: {}", url);
+                }
+                url
+            },
             _ => {
                 // Get origin from local repository index
                 let local_index = manager.get_index();
                 let origin = &local_index.origin;
                 
                 // If origin is "local" or empty, use default PLC directory
-                if origin == "local" || origin.is_empty() {
+                let url = if origin == "local" || origin.is_empty() {
+                    if verbose {
+                        log::info!("Origin is '{}', using default PLC directory: {}", origin, constants::DEFAULT_PLC_DIRECTORY_URL);
+                    }
                     constants::DEFAULT_PLC_DIRECTORY_URL.to_string()
                 } else {
+                    if verbose {
+                        log::info!("Using repository origin as PLC directory: {}", origin);
+                    }
                     origin.clone()
-                }
+                };
+                url
             }
         };
 
         eprintln!("🔍 Comparing with remote PLC directory...");
+        eprintln!("   Using PLC client with rate limiting");
         
+        if verbose {
+            log::info!("Target PLC directory: {}", plc_url);
+            log::info!("DID to fetch: {}", did);
+        }
+        
+        let fetch_start = Instant::now();
         let rt = Runtime::new().context("Failed to create tokio runtime")?;
         let remote_doc = rt.block_on(async {
-            remote::fetch_did_document(&plc_url, &did).await
+            let client = PLCClient::new(&plc_url)
+                .context("Failed to create PLC client")?;
+            if verbose {
+                log::info!("Created PLC client, fetching DID document...");
+            }
+            client.fetch_did_document(&did).await
         })
         .context("Failed to fetch DID document from remote PLC directory")?;
+        let fetch_duration = fetch_start.elapsed();
+
+        if verbose {
+            log::info!("Fetched DID document in {:?}", fetch_duration);
+        }
 
         eprintln!("✅ Fetched remote document from {}", plc_url);
         eprintln!();
 
-        // Compare documents
-        compare_did_documents(&result.document, &remote_doc, &did)?;
+        // Compare documents and return early (don't show full document)
+        compare_did_documents(&result.document, &remote_doc, &did, &plc_url, fetch_duration)?;
+        return Ok(());
     }
 
     // Get DID index for shard calculation (only for PLC DIDs)
@@ -467,113 +498,90 @@ fn compare_did_documents(
     local: &plcbundle::DIDDocument,
     remote: &plcbundle::DIDDocument,
     _did: &str,
+    remote_url: &str,
+    fetch_duration: std::time::Duration,
 ) -> Result<()> {
-    eprintln!("📊 Document Comparison");
-    eprintln!("═══════════════════════\n");
+    #[cfg(feature = "similar")]
+    {
+        use similar::{ChangeTag, TextDiff};
 
-    // Convert both to JSON for comparison
-    let local_json = sonic_rs::to_string_pretty(local)?;
-    let remote_json = sonic_rs::to_string_pretty(remote)?;
-
-    // Simple comparison - check if they're identical
-    if local_json == remote_json {
-        eprintln!("✅ Documents are identical");
+        eprintln!("📊 Document Comparison");
+        eprintln!("═══════════════════════");
+        
+        // Construct the full URL that was fetched
+        let full_url = format!("{}/{}", remote_url.trim_end_matches('/'), _did);
+        eprintln!("   Remote URL: {}", full_url);
+        eprintln!("   Fetch time: {:?}", fetch_duration);
         eprintln!();
-        return Ok(());
-    }
 
-    eprintln!("⚠️  Documents differ\n");
+        // Convert both to JSON for comparison
+        let local_json = sonic_rs::to_string_pretty(local)?;
+        let remote_json = sonic_rs::to_string_pretty(remote)?;
 
-    // Compare key fields
-    eprintln!("Field Comparison:");
-    eprintln!("─────────────────");
+        // Simple comparison - check if they're identical
+        if local_json == remote_json {
+            eprintln!("✅ Documents are identical");
+            eprintln!();
+            return Ok(());
+        }
 
-    // Compare ID
-    if local.id == remote.id {
-        eprintln!("  ID: ✅ Match ({})", local.id);
-    } else {
-        eprintln!("  ID: ❌ Mismatch");
-        eprintln!("    Local:  {}", local.id);
-        eprintln!("    Remote: {}", remote.id);
-    }
+        eprintln!("⚠️  Documents differ\n");
 
-    // Compare context
-    if local.context == remote.context {
-        eprintln!("  @context: ✅ Match ({} items)", local.context.len());
-    } else {
-        eprintln!("  @context: ❌ Mismatch");
-        eprintln!("    Local:  {} items", local.context.len());
-        eprintln!("    Remote: {} items", remote.context.len());
-        if local.context != remote.context {
-            for (i, ctx) in local.context.iter().enumerate() {
-                if i < remote.context.len() && remote.context[i] != *ctx {
-                    eprintln!("      [{}] Local:  {}", i, ctx);
-                    eprintln!("      [{}] Remote: {}", i, remote.context[i]);
-                } else if i >= remote.context.len() {
-                    eprintln!("      [{}] Local:  {} (not in remote)", i, ctx);
+        // Use similar to compute and display colored diff
+        let diff = TextDiff::from_lines(&local_json, &remote_json);
+
+        eprintln!("Diff (Local → Remote):");
+        eprintln!("──────────────────────");
+
+        for (idx, group) in diff.grouped_ops(3).iter().enumerate() {
+            if idx > 0 {
+                eprintln!("...");
+            }
+            for op in group {
+                for change in diff.iter_changes(op) {
+                    use super::utils::colors;
+                    let (sign, style) = match change.tag() {
+                        ChangeTag::Delete => ("-", colors::RED),
+                        ChangeTag::Insert => ("+", colors::GREEN),
+                        ChangeTag::Equal => (" ", colors::DIM),
+                    };
+                    // Color the whole line
+                    eprint!("{}{}{}{}", style, sign, change.value(), colors::RESET);
                 }
             }
-            for i in local.context.len()..remote.context.len() {
-                eprintln!("      [{}] Remote: {} (not in local)", i, remote.context[i]);
-            }
         }
+
+        eprintln!();
+        use super::utils::colors;
+        eprintln!("Legend: {}Local{} {}Remote{}", colors::RED, colors::RESET, colors::GREEN, colors::RESET);
+        eprintln!();
     }
 
-    // Compare alsoKnownAs
-    if local.also_known_as == remote.also_known_as {
-        eprintln!("  alsoKnownAs: ✅ Match ({} items)", local.also_known_as.len());
-    } else {
-        eprintln!("  alsoKnownAs: ❌ Mismatch");
-        eprintln!("    Local:  {} items", local.also_known_as.len());
-        eprintln!("    Remote: {} items", remote.also_known_as.len());
-    }
+    #[cfg(not(feature = "similar"))]
+    {
+        // Fallback if similar feature is not enabled
+        eprintln!("📊 Document Comparison");
+        eprintln!("═══════════════════════");
+        
+        // Construct the full URL that was fetched
+        let full_url = format!("{}/{}", remote_url.trim_end_matches('/'), _did);
+        eprintln!("   Remote URL: {}", full_url);
+        eprintln!("   Fetch time: {:?}", fetch_duration);
+        eprintln!();
 
-    // Compare verificationMethod
-    if local.verification_method.len() == remote.verification_method.len() {
-        let mut all_match = true;
-        for (i, (local_vm, remote_vm)) in local.verification_method.iter().zip(remote.verification_method.iter()).enumerate() {
-            if local_vm.id != remote_vm.id || local_vm.public_key_multibase != remote_vm.public_key_multibase {
-                all_match = false;
-                eprintln!("  verificationMethod[{}]: ❌ Mismatch", i);
-                eprintln!("    Local ID:  {}", local_vm.id);
-                eprintln!("    Remote ID: {}", remote_vm.id);
-                break;
-            }
-        }
-        if all_match {
-            eprintln!("  verificationMethod: ✅ Match ({} items)", local.verification_method.len());
-        }
-    } else {
-        eprintln!("  verificationMethod: ❌ Mismatch");
-        eprintln!("    Local:  {} items", local.verification_method.len());
-        eprintln!("    Remote: {} items", remote.verification_method.len());
-    }
+        let local_json = sonic_rs::to_string_pretty(local)?;
+        let remote_json = sonic_rs::to_string_pretty(remote)?;
 
-    // Compare service
-    if local.service.len() == remote.service.len() {
-        let mut all_match = true;
-        for (local_svc, remote_svc) in local.service.iter().zip(remote.service.iter()) {
-            if local_svc.id != remote_svc.id || local_svc.service_endpoint != remote_svc.service_endpoint {
-                all_match = false;
-                break;
-            }
+        if local_json == remote_json {
+            eprintln!("✅ Documents are identical");
+            eprintln!();
+            return Ok(());
         }
-        if all_match {
-            eprintln!("  service: ✅ Match ({} items)", local.service.len());
-        } else {
-            eprintln!("  service: ❌ Mismatch");
-            eprintln!("    Local:  {} items", local.service.len());
-            eprintln!("    Remote: {} items", remote.service.len());
-        }
-    } else {
-        eprintln!("  service: ❌ Mismatch");
-        eprintln!("    Local:  {} items", local.service.len());
-        eprintln!("    Remote: {} items", remote.service.len());
-    }
 
-    eprintln!();
-    eprintln!("💡 Tip: Use --raw to see full JSON documents for detailed comparison");
-    eprintln!();
+        eprintln!("⚠️  Documents differ");
+        eprintln!("💡 Tip: Enable 'similar' feature for colored diff output");
+        eprintln!();
+    }
 
     Ok(())
 }

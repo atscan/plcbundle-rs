@@ -258,26 +258,85 @@ impl Processor {
     }
 }
 
-/// Parse bundle range specification (e.g., "1-10,15,20-25")
+/// Resolve bundle keyword to concrete bundle number
+fn resolve_bundle_keyword(keyword: &str, max_bundle: u32) -> Result<u32> {
+    let keyword = keyword.trim();
+
+    if keyword == "root" {
+        return Ok(1);
+    }
+
+    if keyword == "head" {
+        return Ok(max_bundle);
+    }
+
+    // Handle "head~N" syntax
+    if let Some(rest) = keyword.strip_prefix("head~") {
+        let offset: u32 = rest.parse()
+            .map_err(|_| anyhow::anyhow!("Invalid offset in 'head~{}': expected a number", rest))?;
+        if offset >= max_bundle {
+            anyhow::bail!("Offset {} in 'head~{}' exceeds maximum bundle {}", offset, rest, max_bundle);
+        }
+        return Ok(max_bundle - offset);
+    }
+
+    // Handle "~N" shorthand syntax
+    if let Some(rest) = keyword.strip_prefix('~') {
+        let offset: u32 = rest.parse()
+            .map_err(|_| anyhow::anyhow!("Invalid offset in '~{}': expected a number", rest))?;
+        if offset >= max_bundle {
+            anyhow::bail!("Offset {} in '~{}' exceeds maximum bundle {}", offset, rest, max_bundle);
+        }
+        return Ok(max_bundle - offset);
+    }
+
+    // Not a keyword, try parsing as number
+    let num: u32 = keyword.parse()
+        .map_err(|_| anyhow::anyhow!("Invalid bundle specifier: '{}' (expected number, 'root', 'head', 'head~N', or '~N')", keyword))?;
+    Ok(num)
+}
+
+/// Parse bundle range specification (e.g., "1-10,15,20-25", "head", "head~5", "root")
 pub fn parse_bundle_range(spec: &str, max_bundle: u32) -> Result<Vec<u32>> {
+    if max_bundle == 0 {
+        anyhow::bail!("No bundles available");
+    }
+
     let mut bundles = Vec::new();
     for part in spec.split(',') {
         let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+
         if part.contains('-') {
             let range: Vec<&str> = part.split('-').collect();
             if range.len() != 2 {
                 anyhow::bail!("Invalid range format: {}", part);
             }
-            let start: u32 = range[0].parse()?;
-            let end: u32 = range[1].parse()?;
-            if start > end || start == 0 || end > max_bundle {
-                anyhow::bail!("Invalid range: {}-{}", start, end);
+            let start_str = range[0].trim();
+            let end_str = range[1].trim();
+
+            let start = resolve_bundle_keyword(start_str, max_bundle)?;
+            let end = resolve_bundle_keyword(end_str, max_bundle)?;
+
+            if start == 0 || end == 0 {
+                anyhow::bail!("Bundle number cannot be 0");
+            }
+            if start > end {
+                anyhow::bail!("Invalid range: {} > {} (start must be <= end)", start, end);
+            }
+            if start > max_bundle || end > max_bundle {
+                anyhow::bail!("Invalid range: {}-{} (exceeds maximum bundle {})", start, end, max_bundle);
             }
             bundles.extend(start..=end);
         } else {
-            let num: u32 = part.parse()?;
-            if num == 0 || num > max_bundle {
-                anyhow::bail!("Bundle number {} out of range", num);
+            let num = resolve_bundle_keyword(part, max_bundle)?;
+            if num == 0 {
+                anyhow::bail!("Bundle number cannot be 0");
+            }
+            if num > max_bundle {
+                anyhow::bail!("Bundle number {} out of range (max: {})", num, max_bundle);
             }
             bundles.push(num);
         }

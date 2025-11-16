@@ -4,7 +4,8 @@ use anyhow::Result;
 use clap::Args;
 use plcbundle::{
     constants,
-    sync::{CliLogger, PLCClient, ServerLogger, SyncConfig, SyncManager},
+    plc_client::PLCClient,
+    sync::{CliLogger, ServerLogger, SyncConfig, SyncManager},
 };
 use std::path::PathBuf;
 use std::sync::Arc;

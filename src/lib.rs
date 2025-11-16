@@ -12,6 +12,7 @@ pub mod manager;
 pub mod mempool;
 pub mod operations;
 pub mod options;
+pub mod plc_client;
 pub mod processor;
 pub mod remote;
 pub mod resolver;
@@ -30,7 +31,8 @@ pub use constants::{
 pub use did_index::{DIDLookupStats, DIDLookupTimings};
 pub use format::{
     format_bytes, format_bytes_compact, format_bytes_per_sec, format_duration_compact,
-    format_duration_verbose, format_number, format_std_duration, format_std_duration_ms,
+    format_duration_verbose, format_number, format_std_duration, format_std_duration_auto,
+    format_std_duration_ms,
 };
 pub use handle_resolver::{HandleResolver, is_handle, normalize_handle, validate_handle_format};
 pub use index::{BundleMetadata, Index};
@@ -46,11 +48,12 @@ pub use mempool::{Mempool, MempoolStats};
 pub use operations::{Operation, OperationFilter, OperationRequest, OperationWithLocation};
 pub use options::{Options, OptionsBuilder, QueryMode};
 pub use processor::{OutputHandler, Processor, QueryEngine, Stats, parse_bundle_range};
-pub use remote::{fetch_bundle_operations, fetch_index, fetch_operation};
+// remote functions are methods on RemoteClient, not standalone functions
 pub use resolver::{
     AuditLogEntry, DIDDocument, DIDState, build_did_state, format_audit_log, resolve_did_document,
     validate_did_format,
 };
+pub use plc_client::PLCClient;
 pub use sync::{
-    CliLogger, PLCClient, ServerLogger, SyncConfig, SyncEvent, SyncLogger, SyncManager, SyncStats,
+    CliLogger, ServerLogger, SyncConfig, SyncEvent, SyncLogger, SyncManager, SyncStats,
 };
