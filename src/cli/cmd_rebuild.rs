@@ -2,7 +2,7 @@
 use super::progress::ProgressBar;
 use super::utils::{format_bytes, HasGlobalFlags};
 use anyhow::Result;
-use clap::Args;
+use clap::{Args, ValueHint};
 use plcbundle::BundleManager;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -42,7 +42,7 @@ pub struct RebuildCommand {
     pub dry_run: bool,
 
     /// Set origin URL (default: auto-detect from first bundle)
-    #[arg(long)]
+    #[arg(long, value_hint = ValueHint::Url)]
     pub origin: Option<String>,
 }
 

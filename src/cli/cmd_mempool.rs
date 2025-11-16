@@ -2,7 +2,7 @@
 use super::utils;
 use super::utils::HasGlobalFlags;
 use anyhow::Result;
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueHint};
 use plcbundle::format::format_number;
 use plcbundle::{BundleManager, constants};
 use std::io::{self, Write};
@@ -68,7 +68,7 @@ pub enum MempoolSubcommand {
     #[command(alias = "export", alias = "d")]
     Dump {
         /// Output file (default: stdout)
-        #[arg(short, long)]
+        #[arg(short, long, value_hint = ValueHint::FilePath)]
         output: Option<PathBuf>,
     },
 }

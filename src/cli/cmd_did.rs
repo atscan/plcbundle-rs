@@ -1,6 +1,6 @@
 // DID Resolution and Query commands
 use anyhow::{Context, Result};
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueHint};
 use plcbundle::{BundleManager, DIDLookupStats, DIDLookupTimings};
 use std::path::PathBuf;
 
@@ -59,7 +59,7 @@ pub struct HandleCommand {
     pub handle: String,
 
     /// Handle resolver URL (defaults to quickdid.smokesignal.tools)
-    #[arg(long)]
+    #[arg(long, value_hint = ValueHint::Url)]
     pub handle_resolver: Option<String>,
 }
 
@@ -90,7 +90,7 @@ pub enum DIDCommands {
         did: Option<String>,
 
         /// Handle resolver URL (e.g., https://quickdid.smokesignal.tools)
-        #[arg(long)]
+        #[arg(long, value_hint = ValueHint::Url)]
         handle_resolver: Option<String>,
 
         /// Query DID document JSON using JMESPath expression
@@ -112,7 +112,7 @@ pub enum DIDCommands {
         /// Fetches the DID document from the remote PLC directory and compares it
         /// with the document resolved from local bundles. Shows differences if any.
         /// If URL is not provided, uses the repository origin from the local index.
-        #[arg(long, value_name = "URL", num_args = 0..=1)]
+        #[arg(long, value_name = "URL", num_args = 0..=1, value_hint = ValueHint::Url)]
         compare: Option<Option<String>>,
     },
 
@@ -159,7 +159,7 @@ pub enum DIDCommands {
         threads: usize,
 
         /// Output file
-        #[arg(short, long)]
+        #[arg(short, long, value_hint = ValueHint::FilePath)]
         output: Option<PathBuf>,
 
         /// Read from stdin

@@ -1,6 +1,6 @@
 // Server command - start HTTP server
 use anyhow::{Context, Result};
-use clap::Args;
+use clap::{Args, ValueHint};
 use std::path::PathBuf;
 use tokio::time::Duration;
 
@@ -69,7 +69,7 @@ pub struct ServerCommand {
     pub sync: bool,
 
     /// PLC directory URL (for sync mode)
-    #[arg(long, default_value = plcbundle::constants::DEFAULT_PLC_DIRECTORY_URL, help_heading = "Sync Options")]
+    #[arg(long, default_value = plcbundle::constants::DEFAULT_PLC_DIRECTORY_URL, help_heading = "Sync Options", value_hint = ValueHint::Url)]
     pub plc: String,
 
     /// Sync interval (how often to check for new bundles)
@@ -89,7 +89,7 @@ pub struct ServerCommand {
     pub resolver: bool,
 
     /// Handle resolver URL (defaults to quickdid.smokesignal.tools if not provided)
-    #[arg(long, help_heading = "Feature Options")]
+    #[arg(long, help_heading = "Feature Options", value_hint = ValueHint::Url)]
     pub handle_resolver: Option<String>,
 
 }

@@ -1,7 +1,7 @@
 // Inspect command - deep analysis of bundle contents
 use anyhow::Result;
 use chrono::DateTime;
-use clap::Args;
+use clap::{Args, ValueHint};
 use plcbundle::constants;
 use plcbundle::format::{format_bytes, format_duration_verbose, format_number};
 use plcbundle::{BundleManager, LoadOptions, Operation};
@@ -45,6 +45,7 @@ quality issues, and analyzing patterns in the PLC directory data.",
 )]
 pub struct InspectCommand {
     /// Bundle number or file path to inspect
+    #[arg(value_hint = ValueHint::AnyPath)]
     pub target: String,
 
     /// Output as JSON

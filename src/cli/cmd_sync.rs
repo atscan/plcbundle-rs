@@ -1,7 +1,7 @@
 use super::utils;
 use super::utils::HasGlobalFlags;
 use anyhow::Result;
-use clap::Args;
+use clap::{Args, ValueHint};
 use plcbundle::{
     constants,
     plc_client::PLCClient,
@@ -45,7 +45,7 @@ maintains chain integrity throughout the sync process.",
 )]
 pub struct SyncCommand {
     /// PLC directory URL
-    #[arg(long, default_value = constants::DEFAULT_PLC_DIRECTORY_URL)]
+    #[arg(long, default_value = constants::DEFAULT_PLC_DIRECTORY_URL, value_hint = ValueHint::Url)]
     pub plc: String,
 
     /// Keep syncing (run as daemon)

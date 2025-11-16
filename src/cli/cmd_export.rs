@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::Args;
+use clap::{Args, ValueHint};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
@@ -90,7 +90,7 @@ pub struct ExportCommand {
     pub all: bool,
 
     /// Output file (default: stdout)
-    #[arg(short, long)]
+    #[arg(short, long, value_hint = ValueHint::FilePath)]
     pub output: Option<PathBuf>,
 
     /// Limit number of operations to export

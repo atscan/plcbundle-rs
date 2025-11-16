@@ -1,6 +1,6 @@
 // Compare command - compare repositories
 use anyhow::{Context, Result, bail};
-use clap::Args;
+use clap::{Args, ValueHint};
 use plcbundle::{BundleManager, constants, remote};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -45,6 +45,7 @@ index URL, or a local file path to another repository's index file.",
 )]
 pub struct CompareCommand {
     /// Target to compare against (URL or local path)
+    #[arg(value_hint = ValueHint::AnyPath)]
     pub target: String,
 
     /// Deep comparison of specific bundle (alias: --bundles)

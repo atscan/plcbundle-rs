@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueHint};
 use plcbundle::*;
 use std::path::PathBuf;
 
@@ -7,8 +7,9 @@ use std::path::PathBuf;
 mod cmd_bench;
 mod cmd_clean;
 mod cmd_clone;
-mod cmd_did;
+mod cmd_completions;
 mod cmd_compare;
+mod cmd_did;
 mod cmd_export;
 mod cmd_index;
 mod cmd_init;
@@ -54,7 +55,7 @@ fn format_help_template() -> &'static str {
         "  rollback  Rollback repository to earlier state\n",
         "\n",
         "Query & Export:\n",
-        "  query     Query bundles with JMESPath or simple path\n",
+        "  query, q  Query bundles with JMESPath or simple path\n",
         "  export    Export operations to stdout or file\n",
         "  op        Operation queries and inspection\n",
         "  stats     Display statistics about bundles\n",
@@ -79,6 +80,9 @@ fn format_help_template() -> &'static str {
         "  bench     Benchmark bundle operations\n",
         "  random    Output random DIDs sampled from the index\n",
         "\n",
+        "Utilities:\n",
+        "  completions Generate shell completion scripts\n",
+        "\n",
         "See 'plcbundle <COMMAND> --help' for more information on a specific command.\n"
     )
 }
@@ -97,9 +101,9 @@ fn format_help_template() -> &'static str {
 #[command(author)]
 #[command(propagate_version = true)]
 #[command(help_template = format_help_template())]
-struct Cli {
+pub struct Cli {
     /// Repository directory
-    #[arg(short = 'C', long = "dir", global = true, default_value = ".")]
+    #[arg(short = 'C', long = "dir", global = true, default_value = ".", value_hint = ValueHint::DirPath)]
     dir: PathBuf,
 
     /// Suppress progress output
@@ -139,6 +143,7 @@ enum Commands {
     Mempool(cmd_mempool::MempoolCommand),
     Bench(cmd_bench::BenchCommand),
     Random(cmd_random::RandomCommand),
+    Completions(cmd_completions::CompletionsCommand),
 }
 
 fn main() -> Result<()> {
@@ -171,6 +176,7 @@ fn main() -> Result<()> {
         Commands::Bench(cmd) => cmd_bench::run(cmd, cli.dir, cli.verbose)?,
         Commands::Random(cmd) => cmd_random::run(cmd, cli.dir)?,
         Commands::Clean(cmd) => cmd_clean::run(cmd, cli.dir, cli.verbose)?,
+        Commands::Completions(cmd) => cmd_completions::run(cmd)?,
     }
 
     Ok(())

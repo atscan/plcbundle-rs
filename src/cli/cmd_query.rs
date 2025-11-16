@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::{Args, ValueEnum};
+use clap::{Args, ValueEnum, ValueHint};
 use plcbundle::*;
 use std::io::Write;
 use std::path::PathBuf;
@@ -31,6 +31,7 @@ default, making it easy to pipe to other tools like jq or process in scripts.
 Use --json for pretty-printed JSON output, or --stats-only to see query
 statistics without outputting results.",
     alias = "q",
+    visible_alias = "q",
     help_template = crate::clap_help!(
         examples: "  # Simple path query (extract DID field)\n  \
                    {bin} query did\n\n  \
@@ -76,7 +77,7 @@ pub struct QueryCommand {
     pub json: bool,
 
     /// Output file (default: stdout)
-    #[arg(short, long)]
+    #[arg(short, long, value_hint = ValueHint::FilePath)]
     pub output: Option<PathBuf>,
 
     /// Show statistics only, don't output results

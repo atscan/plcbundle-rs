@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://tangled.org/atscan.net/plcbundle-rs"
 
 [[bin]]
-name = "plcbundle-rs"
+name = "plcbundle"
 path = "src/cli/mod.rs"
 
 [lib]
@@ -34,6 +34,7 @@ httpdate = "1.0"
 
 # Optional CLI dependencies
 clap = { version = "4.5", features = ["derive"], optional = true }
+clap_complete = { version = "4.5", optional = true }
 indicatif = { version = "0.18", optional = true }
 log = { version = "0.4", optional = true }
 env_logger = { version = "0.11", optional = true }
@@ -62,5 +63,5 @@ tempfile = "3.23"
 
 [features]
 default = ["cli"]
-cli = ["clap", "indicatif", "log", "env_logger", "dialoguer", "crossterm", "colored", "colored_json", "is-terminal", "similar", "ctrlc"]
+cli = ["clap", "clap_complete", "indicatif", "log", "env_logger", "dialoguer", "crossterm", "colored", "colored_json", "is-terminal", "similar", "ctrlc"]
 server = ["axum", "tower", "tower-http", "tokio-tungstenite", "tokio-util", "futures-util", "crossterm"]

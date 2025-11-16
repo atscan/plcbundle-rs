@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::Args;
+use clap::{Args, ValueHint};
 use plcbundle::{constants, BundleManager};
 use std::path::PathBuf;
 
@@ -31,15 +31,15 @@ to use immediately after initialization.",
 )]
 pub struct InitCommand {
     /// Directory to initialize (default: current directory)
-    #[arg(default_value = ".")]
+    #[arg(default_value = ".", value_hint = ValueHint::DirPath)]
     pub dir: PathBuf,
 
     /// PLC Directory URL (if not provided, will prompt interactively)
-    #[arg(long)]
+    #[arg(long, value_hint = ValueHint::Url)]
     pub plc: Option<String>,
 
     /// Origin identifier for this repository (deprecated: use --plc instead)
-    #[arg(long, hide = true)]
+    #[arg(long, hide = true, value_hint = ValueHint::Url)]
     pub origin: Option<String>,
 
     /// Force initialization even if directory already exists

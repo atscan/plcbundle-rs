@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::Args;
+use clap::{Args, ValueHint};
 use plcbundle::{constants, remote::RemoteClient, BundleManager};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -33,9 +33,11 @@ is immediately ready to use with all standard commands.",
 )]
 pub struct CloneCommand {
     /// Remote plcbundle instance URL
+    #[arg(value_hint = ValueHint::Url)]
     pub source_url: String,
 
     /// Target directory for cloned repository
+    #[arg(value_hint = ValueHint::DirPath)]
     pub target_dir: PathBuf,
 
     /// Number of parallel downloads (default: 4)
