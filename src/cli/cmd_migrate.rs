@@ -30,12 +30,18 @@ Original files are replaced atomically. Use --dry-run to preview.",
     after_help = "Examples:\n  \
         # Preview migration (recommended first)\n  \
         plcbundle migrate --dry-run\n\n  \
-        # Migrate all legacy bundles\n  \
+        # Migrate all legacy bundles (auto-detects CPU cores)\n  \
         plcbundle migrate\n\n  \
+        # Migrate specific bundle range\n  \
+        plcbundle migrate --bundles 1-100\n\n  \
+        # Migrate single bundle\n  \
+        plcbundle migrate --bundles 42\n\n  \
+        # Migrate multiple ranges\n  \
+        plcbundle migrate --bundles 1-10,20-30,50\n\n  \
         # Force migration even if frame metadata exists\n  \
         plcbundle migrate --force\n\n  \
-        # Parallel migration (faster)\n  \
-        plcbundle migrate --workers 8\n\n  \
+        # Limit workers (if needed for resource constraints)\n  \
+        plcbundle migrate --workers 4\n\n  \
         # Verbose output\n  \
         plcbundle migrate -v"
 )]
@@ -48,7 +54,12 @@ pub struct MigrateCommand {
     #[arg(short, long)]
     pub force: bool,
 
-    /// Number of parallel workers (0 = auto-detect)
+    /// Bundle range to migrate (e.g., \"1-100\", \"42\", \"1-10,20-30\", \"latest:10\")
+    /// If not specified, migrates all bundles that need migration
+    #[arg(long)]
+    pub bundles: Option<String>,
+
+    /// Number of parallel workers (0 = auto-detect CPU cores, default)
     #[arg(short, long, default_value = "0")]
     pub workers: usize,
 
@@ -70,7 +81,7 @@ pub fn run(mut cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Resul
     // Auto-detect number of workers if 0
     let workers = super::utils::get_worker_threads(cmd.workers, 4);
 
-    eprintln!("Scanning for legacy bundles in: {}\n", dir.display());
+    eprintln!("Scanning for legacy bundles in: {}\n", super::utils::display_path(&dir).display());
 
     let index = manager.get_index();
     let bundles = &index.bundles;
@@ -80,12 +91,28 @@ pub fn run(mut cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Resul
         return Ok(());
     }
 
+    // Determine which bundles to consider for migration
+    let last_bundle = index.last_bundle;
+    let target_bundles: Option<std::collections::HashSet<u32>> = if let Some(ref bundles_spec) = cmd.bundles {
+        let bundle_list = super::utils::parse_bundle_spec(Some(bundles_spec.clone()), last_bundle)?;
+        Some(bundle_list.into_iter().collect())
+    } else {
+        None
+    };
+
     // Check which bundles need migration
     let mut needs_migration = Vec::new();
     let mut total_size = 0u64;
     let mut format_counts = std::collections::HashMap::new();
 
     for meta in bundles {
+        // Filter by bundle range if specified
+        if let Some(ref target_set) = target_bundles {
+            if !target_set.contains(&meta.bundle_number) {
+                continue;
+            }
+        }
+
         let embedded_meta = manager.get_embedded_metadata(meta.bundle_number)?;
         let (old_format, has_frame_offsets) = match embedded_meta {
             Some(ref m) if !m.frame_offsets.is_empty() => (m.format.clone(), true),
@@ -110,7 +137,11 @@ pub fn run(mut cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Resul
     }
 
     if needs_migration.is_empty() {
-        eprintln!("✓ All bundles already migrated");
+        if let Some(ref bundles_spec) = cmd.bundles {
+            eprintln!("No bundles in range '{}' need migration", bundles_spec);
+        } else {
+            eprintln!("✓ All bundles already migrated");
+        }
         eprintln!("\nUse --force to re-migrate");
         return Ok(());
     }
@@ -121,6 +152,10 @@ pub fn run(mut cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Resul
     // Show migration plan
     eprintln!("Migration Plan");
     eprintln!("══════════════\n");
+    
+    if let Some(ref bundles_spec) = cmd.bundles {
+        eprintln!("  Range:    {}", bundles_spec);
+    }
 
     let mut format_parts = Vec::new();
     for (format, count) in &format_counts {

@@ -97,7 +97,8 @@ impl BundleManager {
         handle_resolver_url: Option<String>,
     ) -> Result<Self> {
         let init_start = std::time::Instant::now();
-        log::debug!("[BundleManager] Initializing BundleManager from: {}", directory.display());
+        let display_dir = directory.canonicalize().unwrap_or_else(|_| directory.clone());
+        log::debug!("[BundleManager] Initializing BundleManager from: {}", display_dir.display());
         let index = Index::load(&directory)?;
 
         let handle_resolver =
@@ -1822,6 +1823,8 @@ impl BundleManager {
             } else {
                 None
             },
+            uncompressed_size: Some(uncompressed_size),
+            compressed_size: Some(compressed_size),
             operation_count: operation_count as usize,
             did_count: did_count as usize,
             start_time: start_time.clone(),
@@ -2158,6 +2161,8 @@ impl BundleManager {
             } else {
                 None
             },
+            Some(uncompressed_size),
+            Some(compressed_size),
             operation_count as usize,
             did_count as usize,
             &start_time,
@@ -2695,7 +2700,7 @@ impl BundleManager {
         progress_cb: Option<F>,
     ) -> Result<Index>
     where
-        F: Fn(usize, usize),
+        F: Fn(usize, usize, u64, u64) + Send + Sync, // (current, total, bytes_processed, total_bytes)
     {
         let index = Index::rebuild_from_bundles(&directory, origin, progress_cb)?;
         index.save(&directory)?;

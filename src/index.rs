@@ -38,7 +38,8 @@ pub struct BundleMetadata {
 impl Index {
     pub fn load<P: AsRef<Path>>(directory: P) -> Result<Self> {
         let index_path = directory.as_ref().join("plc_bundles.json");
-        log::debug!("[BundleManager] Loading index from: {}", index_path.display());
+        let display_path = index_path.canonicalize().unwrap_or_else(|_| index_path.clone());
+        log::debug!("[BundleManager] Loading index from: {}", display_path.display());
         let start = std::time::Instant::now();
         let file = File::open(&index_path)?;
         let index: Index = sonic_rs::from_reader(file)?;
@@ -145,7 +146,7 @@ impl Index {
         progress_cb: Option<F>,
     ) -> Result<Self>
     where
-        F: Fn(usize, usize),
+        F: Fn(usize, usize, u64, u64) + Send + Sync, // (current, total, bytes_processed, total_bytes)
     {
         use anyhow::Context;
 
@@ -183,91 +184,117 @@ impl Index {
         // Sort by bundle number
         bundle_files.sort_by_key(|(num, _)| *num);
 
-        // Extract metadata from each bundle
-        let mut bundles_metadata: Vec<BundleMetadata> = Vec::new();
-        let mut total_compressed_size = 0u64;
-        let mut total_uncompressed_size = 0u64;
-        let mut detected_origin: Option<String> = origin;
+        // Pre-calculate total bytes for progress tracking (parallel)
+        use rayon::prelude::*;
+        let total_bytes: u64 = bundle_files
+            .par_iter()
+            .filter_map(|(_, bundle_path)| std::fs::metadata(bundle_path).ok())
+            .map(|metadata| metadata.len())
+            .sum();
 
-        for (i, (bundle_num, bundle_path)) in bundle_files.iter().enumerate() {
-            if let Some(ref cb) = progress_cb {
-                cb(i + 1, bundle_files.len());
-            }
+        // Extract metadata from each bundle in parallel
+        use std::sync::{Arc, Mutex};
+        use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
+        
+        let detected_origin: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(origin));
+        let progress_cb_arc: Arc<Mutex<Option<F>>> = Arc::new(Mutex::new(progress_cb));
+        let count_atomic = Arc::new(AtomicUsize::new(0));
+        let bytes_atomic = Arc::new(AtomicU64::new(0));
+        
+        // Update progress bar less frequently to reduce contention
+        let update_interval = (rayon::current_num_threads().max(1) * 4).max(10);
 
-            // Extract embedded metadata from bundle file
-            let embedded = crate::bundle_format::extract_metadata_from_file(bundle_path)
-                .with_context(|| format!("Failed to extract metadata from bundle {:06}", bundle_num))?;
+        // Process bundles in parallel
+        let bundle_count = bundle_files.len();
+        let mut bundles_metadata: Vec<BundleMetadata> = bundle_files
+            .par_iter()
+            .map(|(bundle_num, bundle_path)| -> Result<BundleMetadata> {
+                // Get file size
+                let metadata = std::fs::metadata(bundle_path)?;
+                let compressed_size = metadata.len();
+                let bytes_processed = bytes_atomic.fetch_add(compressed_size, Ordering::Relaxed) + compressed_size;
+                let current_count = count_atomic.fetch_add(1, Ordering::Relaxed) + 1;
 
-            // Auto-detect origin from first bundle if not provided
-            if detected_origin.is_none() {
-                detected_origin = Some(embedded.origin.clone());
-            }
-
-            // Verify origin matches
-            if let Some(ref expected_origin) = detected_origin {
-                if embedded.origin != *expected_origin {
-                    anyhow::bail!(
-                        "Bundle {:06}: origin mismatch (expected '{}', got '{}')",
-                        bundle_num,
-                        expected_origin,
-                        embedded.origin
-                    );
+                // Update progress periodically
+                if current_count % update_interval == 0 || current_count == 1 || current_count == bundle_count {
+                    if let Ok(cb_guard) = progress_cb_arc.lock() {
+                        if let Some(ref cb) = *cb_guard {
+                            cb(current_count, bundle_count, bytes_processed, total_bytes);
+                        }
+                    }
                 }
-            }
 
-            // Get file size
-            let metadata = std::fs::metadata(bundle_path)?;
-            let compressed_size = metadata.len();
+                // Extract embedded metadata from bundle file
+                let embedded = crate::bundle_format::extract_metadata_from_file(bundle_path)
+                    .with_context(|| format!("Failed to extract metadata from bundle {:06}", bundle_num))?;
 
-            // Calculate compressed hash
-            let compressed_data = std::fs::read(bundle_path)?;
-            let compressed_hash = {
-                use sha2::{Digest, Sha256};
-                let mut hasher = Sha256::new();
-                hasher.update(&compressed_data);
-                format!("{:x}", hasher.finalize())
-            };
+                // Auto-detect origin from first bundle if not provided
+                {
+                    let mut origin_guard = detected_origin.lock().unwrap();
+                    if origin_guard.is_none() {
+                        *origin_guard = Some(embedded.origin.clone());
+                    }
+                }
 
-            // Build bundle metadata for index
-            let bundle_meta = BundleMetadata {
-                bundle_number: *bundle_num,
-                start_time: embedded.start_time.clone(),
-                end_time: embedded.end_time.clone(),
-                operation_count: embedded.operation_count as u32,
-                did_count: embedded.did_count as u32,
-                hash: String::new(), // Will be calculated after collecting all
-                content_hash: embedded.content_hash.clone(),
-                parent: String::new(), // Will be set during chain hash calculation
-                compressed_hash,
-                compressed_size,
-                uncompressed_size: 0, // Will need to decompress to get exact size
-                cursor: String::new(), // Will be set from previous bundle's end_time
-                created_at: embedded.created_at.clone(),
-            };
+                // Verify origin matches
+                {
+                    let origin_guard = detected_origin.lock().unwrap();
+                    if let Some(ref expected_origin) = *origin_guard {
+                        if embedded.origin != *expected_origin {
+                            anyhow::bail!(
+                                "Bundle {:06}: origin mismatch (expected '{}', got '{}')",
+                                bundle_num,
+                                expected_origin,
+                                embedded.origin
+                            );
+                        }
+                    }
+                }
 
-            total_compressed_size += compressed_size;
-            bundles_metadata.push(bundle_meta);
-        }
+                // Calculate compressed hash
+                let compressed_data = std::fs::read(bundle_path)?;
+                let compressed_hash = {
+                    use sha2::{Digest, Sha256};
+                    let mut hasher = Sha256::new();
+                    hasher.update(&compressed_data);
+                    format!("{:x}", hasher.finalize())
+                };
 
-        // Calculate uncompressed sizes and chain hashes
+                // Get uncompressed_size from embedded metadata if available
+                // Fall back to 0 for legacy bundles without this field
+                let uncompressed_size = embedded.uncompressed_size.unwrap_or(0);
+
+                // Build bundle metadata for index
+                Ok(BundleMetadata {
+                    bundle_number: *bundle_num,
+                    start_time: embedded.start_time.clone(),
+                    end_time: embedded.end_time.clone(),
+                    operation_count: embedded.operation_count as u32,
+                    did_count: embedded.did_count as u32,
+                    hash: String::new(), // Will be calculated after collecting all
+                    content_hash: embedded.content_hash.clone(),
+                    parent: String::new(), // Will be set during chain hash calculation
+                    compressed_hash,
+                    compressed_size,
+                    uncompressed_size,
+                    cursor: String::new(), // Will be set from previous bundle's end_time
+                    created_at: embedded.created_at.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // Sort by bundle number to maintain order (parallel processing may reorder)
+        bundles_metadata.sort_by_key(|b| b.bundle_number);
+
+        let total_compressed_size: u64 = bundles_metadata.iter().map(|b| b.compressed_size).sum();
+        let detected_origin = detected_origin.lock().unwrap().clone();
+
+        // Calculate total uncompressed size
+        // Note: For legacy bundles without uncompressed_size in metadata, it will be 0
+        let total_uncompressed_size: u64 = bundles_metadata.iter().map(|b| b.uncompressed_size).sum();
+
+        // Calculate chain hashes sequentially (depends on previous bundles)
         for i in 0..bundles_metadata.len() {
-            if let Some(ref cb) = progress_cb {
-                cb(i + 1, bundles_metadata.len());
-            }
-
-            // Get uncompressed size by loading the bundle
-            let bundle_num = bundles_metadata[i].bundle_number;
-            let bundle_path = crate::constants::bundle_path(dir, bundle_num);
-
-            if let Ok(ops) = crate::bundle_format::load_bundle_as_json_strings(&bundle_path) {
-                let uncompressed_jsonl: String = ops.iter()
-                    .map(|op| format!("{}\n", op))
-                    .collect();
-                bundles_metadata[i].uncompressed_size = uncompressed_jsonl.len() as u64;
-                total_uncompressed_size += bundles_metadata[i].uncompressed_size;
-            }
-
-            // Set parent hash and calculate chain hash
             if i == 0 {
                 // Genesis bundle
                 use sha2::{Digest, Sha256};

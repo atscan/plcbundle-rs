@@ -15,7 +15,7 @@ impl ProgressBar {
         let pb = IndicatifProgressBar::new(total as u64);
         pb.set_style(
             ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} | {per_sec:.1}/s | {msg} | ETA: {eta}")
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} | {per_sec:.1} | {msg} | ETA: {eta}")
                 .unwrap()
                 .progress_chars("█▓▒░ "),
         );

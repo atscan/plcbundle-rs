@@ -56,7 +56,7 @@ impl HasGlobalFlags for RebuildCommand {
 pub fn run(mut cmd: RebuildCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
     // Merge global verbose flag with command's verbose flag
     cmd.verbose = cmd.verbose || global_verbose;
-    eprintln!("Rebuilding bundle index from: {}\n", dir.display());
+    eprintln!("Rebuilding bundle index from: {}\n", super::utils::display_path(&dir).display());
 
     let start = Instant::now();
 
@@ -72,13 +72,13 @@ pub fn run(mut cmd: RebuildCommand, dir: PathBuf, global_verbose: bool) -> Resul
     let index = BundleManager::rebuild_index(
         &dir,
         cmd.origin,
-        Some(move |current, total| {
+        Some(move |current, total, bytes_processed, total_bytes| {
             let mut pb_guard = progress_bar_clone.lock().unwrap();
             if pb_guard.is_none() {
-                *pb_guard = Some(ProgressBar::new(total));
+                *pb_guard = Some(ProgressBar::with_bytes(total, total_bytes));
             }
             if let Some(ref pb) = *pb_guard {
-                pb.set(current);
+                pb.set_with_bytes(current, bytes_processed);
             }
         }),
     )?;

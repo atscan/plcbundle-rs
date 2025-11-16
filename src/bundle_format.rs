@@ -33,6 +33,14 @@ pub struct BundleMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_hash: Option<String>,
 
+    /// Total uncompressed size in bytes
+    #[serde(default)]
+    pub uncompressed_size: Option<u64>,
+
+    /// Total compressed size in bytes (excluding metadata frame)
+    #[serde(default)]
+    pub compressed_size: Option<u64>,
+
     /// Number of operations
     pub operation_count: usize,
 
@@ -483,6 +491,8 @@ pub fn create_bundle_metadata(
     origin: &str,
     content_hash: &str,
     parent_hash: Option<&str>,
+    uncompressed_size: Option<u64>,
+    compressed_size: Option<u64>,            
     operation_count: usize,
     did_count: usize,
     start_time: &str,
@@ -497,8 +507,10 @@ pub fn create_bundle_metadata(
         origin: origin.to_string(),
         content_hash: content_hash.to_string(),
         parent_hash: parent_hash.map(|s| s.to_string()),
+        uncompressed_size,
+        compressed_size,              
         operation_count,
-        did_count,
+        did_count,  
         start_time: start_time.to_string(),
         end_time: end_time.to_string(),
         created_at: chrono::Utc::now().to_rfc3339(),
@@ -657,6 +669,8 @@ mod tests {
             origin: constants::DEFAULT_PLC_DIRECTORY_URL.to_string(),
             content_hash: "abc123".to_string(),
             parent_hash: None,
+            uncompressed_size: None,
+            compressed_size: None,
             operation_count: 10000,
             did_count: 5000,
             start_time: "2024-01-01T00:00:00Z".to_string(),
