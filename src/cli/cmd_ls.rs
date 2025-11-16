@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Args;
-use plcbundle::format::format_duration_compact;
+use plcbundle::format::{format_bytes_compact, format_duration_compact};
 use std::path::PathBuf;
 
 #[derive(Args)]
@@ -9,6 +9,8 @@ use std::path::PathBuf;
     after_help = "Examples:\n  \
             # List all bundles\n  \
             plcbundle ls\n\n  \
+            # Human-readable sizes\n  \
+            plcbundle ls -h\n\n  \
             # Last 10 bundles\n  \
             plcbundle ls -n 10\n\n  \
             # Oldest first\n  \
@@ -33,7 +35,15 @@ pub struct LsCommand {
     #[arg(long)]
     pub reverse: bool,
 
-    /// Output format: bundle,hash,date,ops,dids,size,uncompressed,ratio,timespan
+    /// Output format: bundle,hash,date,ops,dids,size,size_h,uncompressed,uncompressed_h,ratio,timespan
+    ///
+    /// Size fields:
+    ///   - size: raw bytes
+    ///   - size_mb: megabytes (decimal)
+    ///   - size_h/size_human: human-readable (e.g., "1.5K", "2.3M", "1.2G")
+    ///   - uncompressed: raw bytes
+    ///   - uncompressed_mb: megabytes (decimal)
+    ///   - uncompressed_h/uncompressed_human: human-readable (e.g., "1.5K", "2.3M")
     #[arg(long, default_value = "bundle,hash,date,ops,dids,size")]
     pub format: String,
 
@@ -44,6 +54,11 @@ pub struct LsCommand {
     /// Field separator (default: tab)
     #[arg(long, default_value = "\t")]
     pub separator: String,
+
+    /// Print human-readable sizes (e.g., 1.5K, 2.3M, 1.2G)
+    /// Automatically converts 'size' and 'uncompressed' fields to human-readable format
+    #[arg(short = 'h', long = "human-readable")]
+    pub human_readable: bool,
 }
 
 pub fn run(cmd: LsCommand, dir: PathBuf, verbose: bool, quiet: bool) -> Result<()> {
@@ -80,7 +95,7 @@ pub fn run(cmd: LsCommand, dir: PathBuf, verbose: bool, quiet: bool) -> Result<(
 
     // Print each bundle
     for meta in display_bundles {
-        print_bundle_fields(&meta, &fields, &cmd.separator);
+        print_bundle_fields(&meta, &fields, &cmd.separator, cmd.human_readable);
     }
 
     Ok(())
@@ -117,8 +132,10 @@ fn get_field_header(field: &str) -> String {
         "dids" => "dids",
         "size" | "compressed" => "size",
         "size_mb" => "size_mb",
+        "size_h" | "size_human" => "size",
         "uncompressed" => "uncompressed",
         "uncompressed_mb" => "uncompressed_mb",
+        "uncompressed_h" | "uncompressed_human" => "uncompressed",
         "ratio" => "ratio",
         "timespan" | "duration" => "timespan",
         "timespan_seconds" => "timespan_seconds",
@@ -130,14 +147,14 @@ fn get_field_header(field: &str) -> String {
     .to_string()
 }
 
-fn print_bundle_fields(meta: &plcbundle::index::BundleMetadata, fields: &[String], sep: &str) {
-    let values: Vec<String> = fields.iter().map(|f| get_field_value(meta, f)).collect();
+fn print_bundle_fields(meta: &plcbundle::index::BundleMetadata, fields: &[String], sep: &str, human_readable: bool) {
+    let values: Vec<String> = fields.iter().map(|f| get_field_value(meta, f, human_readable)).collect();
     println!("{}", values.join(sep));
 }
 
-fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str) -> String {
+fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str, human_readable: bool) -> String {
     match field {
-        "bundle" => format!("{:06}", meta.bundle_number),
+        "bundle" => format!("{}", meta.bundle_number),
 
         "hash" => meta.hash.clone(),
         "hash_short" => {
@@ -211,11 +228,25 @@ fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str) -> Stri
         "ops" | "operations" => format!("{}", meta.operation_count),
         "dids" => format!("{}", meta.did_count),
 
-        "size" | "compressed" => format!("{}", meta.compressed_size),
+        "size" | "compressed" => {
+            if human_readable {
+                format_bytes_compact(meta.compressed_size as u64)
+            } else {
+                format!("{}", meta.compressed_size)
+            }
+        },
         "size_mb" => format!("{:.2}", meta.compressed_size as f64 / (1024.0 * 1024.0)),
+        "size_h" | "size_human" => format_bytes_compact(meta.compressed_size as u64),
 
-        "uncompressed" => format!("{}", meta.uncompressed_size),
+        "uncompressed" => {
+            if human_readable {
+                format_bytes_compact(meta.uncompressed_size as u64)
+            } else {
+                format!("{}", meta.uncompressed_size)
+            }
+        },
         "uncompressed_mb" => format!("{:.2}", meta.uncompressed_size as f64 / (1024.0 * 1024.0)),
+        "uncompressed_h" | "uncompressed_human" => format_bytes_compact(meta.uncompressed_size as u64),
 
         "ratio" => {
             if meta.compressed_size > 0 {

@@ -198,10 +198,11 @@ pub fn cmd_op_get(dir: PathBuf, bundle: u32, position: Option<usize>, query: Opt
         }
 
         // Convert result to JSON string
+        // Note: jmespath uses serde_json internally, so we use serde_json here (not bundle/operation data)
         if result.is_string() {
             result.as_string().unwrap().to_string()
         } else {
-            serde_json::to_string(&result)
+            serde_json::to_string(&*result)
                 .map_err(|e| anyhow::anyhow!("Failed to serialize query result: {}", e))?
         }
     } else {

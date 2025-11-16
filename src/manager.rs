@@ -94,6 +94,18 @@ pub struct CleanResult {
     pub errors: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct CleanPreview {
+    pub files: Vec<CleanPreviewFile>,
+    pub total_size: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct CleanPreviewFile {
+    pub path: PathBuf,
+    pub size: u64,
+}
+
 impl BundleManager {
     pub fn new(directory: PathBuf) -> Result<Self> {
         Self::with_handle_resolver(directory, None)
@@ -728,6 +740,7 @@ impl BundleManager {
             eprintln!("   Flush:    Only at end (maximum memory usage)");
         }
         eprintln!();
+        eprintln!("📊 Stage 1: Processing bundles...");
 
         let build_start = Instant::now();
 
@@ -2429,6 +2442,104 @@ impl BundleManager {
             failed,
             deleted_size,
         })
+    }
+
+    /// Preview what files would be cleaned without actually deleting them
+    ///
+    /// Scans for all `.tmp` files in:
+    /// - Repository root directory (e.g., `plc_bundles.json.tmp`)
+    /// - DID index directory `.plcbundle/` (e.g., `config.json.tmp`)
+    /// - DID index shards directory `.plcbundle/shards/` (e.g., `00.tmp`, `01.tmp`, etc.)
+    ///
+    /// # Returns
+    /// A preview of files that would be removed
+    pub fn clean_preview(&self) -> Result<CleanPreview> {
+        use std::fs;
+
+        let mut files = Vec::new();
+        let mut total_size = 0u64;
+
+        // Scan repository root directory
+        let root_dir = &self.directory;
+        if let Ok(entries) = fs::read_dir(root_dir) {
+            for entry in entries {
+                let entry = match entry {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+
+                if let Some(ext) = path.extension() {
+                    if ext == "tmp" {
+                        let file_size = match fs::metadata(&path) {
+                            Ok(meta) => meta.len(),
+                            Err(_) => 0,
+                        };
+                        total_size += file_size;
+                        files.push(CleanPreviewFile {
+                            path,
+                            size: file_size,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Scan DID index directory (.plcbundle/)
+        let did_index_dir = root_dir.join(constants::DID_INDEX_DIR);
+        if did_index_dir.exists() {
+            // Check config.json.tmp
+            let config_tmp = did_index_dir.join(format!("{}.tmp", constants::DID_INDEX_CONFIG));
+            if config_tmp.exists() {
+                let file_size = match fs::metadata(&config_tmp) {
+                    Ok(meta) => meta.len(),
+                    Err(_) => 0,
+                };
+                total_size += file_size;
+                files.push(CleanPreviewFile {
+                    path: config_tmp,
+                    size: file_size,
+                });
+            }
+
+            // Scan shards directory (.plcbundle/shards/)
+            let shards_dir = did_index_dir.join(constants::DID_INDEX_SHARDS);
+            if shards_dir.exists() {
+                if let Ok(entries) = fs::read_dir(&shards_dir) {
+                    for entry in entries {
+                        let entry = match entry {
+                            Ok(e) => e,
+                            Err(_) => continue,
+                        };
+
+                        let path = entry.path();
+                        if !path.is_file() {
+                            continue;
+                        }
+
+                        if let Some(ext) = path.extension() {
+                            if ext == "tmp" {
+                                let file_size = match fs::metadata(&path) {
+                                    Ok(meta) => meta.len(),
+                                    Err(_) => 0,
+                                };
+                                total_size += file_size;
+                                files.push(CleanPreviewFile {
+                                    path,
+                                    size: file_size,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(CleanPreview { files, total_size })
     }
 
     /// Clean up all temporary files from the repository

@@ -89,8 +89,9 @@ impl QueryEngine {
         let output = if result.is_string() {
             result.as_string().unwrap().to_string()
         } else {
-            // Convert jmespath result to JSON string via serde_json
-            serde_json::to_string(&result)
+            // Convert jmespath result to JSON string
+            // Note: jmespath uses serde_json internally, so we use serde_json here (not bundle/operation data)
+            serde_json::to_string(&*result)
                 .map_err(|e| anyhow::anyhow!("Failed to serialize result: {}", e))?
         };
 

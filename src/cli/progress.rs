@@ -12,11 +12,15 @@ pub struct ProgressBar {
 
 impl ProgressBar {
     /// Create a new progress bar
+    /// This is used for Stage 2 (shard consolidation) where per_sec isn't meaningful
+    /// and we don't want indicatif to color things red based on slow progress detection
     pub fn new(total: usize) -> Self {
         let pb = IndicatifProgressBar::new(total as u64);
+        // Remove {per_sec} from template since it's not meaningful for shard consolidation
+        // and indicatif may color it red when it detects slow progress
         pb.set_style(
             ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} | {per_sec:.1} | {msg} | ETA: {eta}")
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos:.cyan}/{len:.cyan} | {msg} | ETA: {eta}")
                 .unwrap()
                 .progress_chars("█▓▒░ "),
         );

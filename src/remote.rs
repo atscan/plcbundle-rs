@@ -2,6 +2,7 @@
 use crate::constants;
 use crate::index::Index;
 use crate::operations::Operation;
+use crate::resolver::DIDDocument;
 use crate::sync::PLCOperation;
 use anyhow::{Context, Result};
 use std::time::Duration;
@@ -135,4 +136,39 @@ pub async fn fetch_operation(base_url: &str, bundle_num: u32, position: usize) -
     } else {
         sonic_rs::to_string(&operations[position]).context("Failed to serialize operation")
     }
+}
+
+/// Fetch DID document from remote PLC directory
+pub async fn fetch_did_document(base_url: &str, did: &str) -> Result<DIDDocument> {
+    // Normalize base URL
+    let url = base_url.trim_end_matches('/').to_string();
+
+    // Construct DID document URL
+    // PLC directory typically exposes DID documents at /did/{did}
+    let did_url = format!("{}/did/{}", url, did);
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?;
+
+    let response = client
+        .get(&did_url)
+        .header("User-Agent", constants::user_agent())
+        .send()
+        .await
+        .context(format!("Failed to fetch DID document from {}", did_url))?;
+
+    if !response.status().is_success() {
+        anyhow::bail!(
+            "Unexpected status code: {} for DID document at {}",
+            response.status(),
+            did_url
+        );
+    }
+
+    let data = response.text().await?;
+    let document: DIDDocument = sonic_rs::from_str(&data)
+        .context("Failed to parse DID document JSON")?;
+
+    Ok(document)
 }

@@ -22,6 +22,33 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// Format a byte count in compact ls/df style (e.g. "1.5K", "2.3M", "1.2G").
+/// Similar to `ls -h` or `df -h` output format.
+pub fn format_bytes_compact(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["", "K", "M", "G", "T"];
+
+    if bytes == 0 {
+        return "0".to_string();
+    }
+
+    let mut size = bytes as f64;
+    let mut unit_idx = 0usize;
+
+    while size >= 1024.0 && unit_idx < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_idx += 1;
+    }
+
+    if unit_idx == 0 {
+        format!("{}", bytes)
+    } else {
+        // Use 1 decimal place, but remove trailing zero
+        let formatted = format!("{:.1}", size);
+        let trimmed = formatted.trim_end_matches('0').trim_end_matches('.');
+        format!("{}{}", trimmed, UNITS[unit_idx])
+    }
+}
+
 /// Format an integer with thousands separators (e.g. 12_345 -> "12,345").
 pub fn format_number<T>(value: T) -> String
 where

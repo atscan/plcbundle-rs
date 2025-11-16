@@ -196,41 +196,81 @@ pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize, flush_interval
     // Create progress bar with byte tracking
     use super::progress::ProgressBar;
     use std::sync::{Arc, Mutex};
-    let progress = Arc::new(Mutex::new(ProgressBar::with_bytes(manager.get_last_bundle() as usize, total_bytes)));
-    let current_stage = Arc::new(Mutex::new("Stage 1: Processing bundles".to_string()));
+    let last_bundle = manager.get_last_bundle() as u32;
+    let progress = Arc::new(Mutex::new(Some(ProgressBar::with_bytes(last_bundle as usize, total_bytes))));
+    let stage2_progress = Arc::new(Mutex::new(None::<ProgressBar>));
+    let stage2_started = Arc::new(Mutex::new(false));
+    let stage1_finished = Arc::new(Mutex::new(false));
 
     manager.build_did_index_with_threads(flush_interval, Some({
         let progress = progress.clone();
-        let current_stage = current_stage.clone();
+        let stage2_progress = stage2_progress.clone();
+        let stage2_started = stage2_started.clone();
+        let stage1_finished = stage1_finished.clone();
+        let last_bundle = last_bundle;
         move |current, total, bytes_processed, _total_bytes| {
             // Detect stage change: if total changes from bundle count to shard count (256), we're in stage 2
             let is_stage_2 = total == 256 && current <= 256;
             
             if is_stage_2 {
-                // Update stage tracking
-                {
-                    let mut stage_guard = current_stage.lock().unwrap();
-                    *stage_guard = "Stage 2: Consolidating shards".to_string();
+                // Check if this is the first time we're entering stage 2
+                let mut started = stage2_started.lock().unwrap();
+                if !*started {
+                    *started = true;
+                    drop(started);
+                    
+                    // Finish Stage 1 progress bar if not already finished
+                    // (did_index.rs already printed empty line + Stage 2 header before this callback)
+                    let mut finished = stage1_finished.lock().unwrap();
+                    if !*finished {
+                        *finished = true;
+                        drop(finished);
+                        if let Some(pb) = progress.lock().unwrap().take() {
+                            pb.finish();
+                        }
+                        // Add extra newline after Stage 1 (did_index.rs already printed one before Stage 2 header)
+                        eprintln!();
+                    }
+                    
+                    // Create new simple progress bar for Stage 2 (256 shards, no byte tracking)
+                    let mut stage2_pb = stage2_progress.lock().unwrap();
+                    *stage2_pb = Some(ProgressBar::new(256));
                 }
-                // For stage 2, update the progress bar to show shard consolidation
-                let pb_guard = progress.lock().unwrap();
-                pb_guard.set(current as usize);
-                pb_guard.set_message(format!("Stage 2: Consolidating shards ({}/{})", current, total));
+                
+                // Update Stage 2 progress bar (pos/len already shows the count, so no message needed)
+                if let Some(ref pb) = *stage2_progress.lock().unwrap() {
+                    pb.set(current as usize);
+                    pb.set_message(""); // Clear message to avoid redundant count
+                }
             } else {
-                // Update stage tracking
-                {
-                    let mut stage_guard = current_stage.lock().unwrap();
-                    *stage_guard = "Stage 1: Processing bundles".to_string();
+                // Stage 1: use byte tracking, no stage message in progress bar
+                // Check if Stage 1 is complete (current == total and total == last_bundle)
+                if current == total && total == last_bundle {
+                    let mut finished = stage1_finished.lock().unwrap();
+                    if !*finished {
+                        *finished = true;
+                        drop(finished);
+                        // Finish Stage 1 progress bar and add extra newline
+                        if let Some(pb) = progress.lock().unwrap().take() {
+                            pb.finish();
+                        }
+                        eprintln!();
+                    }
+                } else if let Some(ref pb) = *progress.lock().unwrap() {
+                    pb.set_with_bytes(current as usize, bytes_processed);
+                    // Don't set stage message - just show bytes/sec
                 }
-                // For stage 1, use byte tracking
-                let pb_guard = progress.lock().unwrap();
-                pb_guard.set_with_bytes(current as usize, bytes_processed);
-                pb_guard.set_message("Stage 1: Processing bundles");
             }
         }
     }), num_threads)?;
 
-    progress.lock().unwrap().finish();
+    // Finish the appropriate progress bar
+    if let Some(pb) = progress.lock().unwrap().take() {
+        pb.finish();
+    }
+    if let Some(pb) = stage2_progress.lock().unwrap().take() {
+        pb.finish();
+    }
 
     eprintln!();
 

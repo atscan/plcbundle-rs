@@ -1,4 +1,4 @@
-// Diff command - compare repositories
+// Compare command - compare repositories
 use anyhow::{Context, Result, bail};
 use clap::Args;
 use plcbundle::index::Index;
@@ -13,6 +13,7 @@ const RESET: &str = "\x1b[0m";
 
 #[derive(Args)]
 #[command(
+    alias = "diff",
     about = "Compare repositories",
     long_about = "Compare local repository against remote or local target\n\n\
                   Compares bundle indexes to find differences such as:\n  \
@@ -28,21 +29,21 @@ const RESET: &str = "\x1b[0m";
                     • Local file path (e.g., /path/to/plc_bundles.json)",
     after_help = "Examples:\n  \
         # High-level comparison\n  \
-        plcbundle diff https://plc.example.com\n\n  \
+        plcbundle compare https://plc.example.com\n\n  \
         # Show all differences (verbose)\n  \
-        plcbundle diff https://plc.example.com -v\n\n  \
+        plcbundle compare https://plc.example.com -v\n\n  \
         # Deep dive into specific bundle\n  \
-        plcbundle diff https://plc.example.com --bundles 23\n\n  \
+        plcbundle compare https://plc.example.com --bundles 23\n\n  \
         # Compare bundle with operation samples\n  \
-        plcbundle diff https://plc.example.com --bundles 23 --show-operations\n\n  \
+        plcbundle compare https://plc.example.com --bundles 23 --show-operations\n\n  \
         # Show first 50 operations\n  \
-        plcbundle diff https://plc.example.com --bundles 23 --sample 50"
+        plcbundle compare https://plc.example.com --bundles 23 --sample 50"
 )]
-pub struct DiffCommand {
+pub struct CompareCommand {
     /// Target to compare against (URL or local path)
     pub target: String,
 
-    /// Deep diff of specific bundle
+    /// Deep comparison of specific bundle (alias: --bundles)
     #[arg(long)]
     pub bundles: Option<String>,
 
@@ -55,17 +56,17 @@ pub struct DiffCommand {
     pub sample: usize,
 }
 
-pub fn run(cmd: DiffCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
+pub fn run(cmd: CompareCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
     let manager = super::utils::create_manager(dir.clone(), global_verbose, false)?;
 
     let rt = Runtime::new()?;
 
-    // If specific bundle requested, do detailed diff
+    // If specific bundle requested, do detailed comparison
     if let Some(bundles_str) = cmd.bundles {
         let last_bundle = manager.get_last_bundle();
         let bundle_nums = super::utils::parse_bundle_spec(Some(bundles_str), last_bundle)?;
         if bundle_nums.len() != 1 {
-            anyhow::bail!("--bundles must specify a single bundle number for diff (e.g., \"23\")");
+            anyhow::bail!("--bundles must specify a single bundle number for comparison (e.g., \"23\")");
         }
         let bundle_num = bundle_nums[0];
         rt.block_on(diff_specific_bundle(
@@ -155,7 +156,7 @@ async fn diff_indexes(
     if !comparison.hash_mismatches.is_empty() {
         eprintln!("\n💡 Tip: Investigate specific mismatches with:");
         eprintln!(
-            "   {} diff {} --bundles {} --show-operations",
+            "   {} compare {} --bundles {} --show-operations",
             binary_name, target, comparison.hash_mismatches[0].bundle_number
         );
     }
@@ -180,7 +181,7 @@ async fn diff_specific_bundle(
     sample_size: usize,
 ) -> Result<()> {
     // Store bundle_num for use in hints
-    eprintln!("\n🔬 Deep Diff: Bundle {:06}", bundle_num);
+    eprintln!("\n🔬 Deep Comparison: Bundle {:06}", bundle_num);
     eprintln!("═══════════════════════════════════════════════════════════════\n");
 
     // Get local index and check origin

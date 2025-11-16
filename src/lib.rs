@@ -29,18 +29,18 @@ pub use constants::{
 };
 pub use did_index::{DIDLookupStats, DIDLookupTimings};
 pub use format::{
-    format_bytes, format_bytes_per_sec, format_duration_compact, format_duration_verbose,
-    format_number, format_std_duration, format_std_duration_ms,
+    format_bytes, format_bytes_compact, format_bytes_per_sec, format_duration_compact,
+    format_duration_verbose, format_number, format_std_duration, format_std_duration_ms,
 };
 pub use handle_resolver::{HandleResolver, is_handle, normalize_handle, validate_handle_format};
 pub use index::{BundleMetadata, Index};
 pub use iterators::{ExportIterator, QueryIterator, RangeIterator};
 pub use manager::{
-    BundleInfo, BundleManager, BundleRange, ChainVerifyResult, ChainVerifySpec, CleanResult,
-    CompressionType, DIDIndexStats, ExportFormat, ExportSpec, InfoFlags, LoadOptions, LoadResult,
-    ManagerStats, OperationResult, QuerySpec, RebuildStats, ResolveResult, RollbackFileStats,
-    RollbackPlan, RollbackResult, RollbackSpec, SyncResult, VerifyResult, VerifySpec, WarmUpSpec,
-    WarmUpStrategy,
+    BundleInfo, BundleManager, BundleRange, ChainVerifyResult, ChainVerifySpec, CleanPreview,
+    CleanPreviewFile, CleanResult, CompressionType, DIDIndexStats, ExportFormat, ExportSpec,
+    InfoFlags, LoadOptions, LoadResult, ManagerStats, OperationResult, QuerySpec, RebuildStats,
+    ResolveResult, RollbackFileStats, RollbackPlan, RollbackResult, RollbackSpec, SyncResult,
+    VerifyResult, VerifySpec, WarmUpSpec, WarmUpStrategy,
 };
 pub use mempool::{Mempool, MempoolStats};
 pub use operations::{Operation, OperationFilter, OperationRequest, OperationWithLocation};

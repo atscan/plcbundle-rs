@@ -1,5 +1,5 @@
 // DID Resolution and Query commands
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use plcbundle::{BundleManager, DIDLookupStats, DIDLookupTimings};
 use std::path::PathBuf;
@@ -77,6 +77,14 @@ pub enum DIDCommands {
         /// Use this flag to force raw JSON output, useful for piping to other tools.
         #[arg(long = "raw")]
         raw: bool,
+
+        /// Compare DID document with remote PLC directory
+        ///
+        /// Fetches the DID document from the remote PLC directory and compares it
+        /// with the document resolved from local bundles. Shows differences if any.
+        /// If URL is not provided, uses the repository origin from the local index.
+        #[arg(long, value_name = "URL", num_args = 0..=1)]
+        compare: Option<Option<String>>,
     },
 
     /// Show DID operation log
@@ -88,6 +96,27 @@ pub enum DIDCommands {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+
+        /// Output format: bundle,position,global,status,cid,created_at,nullified
+        ///
+        /// Available fields:
+        ///   - bundle: bundle number
+        ///   - position: position within bundle
+        ///   - global/global_pos: global position (bundle * 10000 + position)
+        ///   - status: operation status (✓ or ✗)
+        ///   - cid: operation CID
+        ///   - created_at/created/date/time: creation timestamp
+        ///   - nullified: nullified flag
+        #[arg(long, default_value = "bundle,position,status,cid,created_at")]
+        format: String,
+
+        /// Omit header row
+        #[arg(long)]
+        no_header: bool,
+
+        /// Field separator (default: tab)
+        #[arg(long, default_value = "\t")]
+        separator: String,
     },
 
     /// Process multiple DIDs from file or stdin (TODO)
@@ -136,11 +165,12 @@ pub fn run_did(cmd: DidCommand, dir: PathBuf, global_verbose: bool) -> Result<()
             handle_resolver,
             query,
             raw,
+            compare,
         } => {
-            cmd_did_resolve(dir, did, handle_resolver, global_verbose, query, raw)?;
+            cmd_did_resolve(dir, did, handle_resolver, global_verbose, query, raw, compare)?;
         }
-        DIDCommands::Log { did, json } => {
-            cmd_did_lookup(dir, did, global_verbose, json)?;
+        DIDCommands::Log { did, json, format, no_header, separator } => {
+            cmd_did_lookup(dir, did, global_verbose, json, format, no_header, separator)?;
         }
         DIDCommands::Batch {
             action,
@@ -176,6 +206,7 @@ pub fn cmd_did_resolve(
     verbose: bool,
     query: Option<String>,
     raw: bool,
+    compare: Option<Option<String>>,
 ) -> Result<()> {
     let input = input.ok_or_else(|| anyhow::anyhow!("DID or handle is required"))?;
     use plcbundle::constants;
@@ -203,6 +234,43 @@ pub fn cmd_did_resolve(
 
     // Get resolve result with stats
     let result = manager.resolve_did_with_stats(&did)?;
+
+    // If compare is enabled, fetch remote document and compare
+    if let Some(maybe_url) = compare {
+        use tokio::runtime::Runtime;
+        use plcbundle::remote;
+
+        // Use provided URL, or use repository origin, or fall back to default
+        let plc_url = match maybe_url {
+            Some(url) if !url.is_empty() => url,
+            _ => {
+                // Get origin from local repository index
+                let local_index = manager.get_index();
+                let origin = &local_index.origin;
+                
+                // If origin is "local" or empty, use default PLC directory
+                if origin == "local" || origin.is_empty() {
+                    constants::DEFAULT_PLC_DIRECTORY_URL.to_string()
+                } else {
+                    origin.clone()
+                }
+            }
+        };
+
+        eprintln!("🔍 Comparing with remote PLC directory...");
+        
+        let rt = Runtime::new().context("Failed to create tokio runtime")?;
+        let remote_doc = rt.block_on(async {
+            remote::fetch_did_document(&plc_url, &did).await
+        })
+        .context("Failed to fetch DID document from remote PLC directory")?;
+
+        eprintln!("✅ Fetched remote document from {}", plc_url);
+        eprintln!();
+
+        // Compare documents
+        compare_did_documents(&result.document, &remote_doc, &did)?;
+    }
 
     // Get DID index for shard calculation (only for PLC DIDs)
     if did.starts_with("did:plc:") {
@@ -319,7 +387,7 @@ pub fn cmd_did_resolve(
         let global_pos = (result.bundle_number as u64 * plcbundle::constants::BUNDLE_SIZE as u64)
             + result.position as u64;
         log::info!(
-            "Source: bundle {:06}, position {} (global: {})\n",
+            "Source: bundle {}, position {} (global: {})\n",
             result.bundle_number,
             result.position,
             global_pos
@@ -347,10 +415,11 @@ pub fn cmd_did_resolve(
         }
 
         // Convert result to JSON string
+        // Note: jmespath uses serde_json internally, so we use serde_json here (not bundle/operation data)
         if result.is_string() {
             result.as_string().unwrap().to_string()
         } else {
-            serde_json::to_string(&result)
+            serde_json::to_string(&*result)
                 .map_err(|e| anyhow::anyhow!("Failed to serialize query result: {}", e))?
         }
     } else {
@@ -389,6 +458,122 @@ pub fn cmd_did_resolve(
         // Raw JSON output (compact, no colors)
         println!("{}", output_json);
     }
+
+    Ok(())
+}
+
+/// Compare two DID documents and show differences
+fn compare_did_documents(
+    local: &plcbundle::DIDDocument,
+    remote: &plcbundle::DIDDocument,
+    _did: &str,
+) -> Result<()> {
+    eprintln!("📊 Document Comparison");
+    eprintln!("═══════════════════════\n");
+
+    // Convert both to JSON for comparison
+    let local_json = sonic_rs::to_string_pretty(local)?;
+    let remote_json = sonic_rs::to_string_pretty(remote)?;
+
+    // Simple comparison - check if they're identical
+    if local_json == remote_json {
+        eprintln!("✅ Documents are identical");
+        eprintln!();
+        return Ok(());
+    }
+
+    eprintln!("⚠️  Documents differ\n");
+
+    // Compare key fields
+    eprintln!("Field Comparison:");
+    eprintln!("─────────────────");
+
+    // Compare ID
+    if local.id == remote.id {
+        eprintln!("  ID: ✅ Match ({})", local.id);
+    } else {
+        eprintln!("  ID: ❌ Mismatch");
+        eprintln!("    Local:  {}", local.id);
+        eprintln!("    Remote: {}", remote.id);
+    }
+
+    // Compare context
+    if local.context == remote.context {
+        eprintln!("  @context: ✅ Match ({} items)", local.context.len());
+    } else {
+        eprintln!("  @context: ❌ Mismatch");
+        eprintln!("    Local:  {} items", local.context.len());
+        eprintln!("    Remote: {} items", remote.context.len());
+        if local.context != remote.context {
+            for (i, ctx) in local.context.iter().enumerate() {
+                if i < remote.context.len() && remote.context[i] != *ctx {
+                    eprintln!("      [{}] Local:  {}", i, ctx);
+                    eprintln!("      [{}] Remote: {}", i, remote.context[i]);
+                } else if i >= remote.context.len() {
+                    eprintln!("      [{}] Local:  {} (not in remote)", i, ctx);
+                }
+            }
+            for i in local.context.len()..remote.context.len() {
+                eprintln!("      [{}] Remote: {} (not in local)", i, remote.context[i]);
+            }
+        }
+    }
+
+    // Compare alsoKnownAs
+    if local.also_known_as == remote.also_known_as {
+        eprintln!("  alsoKnownAs: ✅ Match ({} items)", local.also_known_as.len());
+    } else {
+        eprintln!("  alsoKnownAs: ❌ Mismatch");
+        eprintln!("    Local:  {} items", local.also_known_as.len());
+        eprintln!("    Remote: {} items", remote.also_known_as.len());
+    }
+
+    // Compare verificationMethod
+    if local.verification_method.len() == remote.verification_method.len() {
+        let mut all_match = true;
+        for (i, (local_vm, remote_vm)) in local.verification_method.iter().zip(remote.verification_method.iter()).enumerate() {
+            if local_vm.id != remote_vm.id || local_vm.public_key_multibase != remote_vm.public_key_multibase {
+                all_match = false;
+                eprintln!("  verificationMethod[{}]: ❌ Mismatch", i);
+                eprintln!("    Local ID:  {}", local_vm.id);
+                eprintln!("    Remote ID: {}", remote_vm.id);
+                break;
+            }
+        }
+        if all_match {
+            eprintln!("  verificationMethod: ✅ Match ({} items)", local.verification_method.len());
+        }
+    } else {
+        eprintln!("  verificationMethod: ❌ Mismatch");
+        eprintln!("    Local:  {} items", local.verification_method.len());
+        eprintln!("    Remote: {} items", remote.verification_method.len());
+    }
+
+    // Compare service
+    if local.service.len() == remote.service.len() {
+        let mut all_match = true;
+        for (local_svc, remote_svc) in local.service.iter().zip(remote.service.iter()) {
+            if local_svc.id != remote_svc.id || local_svc.service_endpoint != remote_svc.service_endpoint {
+                all_match = false;
+                break;
+            }
+        }
+        if all_match {
+            eprintln!("  service: ✅ Match ({} items)", local.service.len());
+        } else {
+            eprintln!("  service: ❌ Mismatch");
+            eprintln!("    Local:  {} items", local.service.len());
+            eprintln!("    Remote: {} items", remote.service.len());
+        }
+    } else {
+        eprintln!("  service: ❌ Mismatch");
+        eprintln!("    Local:  {} items", local.service.len());
+        eprintln!("    Remote: {} items", remote.service.len());
+    }
+
+    eprintln!();
+    eprintln!("💡 Tip: Use --raw to see full JSON documents for detailed comparison");
+    eprintln!();
 
     Ok(())
 }
@@ -434,7 +619,15 @@ pub fn cmd_did_handle(
 
 // DID LOOKUP - Find all operations for a DID
 
-pub fn cmd_did_lookup(dir: PathBuf, input: String, verbose: bool, json: bool) -> Result<()> {
+pub fn cmd_did_lookup(
+    dir: PathBuf,
+    input: String,
+    verbose: bool,
+    json: bool,
+    format: String,
+    no_header: bool,
+    separator: String,
+) -> Result<()> {
     use plcbundle::constants;
     use std::time::Instant;
 
@@ -633,6 +826,9 @@ pub fn cmd_did_lookup(dir: PathBuf, input: String, verbose: bool, json: bool) ->
         lookup_elapsed,
         mempool_elapsed,
         verbose,
+        &format,
+        no_header,
+        &separator,
     )
 }
 
@@ -690,62 +886,222 @@ fn display_lookup_results(
     _lookup_elapsed: std::time::Duration,
     _mempool_elapsed: std::time::Duration,
     verbose: bool,
+    format: &str,
+    no_header: bool,
+    separator: &str,
 ) -> Result<()> {
     let nullified_count = ops_with_loc.iter().filter(|owl| owl.nullified).count();
     let total_ops = ops_with_loc.len() + mempool_ops.len();
     let active_ops = ops_with_loc.len() - nullified_count + mempool_ops.len();
 
-    // Short header
-    println!("DID: {} ({} ops, {} active)", did, total_ops, active_ops);
+    // Parse format string
+    let fields = parse_format_string(format);
+
+    // Print summary header (unless no_header is set, but we always show the DID summary)
+    if !no_header {
+        println!("DID: {} ({} ops, {} active)", did, total_ops, active_ops);
+    }
+
+    if fields.is_empty() {
+        return Ok(());
+    }
+
+    // Calculate column widths for alignment
+    let mut column_widths = vec![0; fields.len()];
+    
+    // Check header widths
+    for (i, field) in fields.iter().enumerate() {
+        let header = get_lookup_field_header(field);
+        column_widths[i] = column_widths[i].max(header.len());
+    }
+    
+    // Check data widths
+    for owl in ops_with_loc.iter() {
+        for (i, field) in fields.iter().enumerate() {
+            let value = get_lookup_field_value(owl, None, field);
+            column_widths[i] = column_widths[i].max(value.len());
+        }
+    }
+    
+    for op in mempool_ops.iter() {
+        for (i, field) in fields.iter().enumerate() {
+            let value = get_lookup_field_value_mempool(op, field);
+            column_widths[i] = column_widths[i].max(value.len());
+        }
+    }
+
+    // Print column header (unless disabled)
+    if !no_header {
+        let headers: Vec<String> = fields.iter()
+            .enumerate()
+            .map(|(i, f)| {
+                let header = get_lookup_field_header(f);
+                if separator == "\t" {
+                    // For tabs, pad with spaces for alignment
+                    format!("{:<width$}", header, width = column_widths[i])
+                } else {
+                    header
+                }
+            })
+            .collect();
+        println!("{}", headers.join(separator));
+    }
 
     // Show operations - one per line
     for owl in ops_with_loc.iter() {
-        let status = if owl.nullified { "✗" } else { "✓" };
-        let cid = owl.operation.cid.as_ref().map(|c| truncate_cid_for_display(c)).unwrap_or_else(|| "".to_string());
+        let values: Vec<String> = fields.iter()
+            .enumerate()
+            .map(|(i, f)| {
+                let value = get_lookup_field_value(owl, None, f);
+                if separator == "\t" {
+                    // For tabs, pad with spaces for alignment
+                    format!("{:<width$}", value, width = column_widths[i])
+                } else {
+                    value
+                }
+            })
+            .collect();
+        println!("{}", values.join(separator));
         
-        println!(
-            "  {:06}:{:04} {} {} {}",
-            owl.bundle,
-            owl.position,
-            status,
-            cid,
-            owl.operation.created_at
-        );
-
         if verbose && !owl.nullified {
             if let Some(op_data) = owl.operation.operation.as_object() {
                 if let Some(op_type) = op_data.get("type").and_then(|v| v.as_str()) {
-                    println!("      type: {}", op_type);
+                    eprintln!("      type: {}", op_type);
                 }
                 if let Some(handle) = op_data.get("handle").and_then(|v| v.as_str()) {
-                    println!("      handle: {}", handle);
+                    eprintln!("      handle: {}", handle);
                 } else if let Some(aka) = op_data.get("alsoKnownAs").and_then(|v| v.as_array()) {
                     if let Some(aka_str) = aka.first().and_then(|v| v.as_str()) {
                         let handle = aka_str.strip_prefix("at://").unwrap_or(aka_str);
-                        println!("      handle: {}", handle);
+                        eprintln!("      handle: {}", handle);
                     }
                 }
             }
         }
     }
 
+    // Show mempool operations
     for op in mempool_ops.iter() {
-        let cid = op.cid.as_ref().map(|c| truncate_cid_for_display(c)).unwrap_or_else(|| "".to_string());
-        println!(
-            "  mempool    ✓ {} {}",
-            cid,
-            op.created_at
-        );
+        let values: Vec<String> = fields.iter()
+            .enumerate()
+            .map(|(i, f)| {
+                let value = get_lookup_field_value_mempool(op, f);
+                if separator == "\t" {
+                    // For tabs, pad with spaces for alignment
+                    format!("{:<width$}", value, width = column_widths[i])
+                } else {
+                    value
+                }
+            })
+            .collect();
+        println!("{}", values.join(separator));
     }
 
     Ok(())
 }
 
-fn truncate_cid_for_display(cid: &str) -> String {
-    if cid.len() > 16 {
-        format!("{}..{}", &cid[..8], &cid[cid.len() - 6..])
-    } else {
-        cid.to_string()
+fn parse_format_string(format: &str) -> Vec<String> {
+    format
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn get_lookup_field_header(field: &str) -> String {
+    match field {
+        "bundle" => "bundle",
+        "position" | "pos" => "position",
+        "global" | "global_pos" => "global",
+        "status" => "status",
+        "cid" => "cid",
+        "created_at" | "created" | "date" | "time" => "created_at",
+        "nullified" => "nullified",
+        "date_short" => "date",
+        "timestamp" | "unix" => "timestamp",
+        _ => field,
+    }
+    .to_string()
+}
+
+fn get_lookup_field_value(
+    owl: &plcbundle::OperationWithLocation,
+    _mempool: Option<&plcbundle::Operation>,
+    field: &str,
+) -> String {
+    match field {
+        "bundle" => format!("{}", owl.bundle),
+        "position" | "pos" => format!("{:04}", owl.position),
+        "global" | "global_pos" => {
+            let global_pos = ((owl.bundle - 1) as u64 * plcbundle::constants::BUNDLE_SIZE as u64) + owl.position as u64;
+            format!("{}", global_pos)
+        },
+        "status" => {
+            if owl.nullified {
+                "✗".to_string()
+            } else {
+                "✓".to_string()
+            }
+        }
+        "cid" => {
+            owl.operation.cid.as_ref()
+                .map(|c| c.clone())
+                .unwrap_or_else(|| "".to_string())
+        }
+        "created_at" | "created" | "date" | "time" => owl.operation.created_at.clone(),
+        "nullified" => {
+            if owl.nullified {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        }
+        "date_short" => {
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&owl.operation.created_at) {
+                dt.format("%Y-%m-%d").to_string()
+            } else {
+                owl.operation.created_at.clone()
+            }
+        }
+        "timestamp" | "unix" => {
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&owl.operation.created_at) {
+                format!("{}", dt.timestamp())
+            } else {
+                "0".to_string()
+            }
+        }
+        _ => String::new(),
+    }
+}
+
+fn get_lookup_field_value_mempool(op: &plcbundle::Operation, field: &str) -> String {
+    match field {
+        "bundle" => "mempool".to_string(),
+        "position" | "pos" => "".to_string(),
+        "global" | "global_pos" => "".to_string(),
+        "status" => "✓".to_string(),
+        "cid" => {
+            op.cid.as_ref()
+                .map(|c| c.clone())
+                .unwrap_or_else(|| "".to_string())
+        }
+        "created_at" | "created" | "date" | "time" => op.created_at.clone(),
+        "nullified" => "false".to_string(),
+        "date_short" => {
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&op.created_at) {
+                dt.format("%Y-%m-%d").to_string()
+            } else {
+                op.created_at.clone()
+            }
+        }
+        "timestamp" | "unix" => {
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&op.created_at) {
+                format!("{}", dt.timestamp())
+            } else {
+                "0".to_string()
+            }
+        }
+        _ => String::new(),
     }
 }
 
@@ -770,7 +1126,7 @@ pub fn cmd_did_batch(
 // Library author: ngerakines
 // License: MIT OR Apache-2.0
 
-use atproto_plc::{Did, Operation, OperationChainValidator, PlcState, VerifyingKey};
+use atproto_plc::{Operation, OperationChainValidator, PlcState, VerifyingKey};
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -1317,6 +1673,7 @@ fn convert_to_audit_log(
 
     for owl in ops_with_loc {
         // Extract the operation JSON and convert to atproto_plc::Operation
+        // Note: atproto_plc uses serde, so we use serde_json here (not parsing from bundle)
         let operation_json = serde_json::to_value(&owl.operation.operation)?;
         let operation: Operation = serde_json::from_value(operation_json)
             .map_err(|e| anyhow::anyhow!("Failed to parse operation: {}", e))?;

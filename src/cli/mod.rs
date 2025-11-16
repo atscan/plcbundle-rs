@@ -7,7 +7,7 @@ use std::path::PathBuf;
 mod cmd_bench;
 mod cmd_clean;
 mod cmd_did;
-mod cmd_diff;
+mod cmd_compare;
 mod cmd_export;
 mod cmd_index;
 mod cmd_init;
@@ -79,7 +79,7 @@ enum Commands {
     Mempool(cmd_mempool::MempoolCommand),
     Sync(cmd_sync::SyncCommand),
     Rollback(cmd_rollback::RollbackCommand),
-    Diff(cmd_diff::DiffCommand),
+    Compare(cmd_compare::CompareCommand),
     Inspect(cmd_inspect::InspectCommand),
     Server(cmd_server::ServerCommand),
     Migrate(cmd_migrate::MigrateCommand),
@@ -110,7 +110,7 @@ fn main() -> Result<()> {
         Commands::Mempool(cmd) => cmd_mempool::run(cmd, cli.dir, cli.verbose)?,
         Commands::Sync(cmd) => cmd_sync::run(cmd, cli.dir, cli.quiet, cli.verbose)?,
         Commands::Rollback(cmd) => cmd_rollback::run(cmd, cli.dir, cli.verbose)?,
-        Commands::Diff(cmd) => cmd_diff::run(cmd, cli.dir, cli.verbose)?,
+        Commands::Compare(cmd) => cmd_compare::run(cmd, cli.dir, cli.verbose)?,
         Commands::Inspect(cmd) => cmd_inspect::run(cmd, cli.dir)?,
         Commands::Server(cmd) => cmd_server::run(cmd, cli.dir, cli.verbose)?,
         Commands::Migrate(cmd) => cmd_migrate::run(cmd, cli.dir, cli.verbose)?,
