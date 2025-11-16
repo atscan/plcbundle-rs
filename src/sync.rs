@@ -526,12 +526,12 @@ impl SyncLogger for ServerLogger {
     ) {
         if new_ops > 0 {
             eprintln!(
-                "[Sync] ✓ Bundle {:06} | mempool: {} ({:+}) | time: {}ms",
+                "[Sync] ✓ Bundle {:06} | mempool: {} ({:+}) | fetch: {}ms",
                 next_bundle, mempool_count, new_ops as i32, fetch_duration_ms
             );
         } else {
             eprintln!(
-                "[Sync] ✓ Bundle {:06} | mempool: {} | time: {}ms",
+                "[Sync] ✓ Bundle {:06} | mempool: {} | fetch: {}ms",
                 next_bundle, mempool_count, fetch_duration_ms
             );
         }
