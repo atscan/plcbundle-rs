@@ -95,6 +95,10 @@ pub enum IndexCommands {
         #[arg(short, long)]
         shard: Option<String>,
 
+        /// Lookup DID or handle in index
+        #[arg(long)]
+        did: Option<String>,
+
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -127,9 +131,9 @@ pub fn run(cmd: IndexCommand, dir: PathBuf, global_verbose: bool) -> Result<()> 
         IndexCommands::Verify {} => {
             cmd_index_verify(dir, global_verbose)?;
         }
-        IndexCommands::Debug { shard, json } => {
+        IndexCommands::Debug { shard, did, json } => {
             let shard_num = shard.map(|s| parse_shard(&s)).transpose()?;
-            cmd_index_debug(dir, shard_num, json)?;
+            cmd_index_debug(dir, shard_num, did, json)?;
         }
         IndexCommands::Compact { shards } => {
             let shard_nums = shards
@@ -289,7 +293,7 @@ pub fn cmd_index_repair(dir: PathBuf, threads: usize, flush_interval: u32) -> Re
 
     if !needs_rebuild && !needs_compact {
         log::info!("✓ Index is up-to-date and optimized");
-        log::info!("  Last bundle: {:06}", index_last_bundle);
+        log::info!("  Last bundle: {}", index_last_bundle);
         log::info!("  Delta segments: {}", delta_segments);
         return Ok(());
     }
@@ -299,7 +303,7 @@ pub fn cmd_index_repair(dir: PathBuf, threads: usize, flush_interval: u32) -> Re
     // Case 1: Index is behind - do incremental update
     if needs_rebuild {
         let missing_bundles = last_bundle - index_last_bundle;
-        log::info!("Index is behind by {} bundles ({:06} → {:06})",
+        log::info!("Index is behind by {} bundles ({} → {})",
             missing_bundles, index_last_bundle + 1, last_bundle);
         if num_threads > 1 {
             log::info!("Using {} threads", num_threads);
@@ -396,7 +400,7 @@ pub fn cmd_index_repair(dir: PathBuf, threads: usize, flush_interval: u32) -> Re
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
     log::info!("  Total DIDs: {}", total_dids);
-    log::info!("  Last bundle: {:06}", last_bundle);
+    log::info!("  Last bundle: {}", last_bundle);
     log::info!("  Delta segments: {}", final_delta_segments);
 
     Ok(())
@@ -497,7 +501,7 @@ pub fn cmd_index_stats(dir: PathBuf, json: bool) -> Result<()> {
         "  Shard count:   {} ({} with data, {} with segments)",
         shard_count, shards_with_data, shards_with_segments
     );
-    println!("  Last bundle:   {:06}", last_bundle);
+    println!("  Last bundle:   {}", last_bundle);
     println!();
     println!("  Storage:");
     println!(
@@ -744,7 +748,7 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool) -> Result<()> {
         log::info!("      Run: {} index repair", constants::BINARY_NAME);
         warnings += 1;
     } else if verbose {
-        log::info!("  ✓ Last bundle matches: {:06}", last_bundle);
+        log::info!("  ✓ Last bundle matches: {}", last_bundle);
     }
 
     // Check 2: Verify shard files exist and are readable
@@ -939,11 +943,11 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool) -> Result<()> {
         log::warn!("⚠️  Index verification passed with warnings");
         log::info!("  Warnings: {}", warnings);
         log::info!("  Total DIDs:  {}", total_dids);
-        log::info!("  Last bundle: {:06}", last_bundle);
+        log::info!("  Last bundle: {}", last_bundle);
     } else {
         log::info!("✓ DID index is valid");
         log::info!("  Total DIDs:    {}", total_dids);
-        log::info!("  Last bundle:   {:06}", last_bundle);
+        log::info!("  Last bundle:   {}", last_bundle);
         log::info!("  Shards:        {}", shards_checked);
         log::info!("  Delta segments: {}", delta_segments);
         if delta_segments > 0 && delta_segments < SEGMENT_WARNING_THRESHOLD {
@@ -954,7 +958,625 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_index_debug(dir: PathBuf, shard: Option<u8>, json: bool) -> Result<()> {
+/// Get raw shard data as JSON
+fn get_raw_shard_data_json(dir: &PathBuf, shard_num: u8) -> Result<serde_json::Value> {
+    use std::fs;
+    use crate::constants;
+    use crate::did_index::OpLocation;
+    use serde_json::json;
+
+    const DID_IDENTIFIER_LEN: usize = 24;
+
+    let shard_path = dir
+        .join(constants::DID_INDEX_DIR)
+        .join("shards")
+        .join(format!("{:02x}.idx", shard_num));
+
+    if !shard_path.exists() {
+        return Ok(json!(null));
+    }
+
+    let data = fs::read(&shard_path)?;
+    if data.len() < 1056 {
+        return Ok(json!({
+            "error": "Shard file too small",
+            "size_bytes": data.len()
+        }));
+    }
+
+    // Parse header
+    let entry_count = u32::from_le_bytes([data[9], data[10], data[11], data[12]]) as usize;
+    let offset_table_start = 1056;
+
+    let shard_filename = format!("{:02x}.idx", shard_num);
+    
+    // Parse entries
+    let max_entries_to_show = 10;
+    let entries_to_show = entry_count.min(max_entries_to_show);
+    let mut entries = Vec::new();
+
+    for i in 0..entries_to_show {
+        let offset_pos = offset_table_start + (i * 4);
+        if offset_pos + 4 > data.len() {
+            break;
+        }
+
+        let entry_offset = u32::from_le_bytes([
+            data[offset_pos],
+            data[offset_pos + 1],
+            data[offset_pos + 2],
+            data[offset_pos + 3],
+        ]) as usize;
+
+        if entry_offset + DID_IDENTIFIER_LEN + 2 > data.len() {
+            continue;
+        }
+
+        // Read identifier
+        let mut current_offset = entry_offset;
+        let identifier_bytes = &data[current_offset..current_offset + DID_IDENTIFIER_LEN];
+        let identifier = String::from_utf8_lossy(identifier_bytes);
+        let identifier_clean = identifier.trim_end_matches('\0').to_string();
+        let full_did = format!("did:plc:{}", identifier_clean);
+        current_offset += DID_IDENTIFIER_LEN;
+
+        // Read location count
+        let loc_count = u16::from_le_bytes([data[current_offset], data[current_offset + 1]]) as usize;
+        current_offset += 2;
+
+        // Read locations
+        let mut locations = Vec::new();
+        for _j in 0..loc_count {
+            if current_offset + 4 > data.len() {
+                break;
+            }
+            let packed = u32::from_le_bytes([
+                data[current_offset],
+                data[current_offset + 1],
+                data[current_offset + 2],
+                data[current_offset + 3],
+            ]);
+            let loc = OpLocation::from_u32(packed);
+            locations.push(json!({
+                "bundle": loc.bundle(),
+                "position": loc.position(),
+                "nullified": loc.nullified()
+            }));
+            current_offset += 4;
+        }
+
+        entries.push(json!({
+            "identifier": identifier_clean,
+            "did": full_did,
+            "locations": locations
+        }));
+    }
+
+    Ok(json!({
+        "file": shard_filename,
+        "file_size_bytes": data.len(),
+        "entry_count": entry_count,
+        "offset_table_start": format!("0x{:04x}", offset_table_start),
+        "entries_shown": entries_to_show,
+        "entries": entries
+    }))
+}
+
+/// Get raw delta segment data as JSON
+fn get_raw_segment_data_json(dir: &PathBuf, shard_num: u8, file_name: &str) -> Result<serde_json::Value> {
+    use std::fs;
+    use crate::constants;
+    use crate::did_index::OpLocation;
+    use serde_json::json;
+
+    const DID_IDENTIFIER_LEN: usize = 24;
+
+    let segment_path = dir
+        .join(constants::DID_INDEX_DIR)
+        .join("delta")
+        .join(format!("{:02x}", shard_num))
+        .join(file_name);
+
+    if !segment_path.exists() {
+        return Ok(json!(null));
+    }
+
+    let data = fs::read(&segment_path)?;
+    if data.len() < 32 {
+        return Ok(json!({
+            "error": "Segment file too small",
+            "size_bytes": data.len()
+        }));
+    }
+
+    // Delta segments use the same format as base shards
+    let entry_count = u32::from_le_bytes([data[9], data[10], data[11], data[12]]) as usize;
+    let offset_table_start = 1056;
+
+    // Parse entries
+    let max_entries_to_show = 10;
+    let entries_to_show = entry_count.min(max_entries_to_show);
+    let mut entries = Vec::new();
+
+    for i in 0..entries_to_show {
+        let offset_pos = offset_table_start + (i * 4);
+        if offset_pos + 4 > data.len() {
+            break;
+        }
+
+        let entry_offset = u32::from_le_bytes([
+            data[offset_pos],
+            data[offset_pos + 1],
+            data[offset_pos + 2],
+            data[offset_pos + 3],
+        ]) as usize;
+
+        if entry_offset + DID_IDENTIFIER_LEN + 2 > data.len() {
+            continue;
+        }
+
+        // Read identifier
+        let mut current_offset = entry_offset;
+        let identifier_bytes = &data[current_offset..current_offset + DID_IDENTIFIER_LEN];
+        let identifier = String::from_utf8_lossy(identifier_bytes);
+        let identifier_clean = identifier.trim_end_matches('\0').to_string();
+        let full_did = format!("did:plc:{}", identifier_clean);
+        current_offset += DID_IDENTIFIER_LEN;
+
+        // Read location count
+        let loc_count = u16::from_le_bytes([data[current_offset], data[current_offset + 1]]) as usize;
+        current_offset += 2;
+
+        // Read locations
+        let mut locations = Vec::new();
+        for _j in 0..loc_count {
+            if current_offset + 4 > data.len() {
+                break;
+            }
+            let packed = u32::from_le_bytes([
+                data[current_offset],
+                data[current_offset + 1],
+                data[current_offset + 2],
+                data[current_offset + 3],
+            ]);
+            let loc = OpLocation::from_u32(packed);
+            locations.push(json!({
+                "bundle": loc.bundle(),
+                "position": loc.position(),
+                "nullified": loc.nullified()
+            }));
+            current_offset += 4;
+        }
+
+        entries.push(json!({
+            "identifier": identifier_clean,
+            "did": full_did,
+            "locations": locations
+        }));
+    }
+
+    Ok(json!({
+        "file": file_name,
+        "file_size_bytes": data.len(),
+        "entry_count": entry_count,
+        "offset_table_start": format!("0x{:04x}", offset_table_start),
+        "entries_shown": entries_to_show,
+        "entries": entries
+    }))
+}
+
+/// Display raw shard data in a readable format
+fn display_raw_shard_data(dir: &PathBuf, shard_num: u8) -> Result<()> {
+    use std::fs;
+    use crate::constants;
+    use crate::did_index::OpLocation;
+
+    const DID_IDENTIFIER_LEN: usize = 24;
+
+    let shard_path = dir
+        .join(constants::DID_INDEX_DIR)
+        .join("shards")
+        .join(format!("{:02x}.idx", shard_num));
+
+    if !shard_path.exists() {
+        println!("    Shard file does not exist");
+        return Ok(());
+    }
+
+    let data = fs::read(&shard_path)?;
+    if data.len() < 1056 {
+        println!("    Shard file too small ({} bytes)", data.len());
+        return Ok(());
+    }
+
+    // Parse header
+    let entry_count = u32::from_le_bytes([data[9], data[10], data[11], data[12]]) as usize;
+    let offset_table_start = 1056;
+
+    let shard_filename = format!("{:02x}.idx", shard_num);
+    println!("    File: {}", shard_filename);
+    println!("    File size: {} bytes", data.len());
+    println!("    Entry count: {}", entry_count);
+    println!("    Offset table starts at: 0x{:04x}", offset_table_start);
+
+    // Show first few entries
+    let max_entries_to_show = 10;
+    let entries_to_show = entry_count.min(max_entries_to_show);
+
+    if entries_to_show > 0 {
+        println!("\n    First {} entries:", entries_to_show);
+        println!("    ───────────────────────────────────────");
+
+        for i in 0..entries_to_show {
+            let offset_pos = offset_table_start + (i * 4);
+            if offset_pos + 4 > data.len() {
+                break;
+            }
+
+            let entry_offset = u32::from_le_bytes([
+                data[offset_pos],
+                data[offset_pos + 1],
+                data[offset_pos + 2],
+                data[offset_pos + 3],
+            ]) as usize;
+
+            if entry_offset + DID_IDENTIFIER_LEN + 2 > data.len() {
+                println!("      Entry {}: Invalid offset (0x{:04x})", i, entry_offset);
+                continue;
+            }
+
+            // Read identifier
+            let mut current_offset = entry_offset;
+            let identifier_bytes = &data[current_offset..current_offset + DID_IDENTIFIER_LEN];
+            let identifier = String::from_utf8_lossy(identifier_bytes);
+            current_offset += DID_IDENTIFIER_LEN;
+
+            // Read location count
+            let loc_count = u16::from_le_bytes([data[current_offset], data[current_offset + 1]]) as usize;
+            current_offset += 2;
+
+            // Read locations
+            let mut locations = Vec::new();
+            for _j in 0..loc_count {
+                if current_offset + 4 > data.len() {
+                    break;
+                }
+                let packed = u32::from_le_bytes([
+                    data[current_offset],
+                    data[current_offset + 1],
+                    data[current_offset + 2],
+                    data[current_offset + 3],
+                ]);
+                locations.push(OpLocation::from_u32(packed));
+                current_offset += 4;
+            }
+
+            println!("      Entry {}:", i);
+            
+            let identifier_clean = identifier.trim_end_matches('\0');
+            let full_did = format!("did:plc:{}", identifier_clean);
+            println!("        Identifier: {} [did={}]", identifier_clean, full_did);
+            
+            print!("        Locations ({}): [ ", loc_count);
+            for (idx, loc) in locations.iter().enumerate() {
+                if idx > 0 {
+                    print!(", ");
+                }
+                print!("{}:{}", loc.bundle(), loc.position());
+                if loc.nullified() {
+                    print!(" (nullified)");
+                }
+            }
+            println!(" ]\n");
+        }
+
+        if entry_count > max_entries_to_show {
+            println!("\n    ... ({} more entries)", entry_count - max_entries_to_show);
+        }
+    } else {
+        println!("    No entries in shard");
+    }
+
+    Ok(())
+}
+
+/// Display raw delta segment data in a readable format
+fn display_raw_segment_data(dir: &PathBuf, shard_num: u8, file_name: &str) -> Result<()> {
+    use std::fs;
+    use crate::constants;
+    use crate::did_index::OpLocation;
+
+    const DID_IDENTIFIER_LEN: usize = 24;
+
+    let segment_path = dir
+        .join(constants::DID_INDEX_DIR)
+        .join("delta")
+        .join(format!("{:02x}", shard_num))
+        .join(file_name);
+
+    if !segment_path.exists() {
+        println!("    Segment file does not exist");
+        return Ok(());
+    }
+
+    let data = fs::read(&segment_path)?;
+    if data.len() < 32 {
+        println!("    Segment file too small ({} bytes)", data.len());
+        return Ok(());
+    }
+
+    // Delta segments use the same format as base shards
+    let entry_count = u32::from_le_bytes([data[9], data[10], data[11], data[12]]) as usize;
+    let offset_table_start = 1056;
+
+    println!("    File size: {} bytes", data.len());
+    println!("    Entry count: {}", entry_count);
+    println!("    Offset table starts at: 0x{:04x}", offset_table_start);
+
+    // Show first few entries
+    let max_entries_to_show = 10;
+    let entries_to_show = entry_count.min(max_entries_to_show);
+
+    if entries_to_show > 0 {
+        println!("\n    First {} entries:", entries_to_show);
+        println!("    ───────────────────────────────────────");
+
+        for i in 0..entries_to_show {
+            let offset_pos = offset_table_start + (i * 4);
+            if offset_pos + 4 > data.len() {
+                break;
+            }
+
+            let entry_offset = u32::from_le_bytes([
+                data[offset_pos],
+                data[offset_pos + 1],
+                data[offset_pos + 2],
+                data[offset_pos + 3],
+            ]) as usize;
+
+            if entry_offset + DID_IDENTIFIER_LEN + 2 > data.len() {
+                println!("      Entry {}: Invalid offset (0x{:04x})", i, entry_offset);
+                continue;
+            }
+
+            // Read identifier
+            let mut current_offset = entry_offset;
+            let identifier_bytes = &data[current_offset..current_offset + DID_IDENTIFIER_LEN];
+            let identifier = String::from_utf8_lossy(identifier_bytes);
+            current_offset += DID_IDENTIFIER_LEN;
+
+            // Read location count
+            let loc_count = u16::from_le_bytes([data[current_offset], data[current_offset + 1]]) as usize;
+            current_offset += 2;
+
+            // Read locations
+            let mut locations = Vec::new();
+            for _j in 0..loc_count {
+                if current_offset + 4 > data.len() {
+                    break;
+                }
+                let packed = u32::from_le_bytes([
+                    data[current_offset],
+                    data[current_offset + 1],
+                    data[current_offset + 2],
+                    data[current_offset + 3],
+                ]);
+                locations.push(OpLocation::from_u32(packed));
+                current_offset += 4;
+            }
+
+            println!("      Entry {}:", i);
+            
+            let identifier_clean = identifier.trim_end_matches('\0');
+            let full_did = format!("did:plc:{}", identifier_clean);
+            println!("        Identifier: {} [did={}]", identifier_clean, full_did);
+            
+            print!("        Locations ({}): [ ", loc_count);
+            for (idx, loc) in locations.iter().enumerate() {
+                if idx > 0 {
+                    print!(", ");
+                }
+                print!("{}:{}", loc.bundle(), loc.position());
+                if loc.nullified() {
+                    print!(" (nullified)");
+                }
+            }
+            println!(" ]\n");
+        }
+
+        if entry_count > max_entries_to_show {
+            println!("\n    ... ({} more entries)", entry_count - max_entries_to_show);
+        }
+    } else {
+        println!("    No entries in segment");
+    }
+
+    Ok(())
+}
+
+/// Debug lookup for a specific DID or handle
+fn cmd_index_debug_did_lookup(dir: PathBuf, input: String, json: bool) -> Result<()> {
+    use crate::constants;
+    use plcbundle::BundleManager;
+    use serde_json::json;
+    use std::time::Instant;
+
+    // Initialize manager with handle resolver
+    let resolver_url = Some(constants::DEFAULT_HANDLE_RESOLVER_URL.to_string());
+    let manager = BundleManager::with_handle_resolver(dir.clone(), resolver_url)?;
+
+    // Resolve handle to DID if needed
+    let (did, handle_resolve_time) = manager.resolve_handle_or_did(&input)?;
+    
+    let is_handle = did != input;
+    if is_handle {
+        log::info!("Resolved handle: {} → {}", input, did);
+    }
+
+    // Ensure DID index exists and is loaded
+    let stats_map = manager.get_did_index_stats();
+    if !stats_map
+        .get("exists")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        anyhow::bail!("DID index does not exist. Run: {} index build", constants::BINARY_NAME);
+    }
+
+    // Ensure the index is loaded
+    manager.ensure_did_index()?;
+    
+    // Get DID index and lookup DID with stats
+    let did_index = manager.get_did_index();
+    let lookup_start = Instant::now();
+    let (locations, shard_stats, shard_num, lookup_timings) = {
+        let index_guard = did_index.read().unwrap();
+        let index = index_guard.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("DID index not loaded. This is a bug - please report it.")
+        })?;
+        index.get_did_locations_with_stats(&did)?
+    };
+    let lookup_elapsed = lookup_start.elapsed();
+
+    // Extract identifier for shard calculation
+    let identifier = if did.starts_with("did:plc:") {
+        &did[8..]
+    } else {
+        anyhow::bail!("Only did:plc: DIDs are supported");
+    };
+
+    if json {
+        let mut locations_json = Vec::new();
+        for loc in &locations {
+            locations_json.push(json!({
+                "bundle": loc.bundle(),
+                "position": loc.position(),
+                "nullified": loc.nullified(),
+                "global_position": loc.global_position()
+            }));
+        }
+
+        let result = json!({
+            "input": input,
+            "did": did,
+            "identifier": identifier,
+            "shard": format!("{:02x}", shard_num),
+            "shard_num": shard_num,
+            "locations_count": locations.len(),
+            "locations": locations_json,
+            "lookup_stats": {
+                "shard_size": shard_stats.shard_size,
+                "total_entries": shard_stats.total_entries,
+                "prefix_narrowed_to": shard_stats.prefix_narrowed_to,
+                "binary_search_attempts": shard_stats.binary_search_attempts,
+                "locations_found": shard_stats.locations_found
+            },
+            "lookup_timings": {
+                "extract_identifier_ms": lookup_timings.extract_identifier.as_secs_f64() * 1000.0,
+                "calculate_shard_ms": lookup_timings.calculate_shard.as_secs_f64() * 1000.0,
+                "load_shard_ms": lookup_timings.load_shard.as_secs_f64() * 1000.0,
+                "search_ms": lookup_timings.search.as_secs_f64() * 1000.0,
+                "cache_hit": lookup_timings.cache_hit,
+                "base_search_time_ms": lookup_timings.base_search_time.map(|t| t.as_secs_f64() * 1000.0),
+                "delta_segment_times_ms": lookup_timings.delta_segment_times.iter().map(|(name, t)| json!({
+                    "name": name,
+                    "time_ms": t.as_secs_f64() * 1000.0
+                })).collect::<Vec<_>>(),
+                "merge_time_ms": lookup_timings.merge_time.as_secs_f64() * 1000.0
+            },
+            "total_lookup_time_ms": lookup_elapsed.as_secs_f64() * 1000.0,
+            "handle_resolve_time_ms": handle_resolve_time as f64
+        });
+
+        let json_str = serde_json::to_string_pretty(&result)?;
+        println!("{}", json_str);
+        return Ok(());
+    }
+
+    // Text output
+    println!("\nDID Index Lookup");
+    println!("═══════════════════════════════════════\n");
+
+    if is_handle {
+        println!("  Input:        {} (handle)", input);
+        println!("  DID:          {}", did);
+    } else {
+        println!("  DID:          {}", did);
+    }
+    println!("  Identifier:   {}", identifier);
+    println!("  Shard:        {:02x} ({})", shard_num, shard_num);
+    println!();
+
+    if locations.is_empty() {
+        println!("  ⚠️  No locations found in index");
+        println!();
+        return Ok(());
+    }
+
+    println!("  Locations ({}):", locations.len());
+    println!("  ───────────────────────────────────────");
+    
+    // Group locations for more compact display
+    let mut current_line = String::new();
+    for (idx, loc) in locations.iter().enumerate() {
+        if idx > 0 && idx % 4 == 0 {
+            println!("    {}", current_line);
+            current_line.clear();
+        }
+        
+        if !current_line.is_empty() {
+            current_line.push_str(", ");
+        }
+        
+        let mut loc_str = format!("{}:{}", loc.bundle(), loc.position());
+        if loc.nullified() {
+            loc_str.push_str(" (nullified)");
+        }
+        current_line.push_str(&loc_str);
+    }
+    
+    if !current_line.is_empty() {
+        println!("    {}", current_line);
+    }
+    println!();
+
+    println!("  Lookup Statistics:");
+    println!("  ───────────────────────────────────────");
+    println!("    Shard size:              {} bytes", utils::format_bytes(shard_stats.shard_size as u64));
+    println!("    Total entries:          {}", utils::format_number(shard_stats.total_entries as u64));
+    println!("    Binary search attempts: {}", shard_stats.binary_search_attempts);
+    println!("    Prefix narrowed to:     {}", shard_stats.prefix_narrowed_to);
+    println!("    Locations found:        {}", shard_stats.locations_found);
+    println!();
+
+    println!("  Timing:");
+    println!("  ───────────────────────────────────────");
+    println!("    Extract identifier:     {:.3}ms", lookup_timings.extract_identifier.as_secs_f64() * 1000.0);
+    println!("    Calculate shard:        {:.3}ms", lookup_timings.calculate_shard.as_secs_f64() * 1000.0);
+    println!("    Load shard:             {:.3}ms ({})", 
+        lookup_timings.load_shard.as_secs_f64() * 1000.0,
+        if lookup_timings.cache_hit { "cache hit" } else { "cache miss" });
+    println!("    Search:                 {:.3}ms", lookup_timings.search.as_secs_f64() * 1000.0);
+    if let Some(base_time) = lookup_timings.base_search_time {
+        println!("    Base search:            {:.3}ms", base_time.as_secs_f64() * 1000.0);
+    }
+    if !lookup_timings.delta_segment_times.is_empty() {
+        println!("    Delta segments:         {} segments", lookup_timings.delta_segment_times.len());
+        for (idx, (name, time)) in lookup_timings.delta_segment_times.iter().enumerate() {
+            println!("      Segment {} ({:20}): {:.3}ms", idx + 1, name, time.as_secs_f64() * 1000.0);
+        }
+    }
+    println!("    Merge:                  {:.3}ms", lookup_timings.merge_time.as_secs_f64() * 1000.0);
+    if handle_resolve_time > 0 {
+        println!("    Handle resolve:          {}ms", handle_resolve_time);
+    }
+    println!("    Total:                  {:.3}ms", lookup_elapsed.as_secs_f64() * 1000.0);
+    println!();
+
+    Ok(())
+}
+
+pub fn cmd_index_debug(dir: PathBuf, shard: Option<u8>, did: Option<String>, json: bool) -> Result<()> {
     let manager = super::utils::create_manager(dir.clone(), false, false)?;
 
     let stats_map = manager.get_did_index_stats();
@@ -969,10 +1591,44 @@ pub fn cmd_index_debug(dir: PathBuf, shard: Option<u8>, json: bool) -> Result<()
         return Ok(());
     }
 
+    // Handle DID lookup
+    if let Some(did_input) = did {
+        return cmd_index_debug_did_lookup(dir, did_input, json);
+    }
+
     let did_index = manager.get_did_index();
-    let shard_details = did_index.read().unwrap().as_ref().unwrap().get_shard_details(shard)?;
+    let mut shard_details = did_index.read().unwrap().as_ref().unwrap().get_shard_details(shard)?;
 
     if json {
+        // Add raw data to JSON output if a specific shard is requested
+        if let Some(shard_num) = shard {
+            if let Some(detail) = shard_details.first_mut() {
+                let base_exists = detail
+                    .get("base_exists")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                
+                if base_exists {
+                    if let Ok(raw_data) = get_raw_shard_data_json(&dir, shard_num) {
+                        detail.insert("raw_data".to_string(), raw_data);
+                    }
+                }
+                
+                // Add raw data for delta segments
+                if let Some(segments) = detail.get_mut("segments").and_then(|v| v.as_array_mut()) {
+                    for seg in segments {
+                        let file_name = seg.get("file_name").and_then(|v| v.as_str()).unwrap_or("");
+                        let exists = seg.get("exists").and_then(|v| v.as_bool()).unwrap_or(false);
+                        if exists && !file_name.is_empty() {
+                            if let Ok(raw_data) = get_raw_segment_data_json(&dir, shard_num, file_name) {
+                                seg.as_object_mut().unwrap().insert("raw_data".to_string(), raw_data);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
         let json_str = serde_json::to_string_pretty(&shard_details)?;
         println!("{}", json_str);
         return Ok(());
@@ -1052,7 +1708,7 @@ pub fn cmd_index_debug(dir: PathBuf, shard: Option<u8>, json: bool) -> Result<()
                             utils::format_bytes(size)
                         );
                         println!(
-                            "         Bundles: {:06}-{:06}, DIDs: {}, Locations: {}",
+                            "         Bundles: {}-{}, DIDs: {}, Locations: {}",
                             bundle_start,
                             bundle_end,
                             utils::format_number(did_count),
@@ -1060,6 +1716,31 @@ pub fn cmd_index_debug(dir: PathBuf, shard: Option<u8>, json: bool) -> Result<()
                                 .and_then(|v| v.as_u64())
                                 .unwrap_or(0)
                         );
+                    }
+                }
+            }
+
+            // Show raw shard data
+            if base_exists {
+                let shard_filename = format!("{:02x}.idx", shard_num);
+                println!("\n  Raw Shard Data: {}", shard_filename);
+                println!("  ───────────────────────────────────────");
+                if let Err(e) = display_raw_shard_data(&dir, shard_num) {
+                    println!("    Error reading shard data: {}", e);
+                }
+            }
+
+            // Show raw delta segment data
+            if let Some(segments) = detail.get("segments").and_then(|v| v.as_array()) {
+                for seg in segments {
+                    let file_name = seg.get("file_name").and_then(|v| v.as_str()).unwrap_or("?");
+                    let exists = seg.get("exists").and_then(|v| v.as_bool()).unwrap_or(false);
+                    if exists {
+                        println!("\n  Raw Delta Segment Data: {}", file_name);
+                        println!("  ───────────────────────────────────────");
+                        if let Err(e) = display_raw_segment_data(&dir, shard_num, file_name) {
+                            println!("    Error reading segment data: {}", e);
+                        }
                     }
                 }
             }

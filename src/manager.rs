@@ -131,7 +131,7 @@ impl BundleManager {
     }
 
     /// Ensure DID index is loaded (lazy initialization)
-    fn ensure_did_index(&self) -> Result<()> {
+    pub fn ensure_did_index(&self) -> Result<()> {
         let mut did_index_guard = self.did_index.write().unwrap();
         if did_index_guard.is_none() {
             let did_index_start = std::time::Instant::now();

@@ -41,14 +41,35 @@ pub enum DIDCommands {
     ///
     /// By default, pretty-prints with colors when outputting to a terminal.
     /// Use --raw to force raw JSON output (useful for piping).
-    #[command(alias = "doc", alias = "document")]
+    /// Use -q/--query to extract a value using JMESPath.
+    #[command(
+        alias = "doc",
+        alias = "document",
+        after_help = "Examples:\n  \
+            # Resolve DID to full document\n  \
+            plcbundle did resolve did:plc:524tuhdhh3m7li5gycdn6boe\n\n  \
+            # Query with JMESPath\n  \
+            plcbundle did resolve did:plc:524tuhdhh3m7li5gycdn6boe -q 'id'\n  \
+            plcbundle did resolve did:plc:524tuhdhh3m7li5gycdn6boe -q 'verificationMethod[0].id'\n  \
+            plcbundle did resolve did:plc:524tuhdhh3m7li5gycdn6boe -q 'service[].id'\n\n  \
+            # Force raw JSON output\n  \
+            plcbundle did resolve did:plc:524tuhdhh3m7li5gycdn6boe --raw"
+    )]
     Resolve {
         /// DID or handle to resolve
-        did: String,
+        #[arg(value_name = "DID")]
+        did: Option<String>,
 
         /// Handle resolver URL (e.g., https://quickdid.smokesignal.tools)
         #[arg(long)]
         handle_resolver: Option<String>,
+
+        /// Query DID document JSON using JMESPath expression
+        ///
+        /// Extracts a value from the DID document using JMESPath.
+        /// Examples: 'id', 'verificationMethod[0].id', 'service[].id'
+        #[arg(short = 'q', long = "query")]
+        query: Option<String>,
 
         /// Force raw JSON output (no pretty printing, no colors)
         ///
@@ -113,9 +134,10 @@ pub fn run_did(cmd: DidCommand, dir: PathBuf, global_verbose: bool) -> Result<()
         DIDCommands::Resolve {
             did,
             handle_resolver,
+            query,
             raw,
         } => {
-            cmd_did_resolve(dir, did, handle_resolver, global_verbose, raw)?;
+            cmd_did_resolve(dir, did, handle_resolver, global_verbose, query, raw)?;
         }
         DIDCommands::Log { did, json } => {
             cmd_did_lookup(dir, did, global_verbose, json)?;
@@ -149,11 +171,13 @@ pub fn run_handle(cmd: HandleCommand, dir: PathBuf) -> Result<()> {
 
 pub fn cmd_did_resolve(
     dir: PathBuf,
-    input: String,
+    input: Option<String>,
     handle_resolver_url: Option<String>,
     verbose: bool,
+    query: Option<String>,
     raw: bool,
 ) -> Result<()> {
+    let input = input.ok_or_else(|| anyhow::anyhow!("DID or handle is required"))?;
     use plcbundle::constants;
 
     // Use default resolver if none provided
@@ -302,6 +326,37 @@ pub fn cmd_did_resolve(
         );
     }
 
+    // Convert document to JSON string
+    let document_json = sonic_rs::to_string(&result.document)?;
+
+    // If query is provided, apply JMESPath query
+    let output_json = if let Some(query_expr) = query {
+        // Compile JMESPath expression
+        let expr = jmespath::compile(&query_expr)
+            .map_err(|e| anyhow::anyhow!("Failed to compile JMESPath query '{}': {}", query_expr, e))?;
+
+        // Execute query
+        let data = jmespath::Variable::from_json(&document_json)
+            .map_err(|e| anyhow::anyhow!("Failed to parse DID document JSON: {}", e))?;
+
+        let result = expr.search(&data)
+            .map_err(|e| anyhow::anyhow!("JMESPath query failed: {}", e))?;
+
+        if result.is_null() {
+            anyhow::bail!("Query '{}' returned null (field not found)", query_expr);
+        }
+
+        // Convert result to JSON string
+        if result.is_string() {
+            result.as_string().unwrap().to_string()
+        } else {
+            serde_json::to_string(&result)
+                .map_err(|e| anyhow::anyhow!("Failed to serialize query result: {}", e))?
+        }
+    } else {
+        document_json
+    };
+
     // Output document (always to stdout)
     // Determine if we should pretty print:
     // - Pretty print if stdout is a TTY (interactive terminal) and --raw is not set
@@ -312,19 +367,27 @@ pub fn cmd_did_resolve(
     let should_pretty = !raw;
 
     if should_pretty {
-        let json = sonic_rs::to_string_pretty(&result.document)?;
-        #[cfg(feature = "cli")]
-        {
-            println!("{}", super::utils::colorize_json(&json));
-        }
-        #[cfg(not(feature = "cli"))]
-        {
-            println!("{}", json);
+        // Try to parse and pretty print the result
+        match sonic_rs::from_str::<sonic_rs::Value>(&output_json) {
+            Ok(parsed) => {
+                let pretty_json = sonic_rs::to_string_pretty(&parsed)?;
+                #[cfg(feature = "cli")]
+                {
+                    println!("{}", super::utils::colorize_json(&pretty_json));
+                }
+                #[cfg(not(feature = "cli"))]
+                {
+                    println!("{}", pretty_json);
+                }
+            }
+            Err(_) => {
+                // If it's not valid JSON (e.g., a string result), just output as-is
+                println!("{}", output_json);
+            }
         }
     } else {
         // Raw JSON output (compact, no colors)
-        let json = sonic_rs::to_string(&result.document)?;
-        println!("{}", json);
+        println!("{}", output_json);
     }
 
     Ok(())
@@ -623,107 +686,69 @@ fn display_lookup_results(
     did: &str,
     ops_with_loc: &[plcbundle::OperationWithLocation],
     mempool_ops: &[plcbundle::Operation],
-    total_elapsed: std::time::Duration,
-    lookup_elapsed: std::time::Duration,
-    mempool_elapsed: std::time::Duration,
+    _total_elapsed: std::time::Duration,
+    _lookup_elapsed: std::time::Duration,
+    _mempool_elapsed: std::time::Duration,
     verbose: bool,
 ) -> Result<()> {
     let nullified_count = ops_with_loc.iter().filter(|owl| owl.nullified).count();
     let total_ops = ops_with_loc.len() + mempool_ops.len();
     let active_ops = ops_with_loc.len() - nullified_count + mempool_ops.len();
 
-    println!("═══════════════════════════════════════════════════════════════");
-    println!("                    DID Lookup Results");
-    println!("═══════════════════════════════════════════════════════════════\n");
-    println!("DID: {}\n", did);
+    // Short header
+    println!("DID: {} ({} ops, {} active)", did, total_ops, active_ops);
 
-    println!("Summary");
-    println!("───────");
-    println!("  Total operations:   {}", total_ops);
-    println!("  Active operations:  {}", active_ops);
-    if nullified_count > 0 {
-        println!("  Nullified:          {}", nullified_count);
-    }
-    if !ops_with_loc.is_empty() {
-        println!("  Bundled:            {}", ops_with_loc.len());
-    }
-    if !mempool_ops.is_empty() {
-        println!("  Mempool:            {}", mempool_ops.len());
-    }
-    println!();
+    // Show operations - one per line
+    for owl in ops_with_loc.iter() {
+        let status = if owl.nullified { "✗" } else { "✓" };
+        let cid = owl.operation.cid.as_ref().map(|c| truncate_cid_for_display(c)).unwrap_or_else(|| "".to_string());
+        
+        println!(
+            "  {:06}:{:04} {} {} {}",
+            owl.bundle,
+            owl.position,
+            status,
+            cid,
+            owl.operation.created_at
+        );
 
-    println!("Performance");
-    println!("───────────");
-    println!("  Index lookup:       {:?}", lookup_elapsed);
-    println!("  Mempool check:      {:?}", mempool_elapsed);
-    println!("  Total time:         {:?}\n", total_elapsed);
-
-    // Show operations
-    if !ops_with_loc.is_empty() {
-        println!("Bundled Operations ({} total)", ops_with_loc.len());
-        println!("══════════════════════════════════════════════════════════════\n");
-
-        for (i, owl) in ops_with_loc.iter().enumerate() {
-            let status = if owl.nullified {
-                "✗ Nullified"
-            } else {
-                "✓ Active"
-            };
-
-            println!(
-                "Operation {} [Bundle {:06}, Position {:04}]",
-                i + 1,
-                owl.bundle,
-                owl.position
-            );
-            println!(
-                "   CID:        {}",
-                owl.operation.cid.as_ref().unwrap_or(&"".to_string())
-            );
-            println!("   Created:    {}", owl.operation.created_at);
-            println!("   Status:     {}\n", status);
-
-            if verbose && !owl.nullified {
-                show_operation_details(&owl.operation);
+        if verbose && !owl.nullified {
+            if let Some(op_data) = owl.operation.operation.as_object() {
+                if let Some(op_type) = op_data.get("type").and_then(|v| v.as_str()) {
+                    println!("      type: {}", op_type);
+                }
+                if let Some(handle) = op_data.get("handle").and_then(|v| v.as_str()) {
+                    println!("      handle: {}", handle);
+                } else if let Some(aka) = op_data.get("alsoKnownAs").and_then(|v| v.as_array()) {
+                    if let Some(aka_str) = aka.first().and_then(|v| v.as_str()) {
+                        let handle = aka_str.strip_prefix("at://").unwrap_or(aka_str);
+                        println!("      handle: {}", handle);
+                    }
+                }
             }
         }
     }
 
-    if !mempool_ops.is_empty() {
-        println!("Mempool Operations ({} total)", mempool_ops.len());
-        println!("══════════════════════════════════════════════════════════════\n");
-
-        for (i, op) in mempool_ops.iter().enumerate() {
-            println!("Operation {} [Mempool]", i + 1);
-            println!(
-                "   CID:        {}",
-                op.cid.as_ref().unwrap_or(&"".to_string())
-            );
-            println!("   Created:    {}", op.created_at);
-            println!("   Status:     ✓ Active\n");
-        }
+    for op in mempool_ops.iter() {
+        let cid = op.cid.as_ref().map(|c| truncate_cid_for_display(c)).unwrap_or_else(|| "".to_string());
+        println!(
+            "  mempool    ✓ {} {}",
+            cid,
+            op.created_at
+        );
     }
 
-    println!("✓ Lookup complete in {:?}", total_elapsed);
     Ok(())
 }
 
-fn show_operation_details(op: &plcbundle::Operation) {
-    if let Some(op_data) = op.operation.as_object() {
-        if let Some(op_type) = op_data.get("type").and_then(|v| v.as_str()) {
-            println!("   Type:       {}", op_type);
-        }
-
-        if let Some(handle) = op_data.get("handle").and_then(|v| v.as_str()) {
-            println!("   Handle:     {}", handle);
-        } else if let Some(aka) = op_data.get("alsoKnownAs").and_then(|v| v.as_array()) {
-            if let Some(aka_str) = aka.first().and_then(|v| v.as_str()) {
-                let handle = aka_str.strip_prefix("at://").unwrap_or(aka_str);
-                println!("   Handle:     {}", handle);
-            }
-        }
+fn truncate_cid_for_display(cid: &str) -> String {
+    if cid.len() > 16 {
+        format!("{}..{}", &cid[..8], &cid[cid.len() - 6..])
+    } else {
+        cid.to_string()
     }
 }
+
 
 // DID BATCH - Process multiple DIDs (TODO)
 

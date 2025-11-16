@@ -37,21 +37,34 @@ pub enum OpCommands {
     ///
     /// By default, pretty-prints with colors when outputting to a terminal.
     /// Use --raw to force raw JSON output (useful for piping).
+    /// Use -q/--query to extract a value using JMESPath.
     #[command(after_help = "Examples:\n  \
             # By bundle + position (auto pretty-print in terminal)\n  \
             plcbundle op get 42 1337\n\n  \
             # By global position\n  \
             plcbundle op get 88410345\n\n  \
+            # Query with JMESPath\n  \
+            plcbundle op get 42 1337 -q 'operation.type'\n  \
+            plcbundle op get 42 1337 -q 'did'\n  \
+            plcbundle op get 88410345 -q 'did'\n\n  \
             # Force raw JSON output\n  \
             plcbundle op get 42 1337 --raw\n\n  \
             # Pipe to jq (auto-detects non-TTY, uses raw)\n  \
             plcbundle op get 42 1337 | jq .did")]
     Get {
-        /// Bundle number (or global position if only one arg)
+        /// Bundle number (or global position if only one arg provided)
         bundle: u32,
 
         /// Operation position within bundle (optional if using global position)
+        #[arg(value_name = "POSITION")]
         position: Option<usize>,
+
+        /// Query operation JSON using JMESPath expression
+        ///
+        /// Extracts a value from the operation using JMESPath.
+        /// Examples: 'did', 'operation.type', 'operation.handle', 'cid'
+        #[arg(short = 'q', long = "query")]
+        query: Option<String>,
 
         /// Force raw JSON output (no pretty printing, no colors)
         ///
@@ -104,8 +117,8 @@ pub enum OpCommands {
 
 pub fn run(cmd: OpCommand, dir: PathBuf, quiet: bool) -> Result<()> {
     match cmd.command {
-        OpCommands::Get { bundle, position, raw } => {
-            cmd_op_get(dir, bundle, position, raw, quiet)?;
+        OpCommands::Get { bundle, position, query, raw } => {
+            cmd_op_get(dir, bundle, position, query, raw, quiet)?;
         }
         OpCommands::Show { bundle, position } => {
             cmd_op_show(dir, bundle, position, quiet)?;
@@ -142,38 +155,15 @@ pub fn parse_op_position(bundle: u32, position: Option<usize>) -> (u32, usize) {
     }
 }
 
-pub fn cmd_op_get(dir: PathBuf, bundle: u32, position: Option<usize>, raw: bool, quiet: bool) -> Result<()> {
+pub fn cmd_op_get(dir: PathBuf, bundle: u32, position: Option<usize>, query: Option<String>, raw: bool, quiet: bool) -> Result<()> {
     let (bundle_num, op_index) = parse_op_position(bundle, position);
 
     let manager = super::utils::create_manager(dir, false, quiet)?;
 
-    // Determine if we should pretty print:
-    // - Pretty print if stdout is a TTY (interactive terminal) and --raw is not set
-    // - Use raw output if --raw is set or if output is piped (not a TTY)
-    #[cfg(feature = "cli")]
-    let should_pretty = !raw && super::utils::is_stdout_tty();
-    #[cfg(not(feature = "cli"))]
-    let should_pretty = false; // No TTY detection without CLI feature
-
-    if quiet {
-        // Just output JSON - no stats
-        let json = manager.get_operation_raw(bundle_num, op_index)?;
-        if should_pretty {
-            let parsed: sonic_rs::Value = sonic_rs::from_str(&json)?;
-            let pretty_json = sonic_rs::to_string_pretty(&parsed)?;
-            #[cfg(feature = "cli")]
-            {
-                println!("{}", super::utils::colorize_json(&pretty_json));
-            }
-            #[cfg(not(feature = "cli"))]
-            {
-                println!("{}", pretty_json);
-            }
-        } else {
-            println!("{}", json);
-        }
+    // Get the operation JSON
+    let json = if quiet {
+        manager.get_operation_raw(bundle_num, op_index)?
     } else {
-        // Output with stats
         let result = manager.get_operation_with_stats(bundle_num, op_index)?;
         let global_pos =
             ((bundle_num - 1) as u64 * constants::BUNDLE_SIZE as u64) + op_index as u64;
@@ -187,20 +177,66 @@ pub fn cmd_op_get(dir: PathBuf, bundle: u32, position: Option<usize>, raw: bool,
             result.size_bytes
         );
 
-        if should_pretty {
-            let parsed: sonic_rs::Value = sonic_rs::from_str(&result.raw_json)?;
-            let pretty_json = sonic_rs::to_string_pretty(&parsed)?;
-            #[cfg(feature = "cli")]
-            {
-                println!("{}", super::utils::colorize_json(&pretty_json));
-            }
-            #[cfg(not(feature = "cli"))]
-            {
-                println!("{}", pretty_json);
-            }
-        } else {
-            println!("{}", result.raw_json);
+        result.raw_json
+    };
+
+    // If query is provided, apply JMESPath query
+    let output_json = if let Some(query_expr) = query {
+        // Compile JMESPath expression
+        let expr = jmespath::compile(&query_expr)
+            .map_err(|e| anyhow::anyhow!("Failed to compile JMESPath query '{}': {}", query_expr, e))?;
+
+        // Execute query
+        let data = jmespath::Variable::from_json(&json)
+            .map_err(|e| anyhow::anyhow!("Failed to parse operation JSON: {}", e))?;
+
+        let result = expr.search(&data)
+            .map_err(|e| anyhow::anyhow!("JMESPath query failed: {}", e))?;
+
+        if result.is_null() {
+            anyhow::bail!("Query '{}' returned null (field not found)", query_expr);
         }
+
+        // Convert result to JSON string
+        if result.is_string() {
+            result.as_string().unwrap().to_string()
+        } else {
+            serde_json::to_string(&result)
+                .map_err(|e| anyhow::anyhow!("Failed to serialize query result: {}", e))?
+        }
+    } else {
+        json
+    };
+
+    // Determine if we should pretty print:
+    // - Pretty print if stdout is a TTY (interactive terminal) and --raw is not set
+    // - Use raw output if --raw is set or if output is piped (not a TTY)
+    #[cfg(feature = "cli")]
+    let should_pretty = !raw && super::utils::is_stdout_tty();
+    #[cfg(not(feature = "cli"))]
+    let should_pretty = false; // No TTY detection without CLI feature
+
+    if should_pretty {
+        // Try to parse and pretty print the result
+        match sonic_rs::from_str::<sonic_rs::Value>(&output_json) {
+            Ok(parsed) => {
+                let pretty_json = sonic_rs::to_string_pretty(&parsed)?;
+                #[cfg(feature = "cli")]
+                {
+                    println!("{}", super::utils::colorize_json(&pretty_json));
+                }
+                #[cfg(not(feature = "cli"))]
+                {
+                    println!("{}", pretty_json);
+                }
+            }
+            Err(_) => {
+                // If it's not valid JSON (e.g., a string result), just output as-is
+                println!("{}", output_json);
+            }
+        }
+    } else {
+        println!("{}", output_json);
     }
 
     Ok(())

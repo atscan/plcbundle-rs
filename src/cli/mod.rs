@@ -52,11 +52,11 @@ struct Cli {
     dir: PathBuf,
 
     /// Suppress progress output
-    #[arg(short, long, global = true)]
+    #[arg(long, global = true)]
     quiet: bool,
 
     /// Enable verbose output
-    #[arg(short, long, global = true)]
+    #[arg(long, global = true)]
     verbose: bool,
 
     #[command(subcommand)]

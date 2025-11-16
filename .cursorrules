@@ -104,6 +104,26 @@ If writing actual tests:
 - Don't test internal implementation details
 - CLI tests should use actual `BundleManager` instances
 
+## CLI Output Formatting
+
+### Bundle Numbers in Human-Readable Output
+- ✅ **ALWAYS** display bundle numbers **without leading zeros** in CLI output for humans
+- Use `{}` format, NOT `{:06}` format
+- Example: `"Bundle: 123"` not `"Bundle: 000123"`
+- This applies to all `println!`, `eprintln!`, and `log::*!` statements that display bundle numbers to users
+- Exception: File paths and internal identifiers may use zero-padded format if needed
+
+**Examples:**
+```rust
+// ✅ CORRECT - Human-readable output
+println!("  Last bundle: {}", bundle_num);
+log::info!("Bundle {} processed", bundle_num);
+
+// ❌ WRONG - Don't use leading zeros for humans
+println!("  Last bundle: {:06}", bundle_num);
+log::info!("Bundle {:06} processed", bundle_num);
+```
+
 ## Questions?
 
 If you're implementing a feature and need file access:
