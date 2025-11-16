@@ -588,7 +588,7 @@ pub unsafe extern "C" fn bundle_manager_rebuild_did_index(
         }) as Box<dyn Fn(u32, u32, u64, u64) + Send + Sync>
     });
 
-    match manager.manager.rebuild_did_index(callback) {
+    match manager.manager.build_did_index(callback) {
         Ok(stats) => {
             if !out_stats.is_null() {
                 unsafe {

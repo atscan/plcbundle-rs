@@ -608,205 +608,6 @@ impl Manager {
     }
 
     // Build index from scratch
-    pub fn build_from_scratch<F>(
-        &self,
-        bundles: Vec<(u32, Vec<(String, bool)>)>, // (bundle_num, [(did, nullified)])
-        progress: F,
-    ) -> Result<()>
-    where
-        F: Fn(usize, usize),
-    {
-        use std::time::Instant;
-
-        let total_start = Instant::now();
-        log::info!(
-            "Starting DID index build from scratch for {} bundles",
-            bundles.len()
-        );
-
-        fs::create_dir_all(&self.shard_dir)?;
-        fs::remove_dir_all(&self.delta_dir).ok();
-
-        // Pass 1: Accumulate entries in memory per shard
-        // Use HashMap to avoid file descriptor limits
-        let mut shard_entries: HashMap<u8, Vec<(String, OpLocation)>> = HashMap::new();
-        let mut total_operations = 0usize;
-        let mut total_valid_dids = 0usize;
-        let mut flush_count = 0usize;
-
-        let pass1_start = Instant::now();
-        log::debug!("[DID Index] Pass 1: Accumulating entries in memory...");
-
-        for (idx, (bundle_num, operations)) in bundles.iter().enumerate() {
-            let bundle_start = Instant::now();
-            progress(idx + 1, bundles.len());
-
-            let ops_in_bundle = operations.len();
-            total_operations += ops_in_bundle;
-            let mut valid_dids_in_bundle = 0usize;
-
-            for (position, (did, nullified)) in operations.iter().enumerate() {
-                let identifier = match extract_identifier(did) {
-                    Ok(id) => id,
-                    Err(_) => continue,
-                };
-
-                valid_dids_in_bundle += 1;
-                total_valid_dids += 1;
-
-                let shard_num = self.calculate_shard(&identifier);
-                let loc = OpLocation::new(*bundle_num as u16, position as u16, *nullified);
-
-                shard_entries
-                    .entry(shard_num)
-                    .or_insert_with(Vec::new)
-                    .push((identifier, loc));
-            }
-
-            let bundle_duration = bundle_start.elapsed();
-            log::debug!(
-                "[DID Index] Processed bundle {:06}: {} ops ({} valid DIDs) in {:.3}ms",
-                bundle_num,
-                ops_in_bundle,
-                valid_dids_in_bundle,
-                bundle_duration.as_secs_f64() * 1000.0
-            );
-
-            // Write to disk every 10 bundles to avoid excessive memory usage
-            if idx % 10 == 0 && idx > 0 {
-                let flush_start = Instant::now();
-                let mem_before = shard_entries.values().map(|v| v.len()).sum::<usize>();
-
-                self.flush_shard_entries(&mut shard_entries)?;
-                flush_count += 1;
-
-                let flush_duration = flush_start.elapsed();
-                log::info!(
-                    "[DID Index] Flushed {} entries to disk (flush #{}) in {:.3}s",
-                    mem_before,
-                    flush_count,
-                    flush_duration.as_secs_f64()
-                );
-            }
-        }
-
-        let pass1_duration = pass1_start.elapsed();
-        log::info!(
-            "[DID Index] Pass 1 complete: {} bundles, {} operations, {} valid DIDs in {:.3}s ({:.0} ops/sec)",
-            bundles.len(),
-            total_operations,
-            total_valid_dids,
-            pass1_duration.as_secs_f64(),
-            total_operations as f64 / pass1_duration.as_secs_f64()
-        );
-
-        // Flush any remaining entries
-        let final_flush_start = Instant::now();
-        let remaining = shard_entries.values().map(|v| v.len()).sum::<usize>();
-        if remaining > 0 {
-            log::debug!("[DID Index] Final flush: {} remaining entries", remaining);
-            self.flush_shard_entries(&mut shard_entries)?;
-            log::debug!(
-                "[DID Index] Final flush took {:.3}s",
-                final_flush_start.elapsed().as_secs_f64()
-            );
-        }
-
-        // Pass 2: Sort and write final shards (in parallel)
-        log::info!(
-            "[DID Index] Pass 2: Consolidating {} shards in parallel...",
-            DID_SHARD_COUNT
-        );
-        let pass2_start = Instant::now();
-
-        // Process all shards in parallel using Rayon
-        use rayon::prelude::*;
-
-        let results: Vec<_> = (0..DID_SHARD_COUNT)
-            .into_par_iter()
-            .map(|shard_num| {
-                let shard_start = Instant::now();
-                let count = self.consolidate_shard(shard_num as u8)?;
-
-                let size = if count > 0 {
-                    let shard_path = self.shard_dir.join(format!("{:02x}.idx", shard_num));
-                    if let Ok(metadata) = fs::metadata(&shard_path) {
-                        let size = metadata.len();
-                        let shard_duration = shard_start.elapsed();
-                        log::debug!(
-                            "[DID Index] Consolidated shard {:02x}: {} DIDs, {} bytes in {:.3}ms",
-                            shard_num,
-                            count,
-                            size,
-                            shard_duration.as_secs_f64() * 1000.0
-                        );
-                        size
-                    } else {
-                        0
-                    }
-                } else {
-                    0
-                };
-
-                Ok::<_, anyhow::Error>((count, size))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        // Aggregate results
-        let mut total_dids = 0i64;
-        let mut shards_with_data = 0usize;
-        let mut total_shard_size = 0u64;
-        let mut per_shard_counts = vec![0u32; DID_SHARD_COUNT];
-
-        for (shard_num, (count, size)) in results.iter().enumerate() {
-            if *count > 0 {
-                per_shard_counts[shard_num] = *count as u32;
-                shards_with_data += 1;
-                total_dids += count;
-                total_shard_size += size;
-            }
-        }
-
-        let pass2_duration = pass2_start.elapsed();
-        log::info!(
-            "[DID Index] Pass 2 complete: {} shards with data, {} total DIDs, {:.2} MB total size in {:.3}s",
-            shards_with_data,
-            total_dids,
-            total_shard_size as f64 / 1024.0 / 1024.0,
-            pass2_duration.as_secs_f64()
-        );
-
-        // Update config
-        let last_bundle = bundles.last().map(|(n, _)| *n as i32).unwrap_or(0);
-        self.modify_config(|config| {
-            config.total_dids = total_dids;
-            config.last_bundle = last_bundle;
-            config.delta_segments_total = 0;
-
-            if config.shards.len() != DID_SHARD_COUNT {
-                config.shards = default_shard_meta_vec();
-            }
-
-            for (idx, count) in per_shard_counts.iter().enumerate() {
-                if let Some(meta) = config.shards.get_mut(idx) {
-                    meta.did_count = *count;
-                    meta.segments.clear();
-                    meta.next_segment_id = 1;
-                }
-            }
-        })?;
-
-        let total_duration = total_start.elapsed();
-        log::info!(
-            "[DID Index] ✓ Build complete: {} DIDs indexed across {} bundles in {:.3}s (avg {:.0} DIDs/sec)",
-            total_dids,
-            bundles.len(),
-            total_duration.as_secs_f64(),
-            total_dids as f64 / total_duration.as_secs_f64()
-        );
-
-        Ok(())
-    }
 
     // Flush accumulated shard entries to temporary files
     fn flush_shard_entries(
@@ -862,6 +663,168 @@ impl Manager {
         }
 
         Ok(())
+    }
+
+    /// Build index from scratch using streaming approach
+    /// This method processes bundles one at a time by streaming from disk,
+    /// avoiding loading all bundles into memory at once.
+    pub fn build_from_scratch<F>(
+        &self,
+        bundle_dir: &PathBuf,
+        last_bundle: u32,
+        progress_callback: Option<F>,
+    ) -> Result<(u64, u64)> // Returns (total_operations, bundles_processed)
+    where
+        F: Fn(u32, u32, u64) + Send + Sync, // (current, total, bytes_processed)
+    {
+        use std::fs::File;
+        use std::io::{BufRead, BufReader};
+        use sonic_rs::JsonValueTrait;
+        use std::time::Instant;
+        use std::sync::atomic::AtomicU64;
+
+        let build_start = Instant::now();
+
+        log::debug!("[DID Index] Starting streaming build for {} bundles", last_bundle);
+
+        // Clear existing index
+        fs::create_dir_all(&self.shard_dir)?;
+        fs::remove_dir_all(&self.delta_dir).ok();
+
+        // Accumulate entries in memory per shard
+        let mut shard_entries: HashMap<u8, Vec<(String, OpLocation)>> = HashMap::new();
+        let mut total_operations = 0u64;
+        let mut total_valid_dids = 0u64;
+        let bytes_processed = AtomicU64::new(0);
+        let mut flush_count = 0usize;
+
+        // Stream bundles one at a time
+        for bundle_num in 1..=last_bundle {
+            let bundle_path = crate::constants::bundle_path(bundle_dir, bundle_num);
+
+            if !bundle_path.exists() {
+                continue;
+            }
+
+            // Stream from zstd file directly (memory-efficient!)
+            let file = match File::open(&bundle_path) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+
+            let decoder = match zstd::Decoder::new(file) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+
+            let reader = BufReader::with_capacity(1024 * 1024, decoder);
+            let mut bundle_bytes = 0u64;
+            let mut position = 0u16;
+
+            // Stream line-by-line without loading entire bundle
+            for line in reader.lines() {
+                let line = match line {
+                    Ok(l) => l,
+                    Err(_) => continue,
+                };
+
+                if line.is_empty() {
+                    continue;
+                }
+
+                bundle_bytes += line.len() as u64 + 1;
+                total_operations += 1;
+
+                // Parse only the fields we need (did and nullified)
+                if let Ok(value) = sonic_rs::from_str::<sonic_rs::Value>(&line) {
+                    if let Some(did) = value.get("did").and_then(|v| v.as_str()) {
+                        let nullified = value.get("nullified")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+
+                        // Extract identifier and calculate shard
+                        if let Ok(identifier) = extract_identifier(did) {
+                            total_valid_dids += 1;
+                            let shard_num = self.calculate_shard(&identifier);
+                            let loc = OpLocation::new(bundle_num as u16, position, nullified);
+
+                            shard_entries
+                                .entry(shard_num)
+                                .or_insert_with(Vec::new)
+                                .push((identifier, loc));
+                        }
+                    }
+                }
+
+                position += 1;
+                if position >= constants::BUNDLE_SIZE as u16 {
+                    break; // Safety: bundles shouldn't exceed BUNDLE_SIZE
+                }
+            }
+
+            // Flush to disk every 10 bundles to avoid excessive memory
+            if bundle_num % 10 == 0 {
+                let flush_start = Instant::now();
+                let mem_before = shard_entries.values().map(|v| v.len()).sum::<usize>();
+
+                self.flush_shard_entries(&mut shard_entries)?;
+                flush_count += 1;
+
+                let flush_duration = flush_start.elapsed();
+                log::debug!(
+                    "[DID Index] Flushed {} entries to disk (flush #{}) in {:.3}s",
+                    mem_before,
+                    flush_count,
+                    flush_duration.as_secs_f64()
+                );
+            }
+
+            // Update progress callback
+            let current_bytes = bytes_processed.fetch_add(bundle_bytes, std::sync::atomic::Ordering::Relaxed) + bundle_bytes;
+            if let Some(ref cb) = progress_callback {
+                cb(bundle_num, last_bundle, current_bytes);
+            }
+        }
+
+        // Flush any remaining entries
+        let remaining = shard_entries.values().map(|v| v.len()).sum::<usize>();
+        if remaining > 0 {
+            log::debug!("[DID Index] Final flush: {} remaining entries", remaining);
+            self.flush_shard_entries(&mut shard_entries)?;
+        }
+
+        // Pass 2: Consolidate all temporary files for each shard
+        log::debug!("[DID Index] Pass 2: Consolidating shards...");
+        let pass2_start = Instant::now();
+
+        for shard_num in 0..DID_SHARD_COUNT {
+            self.consolidate_shard(shard_num as u8)?;
+        }
+
+        let pass2_duration = pass2_start.elapsed();
+        log::debug!(
+            "[DID Index] Pass 2 complete: Consolidated {} shards in {:.3}s",
+            DID_SHARD_COUNT,
+            pass2_duration.as_secs_f64()
+        );
+
+        // Update config with last_bundle and reset delta segments
+        self.modify_config(|config| {
+            config.last_bundle = last_bundle as i32;
+            config.delta_segments_total = 0;
+        })?;
+
+        let total_duration = build_start.elapsed();
+        log::info!(
+            "[DID Index] Streaming build complete: {} bundles, {} operations, {} valid DIDs in {:.3}s ({:.0} ops/sec)",
+            last_bundle,
+            total_operations,
+            total_valid_dids,
+            total_duration.as_secs_f64(),
+            total_operations as f64 / total_duration.as_secs_f64()
+        );
+
+        Ok((total_operations, last_bundle as u64))
     }
 
     // Update index for new bundle (incremental)

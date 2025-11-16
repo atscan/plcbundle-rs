@@ -32,16 +32,36 @@ pub enum IndexCommands {
             # Build index\n  \
             plcbundle index build\n\n  \
             # Force rebuild from scratch\n  \
-            plcbundle index build --force")]
+            plcbundle index build --force\n\n  \
+            # Use 8 parallel threads\n  \
+            plcbundle index build -j 8")]
     Build {
         /// Rebuild even if index exists
         #[arg(short, long)]
         force: bool,
+
+        /// Number of threads to use (0 = auto-detect)
+        #[arg(short = 'j', long, default_value = "0")]
+        threads: usize,
     },
 
-    /// Repair DID index
-    #[command(alias = "rebuild")]
-    Repair {},
+    /// Repair DID index (incremental update + compaction)
+    #[command(
+        alias = "rebuild",
+        after_help = "Intelligently repairs the DID index by:\n  \
+            - Incrementally updating missing bundles (if < 1000 behind)\n  \
+            - Performing full rebuild (if > 1000 bundles behind)\n  \
+            - Compacting delta segments (if > 50 segments)\n\n  \
+            Use this after syncing new bundles or if index is corrupted.\n\n  \
+            Examples:\n  \
+            plcbundle index repair\n  \
+            plcbundle index repair -j 8"
+    )]
+    Repair {
+        /// Number of threads to use (0 = auto-detect)
+        #[arg(short = 'j', long, default_value = "0")]
+        threads: usize,
+    },
 
     /// Show DID index statistics
     #[command(alias = "info")]
@@ -82,11 +102,11 @@ pub enum IndexCommands {
 
 pub fn run(cmd: IndexCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
     match cmd.command {
-        IndexCommands::Build { force } => {
-            cmd_index_build(dir, force)?;
+        IndexCommands::Build { force, threads } => {
+            cmd_index_build(dir, force, threads)?;
         }
-        IndexCommands::Repair {} => {
-            cmd_index_repair(dir)?;
+        IndexCommands::Repair { threads } => {
+            cmd_index_repair(dir, threads)?;
         }
         IndexCommands::Stats { json } => {
             cmd_index_stats(dir, json)?;
@@ -124,7 +144,14 @@ fn parse_shard(s: &str) -> Result<u8> {
     }
 }
 
-pub fn cmd_index_build(dir: PathBuf, force: bool) -> Result<()> {
+pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize) -> Result<()> {
+    // Set thread pool size
+    let num_threads = super::utils::get_worker_threads(threads, 4);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(num_threads)
+        .build_global()
+        .ok(); // Ignore error if already initialized
+
     let manager = super::utils::create_manager(dir.clone(), false, false)?;
 
     // Check if index exists
@@ -144,44 +171,42 @@ pub fn cmd_index_build(dir: PathBuf, force: bool) -> Result<()> {
         return Ok(());
     }
 
-    let last_bundle = manager.get_last_bundle();
-    log::info!("Building DID index...");
-    log::info!("Indexing {} bundles\n", last_bundle);
+    // Get total uncompressed size for progress tracking
+    let index = manager.get_index();
+    let bundle_numbers: Vec<u32> = (1..=manager.get_last_bundle()).collect();
+    let total_bytes = index.total_uncompressed_size_for_bundles(&bundle_numbers);
 
-    let start = Instant::now();
+    // Create progress bar with byte tracking
+    use super::progress::ProgressBar;
+    let progress = ProgressBar::with_bytes(manager.get_last_bundle() as usize, total_bytes);
 
-    manager.rebuild_did_index(Some(|current, total, _bytes_processed, _total_bytes| {
-        if current % 10 == 0 || current == total {
-            eprint!(
-                "\rProgress: {}/{} ({:.1}%)",
-                current,
-                total,
-                (current as f64 / total as f64) * 100.0
-            );
-        }
+    manager.build_did_index(Some(|current, _total, bytes_processed, _total_bytes| {
+        progress.set_with_bytes(current as usize, bytes_processed);
     }))?;
 
-    eprintln!();
+    progress.finish();
 
-    let elapsed = start.elapsed();
+    // Show final info
     let stats = manager.get_did_index_stats();
-
-    log::info!("\n✓ DID index built in {:?}", elapsed);
     let total_dids = stats
         .get("total_dids")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
-    log::info!("  Total DIDs: {}", total_dids);
-    log::info!(
-        "  Location: {}/{}/",
-        utils::display_path(&dir).display(),
-        constants::DID_INDEX_DIR
-    );
+
+    eprintln!("   Total DIDs: {}", utils::format_number(total_dids as u64));
+    eprintln!("   Location:   {}/{}/", utils::display_path(&dir).display(), constants::DID_INDEX_DIR);
 
     Ok(())
 }
 
-pub fn cmd_index_repair(dir: PathBuf) -> Result<()> {
+pub fn cmd_index_repair(dir: PathBuf, threads: usize) -> Result<()> {
+    // Set thread pool size
+    let num_threads = super::utils::get_worker_threads(threads, 4);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(num_threads)
+        .build_global()
+        .ok(); // Ignore error if already initialized
+
     let manager = super::utils::create_manager(dir.clone(), false, false)?;
 
     // Check if index config exists (even if corrupted)
@@ -203,25 +228,123 @@ pub fn cmd_index_repair(dir: PathBuf) -> Result<()> {
         return Ok(());
     }
 
-    log::info!("Repairing DID index...\n");
+    log::info!("Analyzing DID index for repair...\n");
+
+    let last_bundle = manager.get_last_bundle();
+    let index_last_bundle = stats_map
+        .get("last_bundle")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as u32;
+    let delta_segments = stats_map
+        .get("delta_segments")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    let needs_rebuild = index_last_bundle < last_bundle;
+    let needs_compact = delta_segments > 50; // Threshold for compaction
+
+    if !needs_rebuild && !needs_compact {
+        log::info!("✓ Index is up-to-date and optimized");
+        log::info!("  Last bundle: {:06}", index_last_bundle);
+        log::info!("  Delta segments: {}", delta_segments);
+        return Ok(());
+    }
 
     let start = Instant::now();
 
-    manager.rebuild_did_index(Some(|current, total, _bytes_processed, _total_bytes| {
-        if current % 10 == 0 || current == total {
-            eprint!(
-                "\rProgress: {}/{} ({:.1}%)",
-                current,
-                total,
-                (current as f64 / total as f64) * 100.0
-            );
+    // Case 1: Index is behind - do incremental update
+    if needs_rebuild {
+        let missing_bundles = last_bundle - index_last_bundle;
+        log::info!("Index is behind by {} bundles ({:06} → {:06})",
+            missing_bundles, index_last_bundle + 1, last_bundle);
+        if num_threads > 1 {
+            log::info!("Using {} threads", num_threads);
         }
-    }))?;
 
-    eprintln!();
+        // If missing too many bundles, full rebuild is faster
+        if missing_bundles > 1000 {
+            log::info!("Too many missing bundles - performing full rebuild...\n");
+
+            // Get total uncompressed size for progress tracking
+            let index = manager.get_index();
+            let bundle_numbers: Vec<u32> = (1..=last_bundle).collect();
+            let total_bytes = index.total_uncompressed_size_for_bundles(&bundle_numbers);
+
+            use super::progress::ProgressBar;
+            let progress = ProgressBar::with_bytes(last_bundle as usize, total_bytes);
+
+            manager.build_did_index(Some(|current, _total, bytes_processed, _total_bytes| {
+                progress.set_with_bytes(current as usize, bytes_processed);
+            }))?;
+
+            progress.finish();
+        } else {
+            // Incremental update is faster
+            log::info!("Performing incremental update...\n");
+
+            // Get total uncompressed size for missing bundles
+            let index = manager.get_index();
+            let bundle_numbers: Vec<u32> = ((index_last_bundle + 1)..=last_bundle).collect();
+            let total_bytes = index.total_uncompressed_size_for_bundles(&bundle_numbers);
+
+            use super::progress::ProgressBar;
+            let progress = ProgressBar::with_bytes(missing_bundles as usize, total_bytes);
+
+            let did_index = manager.get_did_index();
+            let mut bytes_processed = 0u64;
+
+            for (i, bundle_num) in ((index_last_bundle + 1)..=last_bundle).enumerate() {
+                // Load bundle
+                let result = manager.load_bundle(bundle_num, crate::LoadOptions::default())?;
+
+                // Extract operations
+                let operations: Vec<(String, bool)> = result
+                    .operations
+                    .iter()
+                    .map(|op| (op.did.clone(), op.nullified))
+                    .collect();
+
+                // Update index
+                let mut index_guard = did_index.write().unwrap();
+                if let Some(ref mut idx) = *index_guard {
+                    idx.update_for_bundle(bundle_num, operations)?;
+                }
+                drop(index_guard);
+
+                // Track bytes
+                let index = manager.get_index();
+                if let Some(meta) = index.get_bundle(bundle_num) {
+                    bytes_processed += meta.uncompressed_size;
+                }
+
+                progress.set_with_bytes(i + 1, bytes_processed);
+            }
+
+            progress.finish();
+        }
+    }
+
+    // Case 2: Compact delta segments if needed
+    if needs_compact {
+        log::info!("\nCompacting {} delta segments...", delta_segments);
+        let compact_start = Instant::now();
+        let did_index = manager.get_did_index();
+        did_index
+            .write()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .compact_pending_segments(None)?;
+        let compact_elapsed = compact_start.elapsed();
+        log::info!("✓ Compacted in {:?}", compact_elapsed);
+    }
 
     let elapsed = start.elapsed();
     let stats = manager.get_did_index_stats();
+    let final_delta_segments = stats
+        .get("delta_segments")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
 
     log::info!("\n✓ DID index repaired in {:?}", elapsed);
     let total_dids = stats
@@ -229,6 +352,8 @@ pub fn cmd_index_repair(dir: PathBuf) -> Result<()> {
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
     log::info!("  Total DIDs: {}", total_dids);
+    log::info!("  Last bundle: {:06}", last_bundle);
+    log::info!("  Delta segments: {}", final_delta_segments);
 
     Ok(())
 }
@@ -381,7 +506,6 @@ fn rebuild_and_compare_index(
     verbose: bool,
 ) -> Result<RebuildResult> {
     use super::progress::ProgressBar;
-    use crate::LoadOptions;
     use std::fs;
 
     // Create temporary directory for rebuilt index
@@ -395,83 +519,26 @@ fn rebuild_and_compare_index(
     // Create temporary DID index
     let temp_did_index = crate::did_index::Manager::new(temp_dir.clone())?;
 
-    // Pass 1: Stream bundles to temporary files
-    // This avoids keeping all bundle data in memory simultaneously during loading.
-    // We write each bundle to disk immediately after loading, freeing memory.
-    log::info!("Pass 1: Streaming bundles to temporary files...");
-    
+    // Build index using streaming approach (no need to load bundles into memory!)
+    log::info!("Building temporary index using streaming approach...");
+
     // Calculate total uncompressed size for progress tracking
     let index = manager.get_index();
     let bundle_numbers: Vec<u32> = (1..=last_bundle).collect();
     let total_uncompressed_size = index.total_uncompressed_size_for_bundles(&bundle_numbers);
-    
+
     let progress = ProgressBar::with_bytes(last_bundle as usize, total_uncompressed_size);
-    let mut total_uncompressed_processed = 0u64;
 
-    for bundle_num in 1..=last_bundle {
-        let load_result = manager.load_bundle(bundle_num, LoadOptions::default())?;
+    // Stream bundles directly from disk - memory efficient!
+    temp_did_index.build_from_scratch(
+        manager.directory(),
+        last_bundle,
+        Some(|current, _total, bytes_processed| {
+            progress.set_with_bytes(current as usize, bytes_processed);
+        })
+    )?;
 
-        // Extract operations and write to temp file immediately
-        let operations: Vec<(String, bool)> = load_result
-            .operations
-            .iter()
-            .map(|op| (op.did.clone(), op.nullified))
-            .collect();
-
-        // Write bundle data to temp file immediately (frees memory)
-        let bundle_file = bundle_data_dir.join(format!("{:06}.json", bundle_num));
-        let bundle_data = (bundle_num, operations);
-        let json_data = serde_json::to_string(&bundle_data)?;
-        fs::write(&bundle_file, json_data)?;
-
-        // Track uncompressed bytes processed
-        if let Some(meta) = index.get_bundle(bundle_num) {
-            total_uncompressed_processed += meta.uncompressed_size;
-        }
-        
-        progress.set_with_bytes(bundle_num as usize, total_uncompressed_processed);
-    }
     progress.finish();
-
-    // Pass 2: Read bundle data from temp files and build index
-    // NOTE: build_from_scratch requires all data upfront, so we still need to load
-    // all bundles into memory. However, by writing to temp files first, we:
-    // 1. Verify all bundles are readable before starting the expensive build
-    // 2. Free memory between loading and building phases
-    // 3. Can potentially process in batches if build_from_scratch API changes
-    // build_from_scratch does two passes internally:
-    //   - Pass 2a: Accumulate entries in memory and flush periodically
-    //   - Pass 2b: Consolidate and write final shards
-    log::info!("Pass 2: Building index from temporary files (accumulate + consolidate)...");
-
-    // Read bundle files back (unfortunately build_from_scratch needs all data)
-    // TODO: Consider modifying build_from_scratch to accept iterator/file-based input
-    // to avoid loading all bundles into memory at once
-    let mut bundles_data = Vec::with_capacity(last_bundle as usize);
-    for bundle_num in 1..=last_bundle {
-        let bundle_file = bundle_data_dir.join(format!("{:06}.json", bundle_num));
-        if bundle_file.exists() {
-            let json_data = fs::read_to_string(&bundle_file)?;
-            let bundle_data: (u32, Vec<(String, bool)>) = serde_json::from_str(&json_data)?;
-            bundles_data.push(bundle_data);
-        }
-    }
-
-    temp_did_index.build_from_scratch(bundles_data, |current, total| {
-        // build_from_scratch provides progress for its internal passes
-        if current % 100 == 0 || current == total {
-            eprint!(
-                "\r  Progress: {}/{} ({:.1}%)",
-                current,
-                total,
-                (current as f64 / total as f64) * 100.0
-            );
-        }
-    })?;
-    eprintln!(); // Newline after progress
-
-    // Clean up temporary bundle data files
-    fs::remove_dir_all(&bundle_data_dir).ok();
 
     // Compare shard files between temporary and existing index
     let existing_index_dir = manager.directory().join(crate::constants::DID_INDEX_DIR);

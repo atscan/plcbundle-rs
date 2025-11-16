@@ -255,7 +255,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf, global_verbose: bool
                 use std::sync::{Arc, Mutex};
                 let progress = Arc::new(Mutex::new(ProgressBar::with_bytes(last_bundle as usize, total_uncompressed_size)));
                 let progress_clone = progress.clone();
-                manager.rebuild_did_index(Some(move |current, _total, bytes_processed, _total_bytes| {
+                manager.build_did_index(Some(move |current, _total, bytes_processed, _total_bytes| {
                     let pb = progress_clone.lock().unwrap();
                     pb.set_with_bytes(current as usize, bytes_processed);
                     if verbose && current % 100 == 0 {

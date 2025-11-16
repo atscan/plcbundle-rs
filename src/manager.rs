@@ -646,7 +646,7 @@ impl BundleManager {
             .bundles
             .retain(|b| b.bundle_number <= spec.target_bundle);
 
-        self.rebuild_did_index(None::<fn(u32, u32, u64, u64)>)?;
+        self.build_did_index(None::<fn(u32, u32, u64, u64)>)?;
 
         Ok(RollbackResult {
             success: true,
@@ -683,14 +683,11 @@ impl BundleManager {
     }
 
     // === DID Index ===
-    pub fn rebuild_did_index<F>(&self, progress_cb: Option<F>) -> Result<RebuildStats>
+    pub fn build_did_index<F>(&self, progress_cb: Option<F>) -> Result<RebuildStats>
     where
         F: Fn(u32, u32, u64, u64) + Send + Sync, // (current, total, bytes_processed, total_bytes)
     {
-        use std::sync::{Arc, Mutex};
-        use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
         use std::time::Instant;
-        use rayon::prelude::*;
 
         let last_bundle = self.get_last_bundle();
         let mut stats = RebuildStats::default();
@@ -699,108 +696,58 @@ impl BundleManager {
         let new_index = did_index::Manager::new(self.directory.clone())?;
         *self.did_index.write().unwrap() = Some(new_index);
 
-        // Use incremental approach (much faster than build_from_scratch)
-        // Process bundles in parallel and update index incrementally
-        // This avoids: JSON serialization, temp files, loading all bundles into memory
         self.ensure_did_index()?;
-        
+
         // Get total uncompressed size for progress tracking
         let index = self.index.read().unwrap();
         let bundle_numbers: Vec<u32> = (1..=last_bundle).collect();
         let total_uncompressed_bytes = index.total_uncompressed_size_for_bundles(&bundle_numbers);
         drop(index);
 
-        let start = Instant::now();
-        let progress_cb_arc: Arc<Mutex<Option<F>>> = Arc::new(Mutex::new(progress_cb));
-        let count_atomic = Arc::new(AtomicUsize::new(0));
-        let bytes_atomic = Arc::new(AtomicU64::new(0));
-        let stats_atomic = Arc::new(Mutex::new(RebuildStats::default()));
-        let did_index_arc = Arc::clone(&self.did_index);
-        let directory = self.directory.clone();
+        eprintln!("\n📦 Building DID Index");
+        eprintln!("   Strategy: Streaming (memory-efficient)");
+        eprintln!("   Bundles:  {}", last_bundle);
+        eprintln!();
 
-        // Update progress bar less frequently to reduce contention
-        let update_interval = (rayon::current_num_threads().max(1) * 4).max(10);
-        let bundle_count = last_bundle as usize;
+        let build_start = Instant::now();
 
-        // Create a parallel-safe manager clone
-        let manager_arc = Arc::new(self.clone_for_arc());
-        let index_arc = Arc::clone(&self.index);
-        
-        // Process bundles in parallel
-        (1..=last_bundle).into_par_iter().try_for_each(|bundle_num| -> Result<()> {
-            // Load bundle using manager
-            let result = match manager_arc.load_bundle(bundle_num, LoadOptions::default()) {
-                Ok(r) => r,
-                Err(_) => return Ok(()), // Skip failed bundles
-            };
-
-            // Extract operations
-            let operations: Vec<(String, bool)> = result
-                .operations
-                .iter()
-                .map(|op| (op.did.clone(), op.nullified))
-                .collect();
-
-            // Get uncompressed size for this bundle
-            let bundle_bytes = {
-                let index = index_arc.read().unwrap();
-                index.get_bundle(bundle_num)
-                    .map(|meta| meta.uncompressed_size)
-                    .unwrap_or(0)
-            };
-
-            // Update stats
-            {
-                let mut stats_guard = stats_atomic.lock().unwrap();
-                stats_guard.operations_indexed += operations.len() as u64;
-                stats_guard.bundles_processed += 1;
+        // Call the streaming build method in did_index
+        let (total_operations, _bundles_processed) = {
+            let did_index_guard = self.did_index.read().unwrap();
+            if let Some(ref idx) = *did_index_guard {
+                idx.build_from_scratch(
+                    &self.directory,
+                    last_bundle,
+                    progress_cb.map(|cb| {
+                        move |current: u32, total: u32, bytes: u64| {
+                            cb(current, total, bytes, total_uncompressed_bytes);
+                        }
+                    })
+                )?
+            } else {
+                return Err(anyhow::anyhow!("DID index not initialized"));
             }
+        };
 
-            // Update index incrementally (fast with delta segments)
-            // Note: We need to use the shared did_index, but update_for_bundle needs &mut
-            // So we'll need to lock it for each bundle update
-            {
-                let mut did_index_guard = did_index_arc.write().unwrap();
-                if let Some(ref mut idx) = *did_index_guard {
-                    idx.update_for_bundle(bundle_num, operations)?;
-                }
-            }
+        stats.bundles_processed = last_bundle;
+        stats.operations_indexed = total_operations;
 
-            // Update progress atomically
-            let bytes_processed = bytes_atomic.fetch_add(bundle_bytes, Ordering::Relaxed) + bundle_bytes;
-            let current_count = count_atomic.fetch_add(1, Ordering::Relaxed) + 1;
+        let total_duration = build_start.elapsed();
 
-            // Update progress periodically
-            if current_count % update_interval == 0 || current_count == 1 || current_count == bundle_count {
-                if let Ok(cb_guard) = progress_cb_arc.lock() {
-                    if let Some(ref cb) = *cb_guard {
-                        cb(current_count as u32, bundle_count as u32, bytes_processed, total_uncompressed_bytes);
-                    }
-                }
-            }
+        eprintln!();
+        eprintln!("✅ Index Build Complete");
+        eprintln!("   Time:       {:.1}s", total_duration.as_secs_f64());
+        eprintln!("   Operations: {}", crate::format::format_number(total_operations));
+        eprintln!("   Rate:       {:.0} ops/sec", total_operations as f64 / total_duration.as_secs_f64());
 
-            Ok(())
-        })?;
+        // Get final stats
+        let final_stats = self.get_did_index_stats();
+        let total_dids = final_stats
+            .get("total_dids")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
 
-        // Final progress update
-        if let Ok(cb_guard) = progress_cb_arc.lock() {
-            if let Some(ref cb) = *cb_guard {
-                let final_count = count_atomic.load(Ordering::Relaxed);
-                let final_bytes = bytes_atomic.load(Ordering::Relaxed);
-                cb(final_count as u32, bundle_count as u32, final_bytes, total_uncompressed_bytes);
-            }
-        }
-
-        stats = stats_atomic.lock().unwrap().clone();
-
-        let duration = start.elapsed();
-        log::debug!(
-            "[DID Index Rebuild] Processed {} bundles ({} operations) in {:.3}s ({:.0} ops/sec)",
-            stats.bundles_processed,
-            stats.operations_indexed,
-            duration.as_secs_f64(),
-            stats.operations_indexed as f64 / duration.as_secs_f64()
-        );
+        eprintln!("   Total DIDs: {}", crate::format::format_number(total_dids as u64));
 
         Ok(stats)
     }
