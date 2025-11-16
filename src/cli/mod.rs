@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 // CLI Commands (cmd_ prefix)
 mod cmd_bench;
+mod cmd_clean;
 mod cmd_did;
 mod cmd_diff;
 mod cmd_export;
@@ -85,6 +86,7 @@ enum Commands {
     Rebuild(cmd_rebuild::RebuildCommand),
     Bench(cmd_bench::BenchCommand),
     Random(cmd_random::RandomCommand),
+    Clean(cmd_clean::CleanCommand),
 }
 
 fn main() -> Result<()> {
@@ -115,6 +117,7 @@ fn main() -> Result<()> {
         Commands::Rebuild(cmd) => cmd_rebuild::run(cmd, cli.dir, cli.verbose)?,
         Commands::Bench(cmd) => cmd_bench::run(cmd, cli.dir, cli.verbose)?,
         Commands::Random(cmd) => cmd_random::run(cmd, cli.dir)?,
+        Commands::Clean(cmd) => cmd_clean::run(cmd, cli.dir, cli.verbose)?,
     }
 
     Ok(())

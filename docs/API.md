@@ -51,6 +51,9 @@ verify_chain(spec: ChainVerifySpec) -> Result<ChainVerifyResult>
 rollback_plan(spec: RollbackSpec) -> Result<RollbackPlan>
 rollback(spec: RollbackSpec) -> Result<RollbackResult>
 
+// === Repository Cleanup ===
+clean() -> Result<CleanResult>
+
 // === Performance & Caching ===
 prefetch_bundles(nums: Vec<u32>) -> Result<()>
 warm_up(spec: WarmUpSpec) -> Result<()>
@@ -598,6 +601,39 @@ pub struct RollbackResult {
     pub success: bool,
 }
 ```
+
+---
+
+## 7.5. Repository Cleanup
+
+### Clean Temporary Files
+
+```rust
+pub fn clean(&self) -> Result<CleanResult>
+```
+
+**Purpose**: Remove all temporary files from the repository.
+
+**What it does:**
+- Removes all `.tmp` files from the repository root directory (e.g., `plc_bundles.json.tmp`)
+- Removes temporary files from the DID index directory `.plcbundle/` (e.g., `config.json.tmp`)
+- Removes temporary shard files from `.plcbundle/shards/` (e.g., `00.tmp`, `01.tmp`, etc.)
+
+**Result:**
+```rust
+pub struct CleanResult {
+    pub files_removed: usize,
+    pub bytes_freed: u64,
+    pub errors: Option<Vec<String>>,
+}
+```
+
+**Use Cases:**
+- CLI: `plcbundle clean`
+- Cleanup after interrupted operations
+- Maintenance tasks
+
+**Note**: Temporary files are normally cleaned up automatically during atomic write operations. This method is useful for cleaning up leftover files from interrupted operations.
 
 ---
 

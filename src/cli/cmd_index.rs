@@ -29,12 +29,16 @@ pub struct IndexCommand {
 pub enum IndexCommands {
     /// Build DID position index
     #[command(after_help = "Examples:\n  \
-            # Build index\n  \
+            # Build index (default: flush every 10 bundles)\n  \
             plcbundle index build\n\n  \
             # Force rebuild from scratch\n  \
             plcbundle index build --force\n\n  \
             # Use 8 parallel threads\n  \
-            plcbundle index build -j 8")]
+            plcbundle index build -j 8\n\n  \
+            # Flush every 100 bundles (reduce memory usage)\n  \
+            plcbundle index build --flush-interval 100\n\n  \
+            # No intermediate flushes (maximum speed, high memory)\n  \
+            plcbundle index build --flush-interval 0")]
     Build {
         /// Rebuild even if index exists
         #[arg(short, long)]
@@ -43,6 +47,10 @@ pub enum IndexCommands {
         /// Number of threads to use (0 = auto-detect)
         #[arg(short = 'j', long, default_value = "0")]
         threads: usize,
+
+        /// Flush to disk every N bundles (0 = only at end, default = 10)
+        #[arg(long, default_value = "10")]
+        flush_interval: u32,
     },
 
     /// Repair DID index (incremental update + compaction)
@@ -55,12 +63,17 @@ pub enum IndexCommands {
             Use this after syncing new bundles or if index is corrupted.\n\n  \
             Examples:\n  \
             plcbundle index repair\n  \
-            plcbundle index repair -j 8"
+            plcbundle index repair -j 8\n  \
+            plcbundle index repair --flush-interval 100"
     )]
     Repair {
         /// Number of threads to use (0 = auto-detect)
         #[arg(short = 'j', long, default_value = "0")]
         threads: usize,
+
+        /// Flush to disk every N bundles (0 = only at end, default = 10)
+        #[arg(long, default_value = "10")]
+        flush_interval: u32,
     },
 
     /// Show DID index statistics
@@ -102,11 +115,11 @@ pub enum IndexCommands {
 
 pub fn run(cmd: IndexCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
     match cmd.command {
-        IndexCommands::Build { force, threads } => {
-            cmd_index_build(dir, force, threads)?;
+        IndexCommands::Build { force, threads, flush_interval } => {
+            cmd_index_build(dir, force, threads, flush_interval)?;
         }
-        IndexCommands::Repair { threads } => {
-            cmd_index_repair(dir, threads)?;
+        IndexCommands::Repair { threads, flush_interval } => {
+            cmd_index_repair(dir, threads, flush_interval)?;
         }
         IndexCommands::Stats { json } => {
             cmd_index_stats(dir, json)?;
@@ -144,7 +157,7 @@ fn parse_shard(s: &str) -> Result<u8> {
     }
 }
 
-pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize) -> Result<()> {
+pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize, flush_interval: u32) -> Result<()> {
     // Set thread pool size
     let num_threads = super::utils::get_worker_threads(threads, 4);
     rayon::ThreadPoolBuilder::new()
@@ -178,13 +191,44 @@ pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize) -> Result<()> 
 
     // Create progress bar with byte tracking
     use super::progress::ProgressBar;
-    let progress = ProgressBar::with_bytes(manager.get_last_bundle() as usize, total_bytes);
+    use std::sync::{Arc, Mutex};
+    let progress = Arc::new(Mutex::new(ProgressBar::with_bytes(manager.get_last_bundle() as usize, total_bytes)));
+    let current_stage = Arc::new(Mutex::new("Stage 1: Processing bundles".to_string()));
 
-    manager.build_did_index(Some(|current, _total, bytes_processed, _total_bytes| {
-        progress.set_with_bytes(current as usize, bytes_processed);
-    }))?;
+    manager.build_did_index_with_threads(flush_interval, Some({
+        let progress = progress.clone();
+        let current_stage = current_stage.clone();
+        move |current, total, bytes_processed, _total_bytes| {
+            // Detect stage change: if total changes from bundle count to shard count (256), we're in stage 2
+            let is_stage_2 = total == 256 && current <= 256;
+            
+            if is_stage_2 {
+                // Update stage tracking
+                {
+                    let mut stage_guard = current_stage.lock().unwrap();
+                    *stage_guard = "Stage 2: Consolidating shards".to_string();
+                }
+                // For stage 2, update the progress bar to show shard consolidation
+                let pb_guard = progress.lock().unwrap();
+                pb_guard.set(current as usize);
+                pb_guard.set_message(format!("Stage 2: Consolidating shards ({}/{})", current, total));
+            } else {
+                // Update stage tracking
+                {
+                    let mut stage_guard = current_stage.lock().unwrap();
+                    *stage_guard = "Stage 1: Processing bundles".to_string();
+                }
+                // For stage 1, use byte tracking
+                let pb_guard = progress.lock().unwrap();
+                pb_guard.set_with_bytes(current as usize, bytes_processed);
+                pb_guard.set_message("Stage 1: Processing bundles");
+            }
+        }
+    }), num_threads)?;
 
-    progress.finish();
+    progress.lock().unwrap().finish();
+
+    eprintln!();
 
     // Show final info
     let stats = manager.get_did_index_stats();
@@ -199,7 +243,7 @@ pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize) -> Result<()> 
     Ok(())
 }
 
-pub fn cmd_index_repair(dir: PathBuf, threads: usize) -> Result<()> {
+pub fn cmd_index_repair(dir: PathBuf, threads: usize, flush_interval: u32) -> Result<()> {
     // Set thread pool size
     let num_threads = super::utils::get_worker_threads(threads, 4);
     rayon::ThreadPoolBuilder::new()
@@ -273,9 +317,9 @@ pub fn cmd_index_repair(dir: PathBuf, threads: usize) -> Result<()> {
             use super::progress::ProgressBar;
             let progress = ProgressBar::with_bytes(last_bundle as usize, total_bytes);
 
-            manager.build_did_index(Some(|current, _total, bytes_processed, _total_bytes| {
+            manager.build_did_index_with_threads(flush_interval, Some(|current, _total, bytes_processed, _total_bytes| {
                 progress.set_with_bytes(current as usize, bytes_processed);
-            }))?;
+            }), num_threads)?;
 
             progress.finish();
         } else {
@@ -530,12 +574,15 @@ fn rebuild_and_compare_index(
     let progress = ProgressBar::with_bytes(last_bundle as usize, total_uncompressed_size);
 
     // Stream bundles directly from disk - memory efficient!
+    // Use default flush interval of 10 for verify
     temp_did_index.build_from_scratch(
         manager.directory(),
         last_bundle,
-        Some(|current, _total, bytes_processed| {
+        10, // flush_interval
+        Some(|current, _total, bytes_processed, _stage| {
             progress.set_with_bytes(current as usize, bytes_processed);
-        })
+        }),
+        0 // num_threads: auto-detect
     )?;
 
     progress.finish();

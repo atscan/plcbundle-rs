@@ -36,10 +36,11 @@ pub use handle_resolver::{HandleResolver, is_handle, normalize_handle, validate_
 pub use index::{BundleMetadata, Index};
 pub use iterators::{ExportIterator, QueryIterator, RangeIterator};
 pub use manager::{
-    BundleInfo, BundleManager, BundleRange, ChainVerifyResult, ChainVerifySpec, CompressionType,
-    DIDIndexStats, ExportFormat, ExportSpec, InfoFlags, LoadOptions, LoadResult, ManagerStats,
-    OperationResult, QuerySpec, RebuildStats, ResolveResult, RollbackFileStats, RollbackPlan,
-    RollbackResult, RollbackSpec, SyncResult, VerifyResult, VerifySpec, WarmUpSpec, WarmUpStrategy,
+    BundleInfo, BundleManager, BundleRange, ChainVerifyResult, ChainVerifySpec, CleanResult,
+    CompressionType, DIDIndexStats, ExportFormat, ExportSpec, InfoFlags, LoadOptions, LoadResult,
+    ManagerStats, OperationResult, QuerySpec, RebuildStats, ResolveResult, RollbackFileStats,
+    RollbackPlan, RollbackResult, RollbackSpec, SyncResult, VerifyResult, VerifySpec, WarmUpSpec,
+    WarmUpStrategy,
 };
 pub use mempool::{Mempool, MempoolStats};
 pub use operations::{Operation, OperationFilter, OperationRequest, OperationWithLocation};

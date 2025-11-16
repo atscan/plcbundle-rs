@@ -87,6 +87,13 @@ pub struct RollbackFileStats {
     pub deleted_size: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct CleanResult {
+    pub files_removed: usize,
+    pub bytes_freed: u64,
+    pub errors: Option<Vec<String>>,
+}
+
 impl BundleManager {
     pub fn new(directory: PathBuf) -> Result<Self> {
         Self::with_handle_resolver(directory, None)
@@ -646,7 +653,8 @@ impl BundleManager {
             .bundles
             .retain(|b| b.bundle_number <= spec.target_bundle);
 
-        self.build_did_index(None::<fn(u32, u32, u64, u64)>)?;
+        // Use default flush interval of 10 for rollback
+        self.build_did_index(10, None::<fn(u32, u32, u64, u64)>)?;
 
         Ok(RollbackResult {
             success: true,
@@ -683,7 +691,14 @@ impl BundleManager {
     }
 
     // === DID Index ===
-    pub fn build_did_index<F>(&self, progress_cb: Option<F>) -> Result<RebuildStats>
+    pub fn build_did_index<F>(&self, flush_interval: u32, progress_cb: Option<F>) -> Result<RebuildStats>
+    where
+        F: Fn(u32, u32, u64, u64) + Send + Sync, // (current, total, bytes_processed, total_bytes)
+    {
+        self.build_did_index_with_threads(flush_interval, progress_cb, 0) // Default to auto-detect
+    }
+
+    pub fn build_did_index_with_threads<F>(&self, flush_interval: u32, progress_cb: Option<F>, num_threads: usize) -> Result<RebuildStats>
     where
         F: Fn(u32, u32, u64, u64) + Send + Sync, // (current, total, bytes_processed, total_bytes)
     {
@@ -707,6 +722,11 @@ impl BundleManager {
         eprintln!("\n📦 Building DID Index");
         eprintln!("   Strategy: Streaming (memory-efficient)");
         eprintln!("   Bundles:  {}", last_bundle);
+        if flush_interval > 0 {
+            eprintln!("   Flush:    Every {} bundles", flush_interval);
+        } else {
+            eprintln!("   Flush:    Only at end (maximum memory usage)");
+        }
         eprintln!();
 
         let build_start = Instant::now();
@@ -718,11 +738,27 @@ impl BundleManager {
                 idx.build_from_scratch(
                     &self.directory,
                     last_bundle,
+                    flush_interval,
                     progress_cb.map(|cb| {
-                        move |current: u32, total: u32, bytes: u64| {
-                            cb(current, total, bytes, total_uncompressed_bytes);
+                        move |current: u32, total: u32, bytes: u64, stage: Option<String>| {
+                            // Always call the callback - let it handle stage detection
+                            // For stage 1, use bytes tracking; for stage 2, use shard count
+                            if let Some(ref stage_name) = stage {
+                                if stage_name.contains("Stage 2") {
+                                    // For consolidation, we don't have byte tracking, so just pass 0
+                                    // The progress bar will show shard progress
+                                    cb(current, total, 0, total_uncompressed_bytes);
+                                } else {
+                                    // Stage 1 or unknown - use bytes
+                                    cb(current, total, bytes, total_uncompressed_bytes);
+                                }
+                            } else {
+                                // Fallback for backward compatibility
+                                cb(current, total, bytes, total_uncompressed_bytes);
+                            }
                         }
-                    })
+                    }),
+                    num_threads
                 )?
             } else {
                 return Err(anyhow::anyhow!("DID index not initialized"));
@@ -2392,6 +2428,202 @@ impl BundleManager {
             deleted,
             failed,
             deleted_size,
+        })
+    }
+
+    /// Clean up all temporary files from the repository
+    ///
+    /// Removes all `.tmp` files from:
+    /// - Repository root directory (e.g., `plc_bundles.json.tmp`)
+    /// - DID index directory `.plcbundle/` (e.g., `config.json.tmp`)
+    /// - DID index shards directory `.plcbundle/shards/` (e.g., `00.tmp`, `01.tmp`, etc.)
+    ///
+    /// # Returns
+    /// Statistics about the cleanup operation
+    pub fn clean(&self) -> Result<CleanResult> {
+        use std::fs;
+
+        let verbose = *self.verbose.lock().unwrap();
+        
+        if verbose {
+            log::info!("Starting repository cleanup...");
+        }
+
+        let mut files_removed = 0;
+        let mut bytes_freed = 0u64;
+        let mut errors = Vec::new();
+
+        // Clean repository root directory
+        let root_dir = &self.directory;
+        if verbose {
+            log::info!("Scanning repository root directory: {}", root_dir.display());
+        }
+        
+        if let Ok(entries) = fs::read_dir(root_dir) {
+            for entry in entries {
+                let entry = match entry {
+                    Ok(e) => e,
+                    Err(e) => {
+                        errors.push(format!("Failed to read directory entry: {}", e));
+                        continue;
+                    }
+                };
+
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+
+                if let Some(ext) = path.extension() {
+                    if ext == "tmp" {
+                        let file_size = match fs::metadata(&path) {
+                            Ok(meta) => {
+                                let size = meta.len();
+                                bytes_freed += size;
+                                size
+                            }
+                            Err(_) => 0
+                        };
+
+                        match fs::remove_file(&path) {
+                            Ok(_) => {
+                                files_removed += 1;
+                                if verbose {
+                                    log::info!("  ✓ Removed: {} ({})", 
+                                        path.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+                                        crate::format::format_bytes(file_size));
+                                }
+                            }
+                            Err(e) => {
+                                let error_msg = format!("Failed to remove {}: {}", path.display(), e);
+                                errors.push(error_msg.clone());
+                                if verbose {
+                                    log::warn!("  ✗ {}", error_msg);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Clean DID index directory (.plcbundle/)
+        let did_index_dir = root_dir.join(constants::DID_INDEX_DIR);
+        if did_index_dir.exists() {
+            if verbose {
+                log::info!("Scanning DID index directory: {}", did_index_dir.display());
+            }
+            
+            // Clean config.json.tmp
+            let config_tmp = did_index_dir.join(format!("{}.tmp", constants::DID_INDEX_CONFIG));
+            if config_tmp.exists() {
+                let file_size = match fs::metadata(&config_tmp) {
+                    Ok(meta) => {
+                        let size = meta.len();
+                        bytes_freed += size;
+                        size
+                    }
+                    Err(_) => 0
+                };
+
+                match fs::remove_file(&config_tmp) {
+                    Ok(_) => {
+                        files_removed += 1;
+                        if verbose {
+                            log::info!("  ✓ Removed: {} ({})", 
+                                config_tmp.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+                                crate::format::format_bytes(file_size));
+                        }
+                    }
+                    Err(e) => {
+                        let error_msg = format!("Failed to remove {}: {}", config_tmp.display(), e);
+                        errors.push(error_msg.clone());
+                        if verbose {
+                            log::warn!("  ✗ {}", error_msg);
+                        }
+                    }
+                }
+            }
+
+            // Clean shards directory (.plcbundle/shards/)
+            let shards_dir = did_index_dir.join(constants::DID_INDEX_SHARDS);
+            if shards_dir.exists() {
+                if verbose {
+                    log::info!("Scanning shards directory: {}", shards_dir.display());
+                }
+                if let Ok(entries) = fs::read_dir(&shards_dir) {
+                    for entry in entries {
+                        let entry = match entry {
+                            Ok(e) => e,
+                            Err(e) => {
+                                errors.push(format!("Failed to read shards directory entry: {}", e));
+                                continue;
+                            }
+                        };
+
+                        let path = entry.path();
+                        if !path.is_file() {
+                            continue;
+                        }
+
+                        if let Some(ext) = path.extension() {
+                            if ext == "tmp" {
+                                let file_size = match fs::metadata(&path) {
+                                    Ok(meta) => {
+                                        let size = meta.len();
+                                        bytes_freed += size;
+                                        size
+                                    }
+                                    Err(_) => 0
+                                };
+
+                                match fs::remove_file(&path) {
+                                    Ok(_) => {
+                                        files_removed += 1;
+                                        if verbose {
+                                            log::info!("  ✓ Removed: {} ({})", 
+                                                path.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+                                                crate::format::format_bytes(file_size));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let error_msg = format!("Failed to remove {}: {}", path.display(), e);
+                                        errors.push(error_msg.clone());
+                                        if verbose {
+                                            log::warn!("  ✗ {}", error_msg);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if verbose {
+                log::debug!("Shards directory does not exist: {}", shards_dir.display());
+            }
+        } else if verbose {
+            log::debug!("DID index directory does not exist: {}", did_index_dir.display());
+        }
+
+        // Summary logging
+        if verbose {
+            if files_removed > 0 {
+                log::info!("Cleanup complete: removed {} file(s), freed {}", 
+                    files_removed,
+                    crate::format::format_bytes(bytes_freed));
+            } else {
+                log::info!("Cleanup complete: no temporary files found");
+            }
+            
+            if !errors.is_empty() {
+                log::warn!("Encountered {} error(s) during cleanup", errors.len());
+            }
+        }
+
+        Ok(CleanResult {
+            files_removed,
+            bytes_freed,
+            errors: if errors.is_empty() { None } else { Some(errors) },
         })
     }
 
