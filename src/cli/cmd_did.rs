@@ -73,9 +73,9 @@ pub enum DIDCommands {
         #[arg(long, default_value = "lookup")]
         action: String,
 
-        /// Number of parallel workers
-        #[arg(long, default_value = "4")]
-        workers: usize,
+        /// Number of parallel threads (0 = auto-detect)
+        #[arg(short = 'j', long, default_value = "0")]
+        threads: usize,
 
         /// Output file
         #[arg(short, long)]
@@ -101,11 +101,11 @@ pub fn run_did(cmd: DidCommand, dir: PathBuf) -> Result<()> {
         }
         DIDCommands::Batch {
             action,
-            workers,
+            threads,
             output,
             stdin,
         } => {
-            cmd_did_batch(dir, action, workers, output, stdin)?;
+            cmd_did_batch(dir, action, threads, output, stdin)?;
         }
     }
     Ok(())
@@ -679,7 +679,7 @@ fn show_operation_details(op: &plcbundle::Operation) {
 pub fn cmd_did_batch(
     _dir: PathBuf,
     _action: String,
-    _workers: usize,
+    _threads: usize,
     _output: Option<PathBuf>,
     _from_stdin: bool,
 ) -> Result<()> {

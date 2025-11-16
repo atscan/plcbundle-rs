@@ -40,8 +40,8 @@ Original files are replaced atomically. Use --dry-run to preview.",
         plcbundle migrate --bundles 1-10,20-30,50\n\n  \
         # Force migration even if frame metadata exists\n  \
         plcbundle migrate --force\n\n  \
-        # Limit workers (if needed for resource constraints)\n  \
-        plcbundle migrate --workers 4\n\n  \
+        # Limit threads (if needed for resource constraints)\n  \
+        plcbundle migrate -j 4\n\n  \
         # Verbose output\n  \
         plcbundle migrate -v"
 )]
@@ -59,9 +59,9 @@ pub struct MigrateCommand {
     #[arg(long)]
     pub bundles: Option<String>,
 
-    /// Number of parallel workers (0 = auto-detect CPU cores, default)
-    #[arg(short, long, default_value = "0")]
-    pub workers: usize,
+    /// Number of threads to use (0 = auto-detect)
+    #[arg(short = 'j', long, default_value = "0")]
+    pub threads: usize,
 
     /// Verbose output
     #[arg(short, long)]
@@ -78,8 +78,8 @@ pub fn run(mut cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Resul
     cmd.verbose = cmd.verbose || global_verbose;
     let manager = super::utils::create_manager_from_cmd(dir.clone(), &cmd)?;
 
-    // Auto-detect number of workers if 0
-    let workers = super::utils::get_worker_threads(cmd.workers, 4);
+    // Auto-detect number of threads if 0
+    let workers = super::utils::get_worker_threads(cmd.threads, 4);
 
     eprintln!("Scanning for legacy bundles in: {}\n", super::utils::display_path(&dir).display());
 
