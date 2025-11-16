@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 #[derive(Args)]
 #[command(
-    about = "Clone a remote PLC bundle repository",
+    about = "Clone a remote bundle repository",
     long_about = "Download all bundles from a remote plcbundle HTTP server to create a complete
 local copy of the repository. Similar to 'git clone', this command creates a new
 repository directory and populates it with all bundles from the remote source.

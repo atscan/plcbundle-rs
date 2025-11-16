@@ -57,39 +57,39 @@ error handling, graceful shutdown, and resource management.",
 )]
 pub struct ServerCommand {
     /// HTTP server port
-    #[arg(long, default_value = "8080")]
+    #[arg(long, default_value = "8080", help_heading = "Server Options")]
     pub port: u16,
 
     /// HTTP server host
-    #[arg(long, default_value = "127.0.0.1")]
+    #[arg(long, default_value = "127.0.0.1", help_heading = "Server Options")]
     pub host: String,
 
     /// Enable sync mode (run as daemon, continuously fetch from PLC)
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Sync Options")]
     pub sync: bool,
 
     /// PLC directory URL (for sync mode)
-    #[arg(long, default_value = plcbundle::constants::DEFAULT_PLC_DIRECTORY_URL)]
+    #[arg(long, default_value = plcbundle::constants::DEFAULT_PLC_DIRECTORY_URL, help_heading = "Sync Options")]
     pub plc: String,
 
     /// Sync interval (how often to check for new bundles)
-    #[arg(long, default_value = "60s", value_parser = parse_duration)]
+    #[arg(long, default_value = "60s", value_parser = parse_duration, help_heading = "Sync Options")]
     pub interval: Duration,
 
     /// Maximum bundles to fetch (0 = unlimited)
-    #[arg(long, default_value = "0")]
+    #[arg(long, default_value = "0", help_heading = "Sync Options")]
     pub max_bundles: u32,
 
     /// Enable WebSocket endpoint for streaming
-    #[arg(long)]
+    #[arg(long, help_heading = "Feature Options")]
     pub websocket: bool,
 
     /// Enable DID resolution endpoints
-    #[arg(long)]
+    #[arg(long, help_heading = "Feature Options")]
     pub resolver: bool,
 
     /// Handle resolver URL (defaults to quickdid.smokesignal.tools if not provided)
-    #[arg(long)]
+    #[arg(long, help_heading = "Feature Options")]
     pub handle_resolver: Option<String>,
 
 }

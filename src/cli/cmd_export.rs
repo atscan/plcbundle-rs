@@ -50,7 +50,7 @@ fn format_bundle_range(bundles: &[u32]) -> String {
 
 #[derive(Args)]
 #[command(
-    about = "Export operations to different formats",
+    about = "Export operations to stdout or file",
     long_about = "Export operations from bundles as raw JSONL (JSON Lines) format, suitable
 for processing with standard Unix tools or importing into other systems.
 

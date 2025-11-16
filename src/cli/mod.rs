@@ -34,12 +34,61 @@ mod utils;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Format custom help template with grouped commands
+fn format_help_template() -> &'static str {
+    concat!(
+        "{about-with-newline}\n\n",
+        "{usage-heading}\n  {usage}\n\n",
+        "Options:\n{options}\n\n",
+        "Repository Management:\n",
+        "  init      Initialize a new bundle repository\n",
+        "  clone     Clone a remote bundle repository\n",
+        "  sync      Fetch new bundles from PLC directory\n",
+        "  status    Show comprehensive repository status\n",
+        "  ls        List bundles (machine-readable)\n",
+        "\n",
+        "Maintenance:\n",
+        "  rebuild   Rebuild bundle index from existing files\n",
+        "  migrate   Migrate bundles to new bundle format\n",
+        "  clean     Remove all temporary files from the repository\n",
+        "  rollback  Rollback repository to earlier state\n",
+        "\n",
+        "Query & Export:\n",
+        "  query     Query bundles with JMESPath or simple path\n",
+        "  export    Export operations to stdout or file\n",
+        "  op        Operation queries and inspection\n",
+        "  stats     Display statistics about bundles\n",
+        "\n",
+        "DID Operations:\n",
+        "  did       DID operations and queries\n",
+        "  handle    Resolve handle to DID\n",
+        "  index     DID index management\n",
+        "\n",
+        "Verification:\n",
+        "  verify    Verify bundle integrity and chain\n",
+        "  compare   Compare bundle repositories\n",
+        "  inspect   Deep analysis of bundle contents\n",
+        "\n",
+        "Server:\n",
+        "  server    Start HTTP server\n",
+        "\n",
+        "Mempool:\n",
+        "  mempool   Manage mempool operations\n",
+        "\n",
+        "Development:\n",
+        "  bench     Benchmark bundle operations\n",
+        "  random    Output random DIDs sampled from the index\n",
+        "\n",
+        "See 'plcbundle <COMMAND> --help' for more information on a specific command.\n"
+    )
+}
+
 #[derive(Parser)]
-#[command(name = "plcbundle")]
+#[command(bin_name = "plcbundle")]
 #[command(version = VERSION)]
-#[command(about = concat!("{name} v{version} (rust) - DID PLC Bundle Management"))]
+#[command(about = concat!("plcbundle v", env!("CARGO_PKG_VERSION"), " (rust) - DID PLC Bundle Management"))]
 #[command(long_about = concat!(
-    "{bin} v{version} - DID PLC Bundle Management\n\n",
+    "plcbundle v", env!("CARGO_PKG_VERSION"), " - DID PLC Bundle Management\n\n",
     "Tool for archiving AT Protocol's DID PLC Directory operations\n",
     "into immutable, cryptographically-chained bundles of 10,000\n",
     "operations each.\n\n",
@@ -47,6 +96,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 ))]
 #[command(author)]
 #[command(propagate_version = true)]
+#[command(help_template = format_help_template())]
 struct Cli {
     /// Repository directory
     #[arg(short = 'C', long = "dir", global = true, default_value = ".")]
@@ -66,29 +116,29 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    Query(cmd_query::QueryCommand),
     Init(cmd_init::InitCommand),
     Clone(cmd_clone::CloneCommand),
+    Sync(cmd_sync::SyncCommand),
     Status(cmd_status::StatusCommand),
     Ls(cmd_ls::LsCommand),
-    Verify(cmd_verify::VerifyCommand),
+    Rebuild(cmd_rebuild::RebuildCommand),
+    Migrate(cmd_migrate::MigrateCommand),
+    Clean(cmd_clean::CleanCommand),
+    Rollback(cmd_rollback::RollbackCommand),
+    Query(cmd_query::QueryCommand),
     Export(cmd_export::ExportCommand),
     Op(cmd_op::OpCommand),
     Stats(cmd_stats::StatsCommand),
     Did(cmd_did::DidCommand),
     Handle(cmd_did::HandleCommand),
     Index(cmd_index::IndexCommand),
-    Mempool(cmd_mempool::MempoolCommand),
-    Sync(cmd_sync::SyncCommand),
-    Rollback(cmd_rollback::RollbackCommand),
+    Verify(cmd_verify::VerifyCommand),
     Compare(cmd_compare::CompareCommand),
     Inspect(cmd_inspect::InspectCommand),
     Server(cmd_server::ServerCommand),
-    Migrate(cmd_migrate::MigrateCommand),
-    Rebuild(cmd_rebuild::RebuildCommand),
+    Mempool(cmd_mempool::MempoolCommand),
     Bench(cmd_bench::BenchCommand),
     Random(cmd_random::RandomCommand),
-    Clean(cmd_clean::CleanCommand),
 }
 
 fn main() -> Result<()> {

@@ -25,8 +25,7 @@ All subcommands support JMESPath queries to extract specific fields from operati
 making it easy to script and process operation data.",
     alias = "operation",
     alias = "record",
-    help_template = crate::clap_help!(
-        examples: "  # Get operation as JSON\n  \
+    help_template = "  # Get operation as JSON\n  \
                    {bin} op get 42 1337\n  \
                    {bin} op get 420000\n\n  \
                    # Show operation (formatted)\n  \
@@ -34,7 +33,6 @@ making it easy to script and process operation data.",
                    {bin} op show 88410345\n\n  \
                    # Find by CID\n  \
                    {bin} op find bafyreig3..."
-    )
 )]
 pub struct OpCommand {
     #[command(subcommand)]

@@ -9,7 +9,7 @@ use std::time::Instant;
 
 #[derive(Args)]
 #[command(
-    about = "Rebuild plc_bundles.json from existing bundle files",
+    about = "Rebuild bundle index from existing files",
     long_about = "Reconstruct the bundle index (plc_bundles.json) by scanning existing bundle
 files and extracting metadata from their embedded metadata frames. This is essential
 when the index file has been lost, corrupted, or needs to be regenerated.

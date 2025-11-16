@@ -10,16 +10,14 @@ use std::time::Instant;
 
 #[derive(Args)]
 #[command(
-    about = "Migrate bundles to new zstd frame format",
-    long_about = "Convert bundles from the legacy single-frame zstd format to the modern
-multi-frame format with embedded frame offsets. This migration enables faster
-random access to individual operations, reduces memory usage when loading specific
-positions, and improves performance for DID lookups and operation queries.
+    about = "Migrate bundles to new bundle format",
+    long_about = "Rebuild bundles to the new bundle format by recompressing and creating
+multi-frame structure with embedded frame offsets.
 
-The migration process scans for bundles missing frame metadata (indicating legacy
-format), re-compresses them using the multi-frame format (100 operations per frame),
-generates a frame offset index in the metadata, and preserves all cryptographic
-hashes and metadata. Content integrity is verified throughout the process.
+The migration process scans for bundles missing frame metadata, recompresses them
+using the multi-frame format (100 operations per frame), generates a frame offset
+index in the metadata, and preserves all cryptographic hashes and metadata.
+Content integrity is verified throughout the process.
 
 Original bundle files are replaced atomically to ensure data safety. The command
 automatically detects which bundles need migration and processes them in parallel

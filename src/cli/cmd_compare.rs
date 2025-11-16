@@ -11,7 +11,7 @@ use super::utils::colors;
 #[derive(Args)]
 #[command(
     alias = "diff",
-    about = "Compare repositories",
+    about = "Compare bundle repositories",
     long_about = "Compare your local repository against a remote instance or another local
 repository to identify differences, missing bundles, or integrity issues.
 

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 #[derive(Args)]
 #[command(
-    about = "Initialize a new PLC bundle repository",
+    about = "Initialize a new bundle repository",
     long_about = "Create a new repository for storing PLC bundle data. This command sets up
 the necessary directory structure and creates an empty index file (plc_bundles.json)
 that will track all bundles in the repository.
