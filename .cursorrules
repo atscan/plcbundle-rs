@@ -89,6 +89,27 @@ std::fs::remove_file(bundle_path)?;
 manager.delete_bundle_files(&[bundle_num])?;
 ```
 
+### JSON Parsing
+- ✅ **ALWAYS** use `sonic_rs` for JSON parsing (performance-critical)
+- ❌ **NEVER** use `serde_json` for parsing JSON from bundles or operations
+- Use `sonic_rs::from_str` for parsing JSON strings
+- Use `sonic_rs::Value` and `JsonValueTrait` for accessing JSON values
+
+**Examples:**
+```rust
+// ✅ CORRECT - Use sonic_rs
+use sonic_rs::JsonValueTrait;
+if let Ok(value) = sonic_rs::from_str::<sonic_rs::Value>(&line) {
+    if let Some(did) = value.get("did").and_then(|v| v.as_str()) {
+        // ...
+    }
+}
+
+// ❌ WRONG - Don't use serde_json
+use serde_json::Value;
+let value: Value = serde_json::from_str(&line)?;
+```
+
 ## Testing
 
 **IMPORTANT**: Always test compilation with all features enabled.
