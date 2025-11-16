@@ -703,6 +703,7 @@ impl Manager {
     }
 
     /// Process a single bundle and return entries grouped by shard
+    /// This is the shared implementation used by both parallel and sequential processing
     fn process_bundle_for_index(
         bundle_dir: &PathBuf,
         bundle_num: u32,
@@ -727,6 +728,17 @@ impl Manager {
         };
 
         let reader = BufReader::with_capacity(1024 * 1024, decoder);
+        Self::process_bundle_lines(bundle_num, reader)
+    }
+
+    /// Core bundle processing logic - processes lines from a reader and groups by shard
+    /// This shared function eliminates duplication between parallel and sequential processing
+    fn process_bundle_lines<R: std::io::BufRead>(
+        bundle_num: u32,
+        reader: R,
+    ) -> Result<(HashMap<u8, Vec<(String, OpLocation)>>, u64, u64)> {
+        use sonic_rs::JsonValueTrait;
+
         let mut shard_entries: HashMap<u8, Vec<(String, OpLocation)>> = HashMap::new();
         let mut bundle_bytes = 0u64;
         let mut total_operations = 0u64;
@@ -908,22 +920,12 @@ impl Manager {
         let mut flush_count = 0usize;
         let mut total_flush_time = std::time::Duration::ZERO;
         
-        // Detailed timing metrics (aggregated every N bundles)
+        // Metrics tracking (aggregated every N bundles)
         let metrics_interval = 100; // Log metrics every 100 bundles
         let mut metrics_start = Instant::now();
         let mut metrics_ops = 0u64;
         let mut metrics_bytes = 0u64;
-        let mut metrics_json_parse = std::time::Duration::ZERO;
-        let mut metrics_did_extract = std::time::Duration::ZERO;
-        let mut metrics_shard_calc = std::time::Duration::ZERO;
-        let mut metrics_string_alloc = std::time::Duration::ZERO;
-        let mut metrics_hashmap_ops = std::time::Duration::ZERO;
-        let mut metrics_io_read = std::time::Duration::ZERO;
-        let mut metrics_decompress; // Initialized later from metrics_line_read
-        let mut metrics_line_read = std::time::Duration::ZERO;
-        let mut metrics_location_create = std::time::Duration::ZERO;
         let mut metrics_bundle_total = std::time::Duration::ZERO;
-        let mut metrics_operations_without_did = std::time::Duration::ZERO;
 
         // Process bundles in batches (parallel or sequential)
         let batch_size = if use_parallel { 100 } else { 1 }; // Process 100 bundles at a time in parallel
@@ -940,117 +942,20 @@ impl Manager {
                     .collect()
             } else {
                 // Process batch sequentially (for metrics tracking)
+                // Use the shared process_bundle_for_index function to avoid code duplication
                 batch.iter()
                     .map(|&bundle_num| {
                         let bundle_processing_start = Instant::now();
-                        let bundle_path = crate::constants::bundle_path(bundle_dir, bundle_num);
-                        
-                        if !bundle_path.exists() {
-                            return Ok((HashMap::new(), 0, 0));
-                        }
-                        
-                        // Stream from zstd file directly (memory-efficient!)
-                        let io_start = Instant::now();
-                        let file = match File::open(&bundle_path) {
-                            Ok(f) => f,
-                            Err(_) => return Ok((HashMap::new(), 0, 0)),
-                        };
-                        
-                        let decoder = match zstd::Decoder::new(file) {
-                            Ok(d) => d,
-                            Err(_) => return Ok((HashMap::new(), 0, 0)),
-                        };
-                        
-                        let reader = BufReader::with_capacity(1024 * 1024, decoder);
-                        metrics_io_read += io_start.elapsed();
-                        
-                        let mut local_shard_entries: HashMap<u8, Vec<(String, OpLocation)>> = HashMap::new();
-                        let mut bundle_bytes = 0u64;
-                        let mut bundle_operations = 0u64; // Track operations for this bundle
-                        let mut position = 0u16;
-                        
-                        // Stream line-by-line without loading entire bundle
-                        let mut lines_iter = reader.lines();
-                        while let Some(line_result) = {
-                            let line_read_start = Instant::now();
-                            let result = lines_iter.next();
-                            metrics_line_read += line_read_start.elapsed();
-                            result
-                        } {
-                            let line = match line_result {
-                                Ok(l) => l,
-                                Err(_) => continue,
-                            };
-                            
-                            if line.is_empty() {
-                                continue;
-                            }
-                            
-                            bundle_bytes += line.len() as u64 + 1;
-                            bundle_operations += 1; // Count operations for this bundle
-                            total_operations += 1;
-                            metrics_ops += 1;
-                            metrics_bytes += line.len() as u64 + 1;
-                            
-                            // Parse only the fields we need (did and nullified)
-                            let json_start = Instant::now();
-                            if let Ok(value) = sonic_rs::from_str::<sonic_rs::Value>(&line) {
-                                metrics_json_parse += json_start.elapsed();
-                                
-                                let did_extract_start = Instant::now();
-                                if let Some(did) = value.get("did").and_then(|v| v.as_str()) {
-                                    let nullified = value.get("nullified")
-                                        .and_then(|v| v.as_bool())
-                                        .unwrap_or(false);
-                                    metrics_did_extract += did_extract_start.elapsed();
-                                    
-                                    // Calculate shard directly from DID bytes (no String allocation)
-                                    let shard_start = Instant::now();
-                                    if let Some(shard_num) = calculate_shard_from_did(did) {
-                                        metrics_shard_calc += shard_start.elapsed();
-                                        
-                                        // Only allocate String when we actually need to store it
-                                        let string_start = Instant::now();
-                                        let identifier = &did[DID_PREFIX.len()..DID_PREFIX.len() + DID_IDENTIFIER_LEN];
-                                        let identifier = identifier.to_string();
-                                        metrics_string_alloc += string_start.elapsed();
-                                        
-                                        total_valid_dids += 1;
-                                        
-                                        let loc_start = Instant::now();
-                                        let loc = OpLocation::new(bundle_num as u16, position, nullified);
-                                        metrics_location_create += loc_start.elapsed();
-                                        
-                                        let hashmap_start = Instant::now();
-                                        local_shard_entries
-                                            .entry(shard_num)
-                                            .or_insert_with(Vec::new)
-                                            .push((identifier, loc));
-                                        metrics_hashmap_ops += hashmap_start.elapsed();
-                                    } else {
-                                        metrics_shard_calc += shard_start.elapsed();
-                                    }
-                                } else {
-                                    // Operation without DID field
-                                    metrics_did_extract += did_extract_start.elapsed();
-                                    let no_did_start = Instant::now();
-                                    metrics_operations_without_did += no_did_start.elapsed();
-                                }
-                            } else {
-                                // Failed JSON parse
-                                metrics_json_parse += json_start.elapsed();
-                                let no_did_start = Instant::now();
-                                metrics_operations_without_did += no_did_start.elapsed();
-                            }
-                            
-                            position += 1;
-                            if position >= constants::BUNDLE_SIZE as u16 {
-                                break; // Safety: bundles shouldn't exceed BUNDLE_SIZE
-                            }
-                        }
-                        
+                        let result = Self::process_bundle_for_index(bundle_dir, bundle_num);
                         metrics_bundle_total += bundle_processing_start.elapsed();
-                        Ok((local_shard_entries, bundle_bytes, bundle_operations))
+                        
+                        // Track aggregate metrics from result
+                        if let Ok((_, bundle_bytes, bundle_operations)) = &result {
+                            metrics_bytes += bundle_bytes;
+                            metrics_ops += bundle_operations;
+                        }
+                        
+                        result
                     })
                     .collect()
             };
@@ -1141,103 +1046,11 @@ impl Manager {
                         mb_per_sec
                     );
                     
-                    if use_parallel {
-                        // In parallel mode, detailed timing metrics aren't available
+                    // Show bundle processing time (simplified metrics)
+                    if metrics_bundle_total.as_secs_f64() > 0.0 {
                         log::info!(
-                            "[DID Index]   Note: Detailed timing breakdown only available in sequential mode (use --threads 1)"
-                        );
-                    } else {
-                        // Sequential mode: show detailed timing breakdown
-                        // Decompression happens during line reading (reader.lines().next())
-                        // The line_read time includes zstd decompression overhead
-                        metrics_decompress = metrics_line_read;
-                        
-                        let json_pct = if metrics_duration.as_secs_f64() > 0.0 {
-                            (metrics_json_parse.as_secs_f64() / metrics_duration.as_secs_f64()) * 100.0
-                        } else {
-                            0.0
-                        };
-                        let hashmap_pct = if metrics_duration.as_secs_f64() > 0.0 {
-                            (metrics_hashmap_ops.as_secs_f64() / metrics_duration.as_secs_f64()) * 100.0
-                        } else {
-                            0.0
-                        };
-                        let shard_pct = if metrics_duration.as_secs_f64() > 0.0 {
-                            (metrics_shard_calc.as_secs_f64() / metrics_duration.as_secs_f64()) * 100.0
-                        } else {
-                            0.0
-                        };
-                        let string_pct = if metrics_duration.as_secs_f64() > 0.0 {
-                            (metrics_string_alloc.as_secs_f64() / metrics_duration.as_secs_f64()) * 100.0
-                        } else {
-                            0.0
-                        };
-                        let io_pct = if metrics_duration.as_secs_f64() > 0.0 {
-                            (metrics_io_read.as_secs_f64() / metrics_duration.as_secs_f64()) * 100.0
-                        } else {
-                            0.0
-                        };
-                        let decompress_pct = if metrics_duration.as_secs_f64() > 0.0 {
-                            (metrics_decompress.as_secs_f64() / metrics_duration.as_secs_f64()) * 100.0
-                        } else {
-                            0.0
-                        };
-                        let location_pct = if metrics_duration.as_secs_f64() > 0.0 {
-                            (metrics_location_create.as_secs_f64() / metrics_duration.as_secs_f64()) * 100.0
-                        } else {
-                            0.0
-                        };
-                        let no_did_pct = if metrics_duration.as_secs_f64() > 0.0 {
-                            (metrics_operations_without_did.as_secs_f64() / metrics_duration.as_secs_f64()) * 100.0
-                        } else {
-                            0.0
-                        };
-                        
-                        // Calculate what we're actually tracking vs total bundle processing time
-                        let tracked_time = metrics_decompress + metrics_json_parse + metrics_hashmap_ops + 
-                                           metrics_shard_calc + metrics_string_alloc + metrics_location_create + 
-                                           metrics_io_read + metrics_operations_without_did;
-                        let untracked_time = metrics_bundle_total.saturating_sub(tracked_time);
-                        let untracked_pct = if metrics_bundle_total.as_secs_f64() > 0.0 {
-                            (untracked_time.as_secs_f64() / metrics_bundle_total.as_secs_f64()) * 100.0
-                        } else {
-                            0.0
-                        };
-                        
-                        // Also show what percentage of wall-clock time is accounted for
-                        let total_tracked_pct = if metrics_duration.as_secs_f64() > 0.0 {
-                            (tracked_time.as_secs_f64() / metrics_duration.as_secs_f64()) * 100.0
-                        } else {
-                            0.0
-                        };
-                        
-                        log::info!(
-                            "[DID Index]   Time breakdown (of {}ms wall-clock, {}ms CPU): Decompress={:.1}% ({:.1}ms), JSON={:.1}% ({:.1}ms), HashMap={:.1}% ({:.1}ms), Shard={:.1}% ({:.1}ms), String={:.1}% ({:.1}ms), Location={:.1}% ({:.1}ms), NoDID={:.1}% ({:.1}ms), I/O={:.1}% ({:.1}ms)",
-                            metrics_duration.as_secs_f64() * 1000.0,
-                            metrics_bundle_total.as_secs_f64() * 1000.0,
-                            decompress_pct,
-                            metrics_decompress.as_secs_f64() * 1000.0,
-                            json_pct,
-                            metrics_json_parse.as_secs_f64() * 1000.0,
-                            hashmap_pct,
-                            metrics_hashmap_ops.as_secs_f64() * 1000.0,
-                            shard_pct,
-                            metrics_shard_calc.as_secs_f64() * 1000.0,
-                            string_pct,
-                            metrics_string_alloc.as_secs_f64() * 1000.0,
-                            location_pct,
-                            metrics_location_create.as_secs_f64() * 1000.0,
-                            no_did_pct,
-                            metrics_operations_without_did.as_secs_f64() * 1000.0,
-                            io_pct,
-                            metrics_io_read.as_secs_f64() * 1000.0
-                        );
-                        log::info!(
-                            "[DID Index]   Coverage: {:.1}% of CPU time tracked, {:.1}% untracked ({:.1}ms), {:.1}% of wall-clock time unaccounted",
-                            (tracked_time.as_secs_f64() / metrics_bundle_total.as_secs_f64() * 100.0).min(100.0),
-                            untracked_pct,
-                            untracked_time.as_secs_f64() * 1000.0,
-                            100.0 - total_tracked_pct
+                            "[DID Index]   Bundle processing time: {:.1}ms total",
+                            metrics_bundle_total.as_secs_f64() * 1000.0
                         );
                     }
                     
@@ -1245,18 +1058,7 @@ impl Manager {
                     metrics_start = Instant::now();
                     metrics_ops = 0;
                     metrics_bytes = 0;
-                    metrics_json_parse = std::time::Duration::ZERO;
-                    metrics_did_extract = std::time::Duration::ZERO;
-                    metrics_shard_calc = std::time::Duration::ZERO;
-                    metrics_string_alloc = std::time::Duration::ZERO;
-                    metrics_hashmap_ops = std::time::Duration::ZERO;
-                    metrics_io_read = std::time::Duration::ZERO;
-                    // metrics_decompress is derived from metrics_line_read in sequential mode,
-                    // so no need to reset it here - it will be reassigned before use
-                    metrics_line_read = std::time::Duration::ZERO;
-                    metrics_location_create = std::time::Duration::ZERO;
                     metrics_bundle_total = std::time::Duration::ZERO;
-                    metrics_operations_without_did = std::time::Duration::ZERO;
                 }
             }
         }

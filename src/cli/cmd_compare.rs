@@ -1,7 +1,6 @@
 // Compare command - compare repositories
 use anyhow::{Context, Result, bail};
 use clap::Args;
-use plcbundle::index::Index;
 use plcbundle::{BundleManager, constants, remote};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -338,7 +337,12 @@ impl IndexComparison {
     }
 }
 
-fn compare_indexes(local: &Index, target: &Index, origins_match: bool) -> IndexComparison {
+// Compare two indexes - uses fully qualified path to avoid direct Index import
+fn compare_indexes(
+    local: &plcbundle::index::Index,
+    target: &plcbundle::index::Index,
+    origins_match: bool,
+) -> IndexComparison {
     let mut comparison = IndexComparison::default();
     comparison.origins_match = origins_match;
 

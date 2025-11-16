@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Args, ValueEnum};
-use plcbundle::{BundleManager, Index};
+use plcbundle::BundleManager;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -115,7 +115,7 @@ struct TimelineStats {
 
 fn collect_summary_stats(
     _manager: &BundleManager,
-    index: &Index,
+    index: &plcbundle::index::Index,
     bundle_nums: &[u32],
 ) -> Result<serde_json::Value> {
     let bundle_metadatas: Vec<_> = index
@@ -228,7 +228,7 @@ fn collect_operation_stats(
 
 fn collect_did_stats(
     _manager: &BundleManager,
-    index: &Index,
+    index: &plcbundle::index::Index,
     bundle_nums: &[u32],
 ) -> Result<serde_json::Value> {
     let bundle_metadatas: Vec<_> = index
@@ -267,7 +267,7 @@ fn collect_did_stats(
 
 fn collect_timeline_stats(
     _manager: &BundleManager,
-    index: &Index,
+    index: &plcbundle::index::Index,
     bundle_nums: &[u32],
 ) -> Result<serde_json::Value> {
     let bundle_metadatas: Vec<_> = index
