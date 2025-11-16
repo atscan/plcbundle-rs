@@ -573,7 +573,7 @@ pub unsafe extern "C" fn bundle_manager_clear_caches(manager: *const CBundleMana
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bundle_manager_rebuild_did_index(
     manager: *const CBundleManager,
-    progress_callback: Option<extern "C" fn(u32, u32)>,
+    progress_callback: Option<extern "C" fn(u32, u32, u64, u64)>,
     out_stats: *mut CRebuildStats,
 ) -> i32 {
     if manager.is_null() {
@@ -583,9 +583,9 @@ pub unsafe extern "C" fn bundle_manager_rebuild_did_index(
     let manager = unsafe { &*manager };
 
     let callback = progress_callback.map(|cb| {
-        Box::new(move |bundle: u32, ops: u32| {
-            cb(bundle, ops);
-        }) as Box<dyn Fn(u32, u32) + Send + Sync>
+        Box::new(move |current: u32, total: u32, bytes_processed: u64, total_bytes: u64| {
+            cb(current, total, bytes_processed, total_bytes);
+        }) as Box<dyn Fn(u32, u32, u64, u64) + Send + Sync>
     });
 
     match manager.manager.rebuild_did_index(callback) {

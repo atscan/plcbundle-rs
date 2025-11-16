@@ -356,7 +356,7 @@ fn handle_did_index(
             return Ok(());
         }
 
-        let _stats = manager.rebuild_did_index(None::<fn(u32, u32)>)?;
+        let _stats = manager.rebuild_did_index(None::<fn(u32, u32, u64, u64)>)?;
         println!(
             "      ✓ DID index rebuilt ({} bundles)",
             plan.bundles_to_keep

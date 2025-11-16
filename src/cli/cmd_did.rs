@@ -77,6 +77,25 @@ pub enum DIDCommands {
         #[arg(long)]
         stdin: bool,
     },
+
+    /// Audit DID operation chain from local bundles
+    #[command(alias = "validate")]
+    Audit {
+        /// DID to audit (e.g., did:plc:ewvi7nxzyoun6zhxrhs64oiz)
+        did: String,
+
+        /// Show verbose output including all operations
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Only show summary (no operation details)
+        #[arg(short, long)]
+        quiet: bool,
+
+        /// Show fork visualization
+        #[arg(long)]
+        fork_viz: bool,
+    },
 }
 
 pub fn run_did(cmd: DidCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
@@ -97,6 +116,14 @@ pub fn run_did(cmd: DidCommand, dir: PathBuf, global_verbose: bool) -> Result<()
             stdin,
         } => {
             cmd_did_batch(dir, action, threads, output, stdin)?;
+        }
+        DIDCommands::Audit {
+            did,
+            verbose,
+            quiet,
+            fork_viz,
+        } => {
+            cmd_did_validate(dir, did, verbose, quiet, fork_viz)?;
         }
     }
     Ok(())
@@ -676,4 +703,934 @@ pub fn cmd_did_batch(
 ) -> Result<()> {
     log::error!("`did batch` not yet implemented");
     Ok(())
+}
+
+// DID VALIDATE - Validate DID audit log from plc.directory
+//
+// This implementation is based on the atproto-plc library examples:
+// https://docs.rs/atproto-plc/0.2.0/atproto_plc/index.html
+// Library author: ngerakines
+// License: MIT OR Apache-2.0
+
+use atproto_plc::{Did, Operation, OperationChainValidator, PlcState, VerifyingKey};
+use serde::Deserialize;
+use std::collections::HashMap;
+
+/// Audit log response from plc.directory
+#[derive(Debug, Deserialize, Clone)]
+struct AuditLogEntry {
+    /// The DID this operation is for
+    #[allow(dead_code)]
+    did: String,
+
+    /// The operation itself
+    operation: Operation,
+
+    /// CID of this operation
+    cid: String,
+
+    /// Timestamp when this operation was created
+    #[serde(rename = "createdAt")]
+    created_at: String,
+
+    /// Nullified flag (if this operation was invalidated)
+    #[serde(default)]
+    nullified: bool,
+}
+
+/// Represents a fork point in the operation chain
+#[derive(Debug, Clone)]
+struct ForkPoint {
+    /// The prev CID that all operations in this fork reference
+    prev_cid: String,
+
+    /// Competing operations at this fork
+    operations: Vec<ForkOperation>,
+
+    /// The winning operation (after fork resolution)
+    winner_cid: String,
+}
+
+/// An operation that's part of a fork
+#[derive(Debug, Clone)]
+struct ForkOperation {
+    cid: String,
+    operation: Operation,
+    timestamp: chrono::DateTime<chrono::Utc>,
+    signing_key_index: Option<usize>,
+    signing_key: Option<String>,
+    is_winner: bool,
+    rejection_reason: Option<String>,
+}
+
+pub fn cmd_did_validate(
+    dir: PathBuf,
+    did_input: String,
+    verbose: bool,
+    quiet: bool,
+    fork_viz: bool,
+) -> Result<()> {
+    use plcbundle::constants;
+
+    // Initialize manager
+    let resolver_url = Some(constants::DEFAULT_HANDLE_RESOLVER_URL.to_string());
+    let manager = BundleManager::with_handle_resolver(dir, resolver_url)?;
+
+    // Resolve handle to DID if needed (same pattern as other did commands)
+    let (did_str, handle_resolve_time) = manager.resolve_handle_or_did(&did_input)?;
+
+    if handle_resolve_time > 0 {
+        log::info!(
+            "Resolved handle: {} → {} (in {}ms)",
+            did_input,
+            did_str,
+            handle_resolve_time
+        );
+    } else {
+        log::info!("Validating DID: {}", did_str);
+    }
+
+    // Validate DID format for atproto_plc library (must be did:plc)
+    if !did_str.starts_with("did:plc:") {
+        eprintln!("❌ Error: Validation only supports did:plc identifiers");
+        eprintln!("   Got: {}", did_str);
+        return Err(anyhow::anyhow!("Only did:plc identifiers can be validated"));
+    }
+
+    if !quiet {
+        println!("🔍 Fetching audit log for: {}", did_str);
+        println!("   Source: local bundles");
+        println!();
+    }
+
+    // Fetch operations from local bundles
+    let ops_with_loc = manager.get_did_operations_with_locations(&did_str)?;
+
+    if ops_with_loc.is_empty() {
+        eprintln!("❌ Error: No operations found for DID: {}", did_str);
+        return Err(anyhow::anyhow!("No operations found"));
+    }
+
+    // Convert to audit log format
+    let audit_log = convert_to_audit_log(ops_with_loc)?;
+
+    if audit_log.is_empty() {
+        eprintln!("❌ Error: No operations found in audit log");
+        return Err(anyhow::anyhow!("No operations found"));
+    }
+
+    if !quiet {
+        println!("📊 Audit Log Summary:");
+        println!("   Total operations: {}", audit_log.len());
+        println!("   Genesis operation: {}", audit_log[0].cid);
+        println!("   Latest operation: {}", audit_log.last().unwrap().cid);
+        println!();
+    }
+
+    // If fork visualization is requested, show that instead
+    if fork_viz {
+        return visualize_forks(&audit_log, &did_str, verbose);
+    }
+
+    // Display operations if verbose
+    if verbose {
+        println!("📋 Operations:");
+        for (i, entry) in audit_log.iter().enumerate() {
+            let status = if entry.nullified { "❌ NULLIFIED" } else { "✅" };
+            println!(
+                "   [{}] {} {} - {}",
+                i, status, entry.cid, entry.created_at
+            );
+            if entry.operation.is_genesis() {
+                println!("       Type: Genesis (creates the DID)");
+            } else {
+                println!("       Type: Update");
+            }
+            if let Some(prev) = entry.operation.prev() {
+                println!("       Previous: {}", prev);
+            }
+        }
+        println!();
+    }
+
+    // Detect forks and build canonical chain
+    if !quiet {
+        println!("🔐 Analyzing operation chain...");
+        println!();
+    }
+
+    // Detect fork points and nullified operations
+    let has_forks = detect_forks(&audit_log);
+    let has_nullified = audit_log.iter().any(|e| e.nullified);
+
+    if has_forks || has_nullified {
+        if !quiet {
+            if has_forks {
+                println!("⚠️  Fork detected - multiple operations reference the same prev CID");
+            }
+            if has_nullified {
+                println!("⚠️  Nullified operations detected - will validate canonical chain only");
+            }
+            println!();
+        }
+
+        // Use fork resolution to build canonical chain
+        if verbose {
+            println!("Step 1: Fork Resolution & Canonical Chain Building");
+            println!("===================================================");
+        }
+
+        // Build operations and timestamps for fork resolution
+        let operations: Vec<_> = audit_log.iter().map(|e| e.operation.clone()).collect();
+        let timestamps: Vec<_> = audit_log
+            .iter()
+            .map(|e| {
+                e.created_at
+                    .parse::<chrono::DateTime<chrono::Utc>>()
+                    .unwrap_or_else(|_| chrono::Utc::now())
+            })
+            .collect();
+
+        // Resolve forks and get canonical chain
+        match OperationChainValidator::validate_chain_with_forks(&operations, &timestamps) {
+            Ok(final_state) => {
+                if verbose {
+                    println!("  ✅ Fork resolution complete");
+                    println!("  ✅ Canonical chain validated successfully");
+                    println!();
+
+                    // Show which operations are in the canonical chain
+                    println!("Canonical Chain Operations:");
+                    println!("===========================");
+                    let canonical_indices = build_canonical_chain_indices(&audit_log);
+                    for idx in &canonical_indices {
+                        let entry = &audit_log[*idx];
+                        println!("  [{}] ✅ {} - {}", idx, entry.cid, entry.created_at);
+                    }
+                    println!();
+
+                    if has_nullified {
+                        println!("Nullified/Rejected Operations:");
+                        println!("==============================");
+                        for (i, entry) in audit_log.iter().enumerate() {
+                            if entry.nullified && !canonical_indices.contains(&i) {
+                                println!(
+                                    "  [{}] ❌ {} - {} (nullified)",
+                                    i, entry.cid, entry.created_at
+                                );
+                                if let Some(prev) = entry.operation.prev() {
+                                    println!("      Referenced: {}", prev);
+                                }
+                            }
+                        }
+                        println!();
+                    }
+                }
+
+                // Display final state
+                display_final_state(&final_state, quiet);
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!();
+                eprintln!("❌ Validation failed: {}", e);
+                return Err(anyhow::anyhow!("Validation failed: {}", e));
+            }
+        }
+    }
+
+    // Simple linear chain validation (no forks or nullified operations)
+    if verbose {
+        println!("Step 1: Linear Chain Validation");
+        println!("================================");
+    }
+
+    for i in 1..audit_log.len() {
+        let prev_cid = audit_log[i - 1].cid.clone();
+        let expected_prev = audit_log[i].operation.prev();
+
+        if verbose {
+            println!("  [{}] Checking prev reference...", i);
+            println!("      Expected: {}", prev_cid);
+        }
+
+        if let Some(actual_prev) = expected_prev {
+            if verbose {
+                println!("      Actual:   {}", actual_prev);
+            }
+
+            if actual_prev != prev_cid {
+                eprintln!();
+                eprintln!(
+                    "❌ Validation failed: Chain linkage broken at operation {}",
+                    i
+                );
+                eprintln!("   Expected prev: {}", prev_cid);
+                eprintln!("   Actual prev: {}", actual_prev);
+                return Err(anyhow::anyhow!("Chain linkage broken"));
+            }
+
+            if verbose {
+                println!("      ✅ Match - chain link valid");
+            }
+        } else if i > 0 {
+            eprintln!();
+            eprintln!(
+                "❌ Validation failed: Non-genesis operation {} missing prev field",
+                i
+            );
+            return Err(anyhow::anyhow!("Missing prev field"));
+        }
+    }
+
+    if verbose {
+        println!();
+        println!("✅ Chain linkage validation complete");
+        println!();
+    }
+
+    // Step 2: Validate cryptographic signatures
+    if verbose {
+        println!("Step 2: Cryptographic Signature Validation");
+        println!("==========================================");
+    }
+
+    let mut current_rotation_keys: Vec<String> = Vec::new();
+
+    for (i, entry) in audit_log.iter().enumerate() {
+        if entry.nullified {
+            if verbose {
+                println!("  [{}] ⊘ Skipped (nullified)", i);
+            }
+            continue;
+        }
+
+        // For genesis operation, we can't validate signature without rotation keys
+        // But we can extract them and validate subsequent operations
+        if i == 0 {
+            if verbose {
+                println!("  [{}] Genesis operation - extracting rotation keys", i);
+            }
+            if let Some(rotation_keys) = entry.operation.rotation_keys() {
+                current_rotation_keys = rotation_keys.to_vec();
+                if verbose {
+                    println!("      Rotation keys: {}", rotation_keys.len());
+                    for (j, key) in rotation_keys.iter().enumerate() {
+                        println!("        [{}] {}", j, key);
+                    }
+                    println!("      ⚠️  Genesis signature cannot be verified (bootstrapping trust)");
+                }
+            }
+            continue;
+        }
+
+        if verbose {
+            println!("  [{}] Validating signature...", i);
+            println!("      CID: {}", entry.cid);
+            println!("      Signature: {}", entry.operation.signature());
+        }
+
+        // Validate signature using current rotation keys
+        if !current_rotation_keys.is_empty() {
+            if verbose {
+                println!("      Available rotation keys: {}", current_rotation_keys.len());
+                for (j, key) in current_rotation_keys.iter().enumerate() {
+                    println!("        [{}] {}", j, key);
+                }
+            }
+
+            let verifying_keys: Vec<VerifyingKey> = current_rotation_keys
+                .iter()
+                .filter_map(|k| VerifyingKey::from_did_key(k).ok())
+                .collect();
+
+            if verbose {
+                println!(
+                    "      Parsed verifying keys: {}/{}",
+                    verifying_keys.len(),
+                    current_rotation_keys.len()
+                );
+            }
+
+            // Try to verify with each key and track which one worked
+            let mut verified = false;
+            let mut verification_key_index = None;
+
+            for (j, key) in verifying_keys.iter().enumerate() {
+                if entry.operation.verify(&[*key]).is_ok() {
+                    verified = true;
+                    verification_key_index = Some(j);
+                    break;
+                }
+            }
+
+            if !verified {
+                // Final attempt with all keys (for comprehensive error)
+                if let Err(e) = entry.operation.verify(&verifying_keys) {
+                    eprintln!();
+                    eprintln!(
+                        "❌ Validation failed: Invalid signature at operation {}",
+                        i
+                    );
+                    eprintln!("   Error: {}", e);
+                    eprintln!("   CID: {}", entry.cid);
+                    eprintln!(
+                        "   Tried {} rotation keys, none verified the signature",
+                        verifying_keys.len()
+                    );
+                    return Err(anyhow::anyhow!("Invalid signature"));
+                }
+            }
+
+            if verbose {
+                if let Some(key_idx) = verification_key_index {
+                    println!(
+                        "      ✅ Signature verified with rotation key [{}]",
+                        key_idx
+                    );
+                    println!("         {}", current_rotation_keys[key_idx]);
+                } else {
+                    println!("      ✅ Signature verified");
+                }
+            }
+        }
+
+        // Update rotation keys if this operation changes them
+        if let Some(new_rotation_keys) = entry.operation.rotation_keys() {
+            if new_rotation_keys != &current_rotation_keys {
+                if verbose {
+                    println!("      🔄 Rotation keys updated by this operation");
+                    println!("         Old keys: {}", current_rotation_keys.len());
+                    println!("         New keys: {}", new_rotation_keys.len());
+                    for (j, key) in new_rotation_keys.iter().enumerate() {
+                        println!("           [{}] {}", j, key);
+                    }
+                }
+                current_rotation_keys = new_rotation_keys.to_vec();
+            }
+        }
+    }
+
+    if verbose {
+        println!();
+        println!("✅ Cryptographic signature validation complete");
+        println!();
+    }
+
+    // Build final state
+    let final_entry = audit_log.last().unwrap();
+    if let Some(_rotation_keys) = final_entry.operation.rotation_keys() {
+        let final_state = match &final_entry.operation {
+            Operation::PlcOperation {
+                rotation_keys,
+                verification_methods,
+                also_known_as,
+                services,
+                ..
+            } => PlcState {
+                rotation_keys: rotation_keys.clone(),
+                verification_methods: verification_methods.clone(),
+                also_known_as: also_known_as.clone(),
+                services: services.clone(),
+            },
+            _ => PlcState::new(),
+        };
+
+        display_final_state(&final_state, quiet);
+    } else {
+        eprintln!("❌ Error: Could not extract final state");
+        return Err(anyhow::anyhow!("Could not extract final state"));
+    }
+
+    Ok(())
+}
+
+/// Detect if there are fork points in the audit log
+fn detect_forks(audit_log: &[AuditLogEntry]) -> bool {
+    let mut prev_counts: HashMap<String, usize> = HashMap::new();
+    for entry in audit_log {
+        if let Some(prev) = entry.operation.prev() {
+            *prev_counts.entry(prev.to_string()).or_insert(0) += 1;
+        }
+    }
+    // If any prev CID is referenced by more than one operation, there's a fork
+    prev_counts.values().any(|&count| count > 1)
+}
+
+/// Build a list of indices that form the canonical chain
+fn build_canonical_chain_indices(audit_log: &[AuditLogEntry]) -> Vec<usize> {
+    // Build a map of prev CID to operations
+    let mut prev_to_indices: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, entry) in audit_log.iter().enumerate() {
+        if let Some(prev) = entry.operation.prev() {
+            prev_to_indices
+                .entry(prev.to_string())
+                .or_default()
+                .push(i);
+        }
+    }
+
+    // Start from genesis and follow the canonical chain
+    let mut canonical = Vec::new();
+
+    // Find genesis (first operation)
+    let genesis = match audit_log.first() {
+        Some(g) => g,
+        None => return canonical,
+    };
+
+    canonical.push(0);
+    let mut current_cid = genesis.cid.clone();
+
+    // Follow the chain, preferring non-nullified operations
+    loop {
+        if let Some(indices) = prev_to_indices.get(&current_cid) {
+            // Find the first non-nullified operation
+            if let Some(&next_idx) = indices.iter().find(|&&idx| !audit_log[idx].nullified) {
+                canonical.push(next_idx);
+                current_cid = audit_log[next_idx].cid.clone();
+            } else {
+                // All operations at this point are nullified - try to find any operation
+                if let Some(&next_idx) = indices.first() {
+                    canonical.push(next_idx);
+                    current_cid = audit_log[next_idx].cid.clone();
+                } else {
+                    break;
+                }
+            }
+        } else {
+            // No more operations
+            break;
+        }
+    }
+
+    canonical
+}
+
+/// Display the final state after validation
+fn display_final_state(final_state: &PlcState, quiet: bool) {
+    if quiet {
+        println!("✅ VALID");
+    } else {
+        println!("✅ Validation successful!");
+        println!();
+
+        println!("📄 Final DID State:");
+        println!("   Rotation keys: {}", final_state.rotation_keys.len());
+        for (i, key) in final_state.rotation_keys.iter().enumerate() {
+            println!("     [{}] {}", i, key);
+        }
+        println!();
+
+        println!(
+            "   Verification methods: {}",
+            final_state.verification_methods.len()
+        );
+        for (name, key) in &final_state.verification_methods {
+            println!("     {}: {}", name, key);
+        }
+        println!();
+
+        if !final_state.also_known_as.is_empty() {
+            println!("   Also known as: {}", final_state.also_known_as.len());
+            for uri in &final_state.also_known_as {
+                println!("     - {}", uri);
+            }
+            println!();
+        }
+
+        if !final_state.services.is_empty() {
+            println!("   Services: {}", final_state.services.len());
+            for (name, service) in &final_state.services {
+                println!(
+                    "     {}: {} ({})",
+                    name, service.endpoint, service.service_type
+                );
+            }
+        }
+    }
+}
+
+/// Convert local bundle operations to audit log format
+fn convert_to_audit_log(
+    ops_with_loc: Vec<plcbundle::OperationWithLocation>,
+) -> Result<Vec<AuditLogEntry>> {
+    let mut audit_log = Vec::new();
+
+    for owl in ops_with_loc {
+        // Extract the operation JSON and convert to atproto_plc::Operation
+        let operation_json = serde_json::to_value(&owl.operation.operation)?;
+        let operation: Operation = serde_json::from_value(operation_json)
+            .map_err(|e| anyhow::anyhow!("Failed to parse operation: {}", e))?;
+
+        // Get CID from bundle operation (should always be present)
+        let cid = owl
+            .operation
+            .cid
+            .clone()
+            .unwrap_or_else(|| {
+                // Fallback: this shouldn't happen in real data, but provide a placeholder
+                format!("bundle_{}_pos_{}", owl.bundle, owl.position)
+            });
+
+        audit_log.push(AuditLogEntry {
+            did: owl.operation.did.clone(),
+            operation,
+            cid,
+            created_at: owl.operation.created_at.clone(),
+            nullified: owl.nullified || owl.operation.nullified,
+        });
+    }
+
+    Ok(audit_log)
+}
+
+/// Visualize forks in the audit log
+fn visualize_forks(
+    audit_log: &[AuditLogEntry],
+    did_str: &str,
+    verbose: bool,
+) -> Result<()> {
+    println!("🔍 Analyzing forks in: {}", did_str);
+    println!("   Source: local bundles");
+    println!();
+
+    println!("📊 Audit log contains {} operations", audit_log.len());
+
+    // Detect forks
+    let forks = detect_forks_detailed(audit_log, verbose);
+
+    if forks.is_empty() {
+        println!("\n✅ No forks detected - this is a linear operation chain");
+        println!("   All operations form a single canonical path from genesis to tip.");
+
+        if verbose {
+            println!("\n📋 Linear chain visualization:");
+            visualize_linear_chain(audit_log);
+        }
+
+        return Ok(());
+    }
+
+    println!("⚠️  Detected {} fork point(s)", forks.len());
+    println!();
+
+    visualize_tree(audit_log, &forks, verbose);
+
+    Ok(())
+}
+
+/// Detect fork points in the audit log with detailed information
+fn detect_forks_detailed(audit_log: &[AuditLogEntry], verbose: bool) -> Vec<ForkPoint> {
+    let mut prev_to_operations: HashMap<String, Vec<AuditLogEntry>> = HashMap::new();
+
+    // Group operations by their prev CID
+    for entry in audit_log {
+        if let Some(prev) = entry.operation.prev() {
+            prev_to_operations
+                .entry(prev.to_string())
+                .or_default()
+                .push(entry.clone());
+        }
+    }
+
+    // Build operation map for state reconstruction
+    let operation_map: HashMap<String, AuditLogEntry> = audit_log
+        .iter()
+        .map(|e| (e.cid.clone(), e.clone()))
+        .collect();
+
+    let mut forks = Vec::new();
+
+    // Find fork points (where multiple operations reference the same prev)
+    for (prev_cid, operations) in prev_to_operations {
+        if operations.len() > 1 {
+            if verbose {
+                println!("🔀 Fork detected at {}", truncate_cid(&prev_cid));
+                println!("   {} competing operations", operations.len());
+            }
+
+            // Get the state at the prev operation to determine rotation keys
+            let state = if let Some(prev_entry) = operation_map.get(&prev_cid) {
+                get_state_from_operation(&prev_entry.operation)
+            } else {
+                // This shouldn't happen in a valid chain
+                continue;
+            };
+
+            // Analyze each operation in the fork
+            let mut fork_ops = Vec::new();
+            for entry in &operations {
+                let timestamp = parse_timestamp(&entry.created_at);
+
+                // Determine which rotation key signed this operation
+                let (signing_key_index, signing_key) = if !state.rotation_keys.is_empty() {
+                    find_signing_key(&entry.operation, &state.rotation_keys)
+                } else {
+                    (None, None)
+                };
+
+                fork_ops.push(ForkOperation {
+                    cid: entry.cid.clone(),
+                    operation: entry.operation.clone(),
+                    timestamp,
+                    signing_key_index,
+                    signing_key,
+                    is_winner: false,
+                    rejection_reason: None,
+                });
+            }
+
+            // Resolve the fork to determine winner
+            let winner_cid = resolve_fork(&mut fork_ops);
+
+            forks.push(ForkPoint {
+                prev_cid,
+                operations: fork_ops,
+                winner_cid,
+            });
+        }
+    }
+
+    // Sort forks chronologically
+    forks.sort_by_key(|f| {
+        f.operations
+            .iter()
+            .map(|op| op.timestamp)
+            .min()
+            .unwrap_or_else(chrono::Utc::now)
+    });
+
+    forks
+}
+
+/// Resolve a fork point and mark the winner
+fn resolve_fork(fork_ops: &mut [ForkOperation]) -> String {
+    // Sort by timestamp (chronological order)
+    fork_ops.sort_by_key(|op| op.timestamp);
+
+    // First-received is the default winner
+    let mut winner_idx = 0;
+    fork_ops[0].is_winner = true;
+
+    // Check if any later operation can invalidate based on priority
+    for i in 1..fork_ops.len() {
+        let competing_key_idx = fork_ops[i].signing_key_index;
+        let winner_key_idx = fork_ops[winner_idx].signing_key_index;
+
+        match (competing_key_idx, winner_key_idx) {
+            (Some(competing_idx), Some(winner_idx_val)) => {
+                if competing_idx < winner_idx_val {
+                    // Higher priority (lower index)
+                    let time_diff = fork_ops[i].timestamp - fork_ops[winner_idx].timestamp;
+
+                    if time_diff <= chrono::Duration::hours(72) {
+                        // Within recovery window - this operation wins
+                        fork_ops[winner_idx].is_winner = false;
+                        fork_ops[winner_idx].rejection_reason = Some(format!(
+                            "Invalidated by higher-priority key[{}] within recovery window",
+                            competing_idx
+                        ));
+
+                        fork_ops[i].is_winner = true;
+                        winner_idx = i;
+                    } else {
+                        // Outside recovery window
+                        fork_ops[i].rejection_reason = Some(format!(
+                            "Higher-priority key[{}] but outside 72-hour recovery window ({:.1}h late)",
+                            competing_idx,
+                            time_diff.num_hours() as f64
+                        ));
+                    }
+                } else {
+                    // Lower priority
+                    fork_ops[i].rejection_reason = Some(format!(
+                        "Lower-priority key[{}] (current winner has key[{}])",
+                        competing_idx, winner_idx_val
+                    ));
+                }
+            }
+            _ => {
+                fork_ops[i].rejection_reason = Some("Could not determine signing key".to_string());
+            }
+        }
+    }
+
+    fork_ops[winner_idx].cid.clone()
+}
+
+/// Find which rotation key signed an operation
+fn find_signing_key(operation: &Operation, rotation_keys: &[String]) -> (Option<usize>, Option<String>) {
+    for (index, key_did) in rotation_keys.iter().enumerate() {
+        if let Ok(verifying_key) = VerifyingKey::from_did_key(key_did) {
+            if operation.verify(&[verifying_key]).is_ok() {
+                return (Some(index), Some(key_did.clone()));
+            }
+        }
+    }
+    (None, None)
+}
+
+/// Get state from an operation
+fn get_state_from_operation(operation: &Operation) -> PlcState {
+    match operation {
+        Operation::PlcOperation {
+            rotation_keys,
+            verification_methods,
+            also_known_as,
+            services,
+            ..
+        } => PlcState {
+            rotation_keys: rotation_keys.clone(),
+            verification_methods: verification_methods.clone(),
+            also_known_as: also_known_as.clone(),
+            services: services.clone(),
+        },
+        _ => PlcState::new(),
+    }
+}
+
+/// Parse ISO 8601 timestamp
+fn parse_timestamp(timestamp: &str) -> chrono::DateTime<chrono::Utc> {
+    timestamp
+        .parse::<chrono::DateTime<chrono::Utc>>()
+        .unwrap_or_else(|_| chrono::Utc::now())
+}
+
+/// Visualize forks as a tree
+fn visualize_tree(audit_log: &[AuditLogEntry], forks: &[ForkPoint], verbose: bool) {
+    println!("📊 Fork Visualization (Tree Format)");
+    println!("═══════════════════════════════════════════════════════════════");
+    println!();
+
+    // Build a map of which operations are part of forks
+    let mut fork_map: HashMap<String, &ForkPoint> = HashMap::new();
+    for fork in forks {
+        for op in &fork.operations {
+            fork_map.insert(op.cid.clone(), fork);
+        }
+    }
+
+    // Track which prev CIDs have been processed
+    let mut processed_forks: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for entry in audit_log.iter() {
+        let is_genesis = entry.operation.is_genesis();
+        let prev = entry.operation.prev();
+
+        // Check if this operation is part of a fork
+        if let Some(_prev_cid) = prev {
+            if let Some(fork) = fork_map.get(&entry.cid) {
+                // This is a fork point
+                if !processed_forks.contains(&fork.prev_cid) {
+                    processed_forks.insert(fork.prev_cid.clone());
+
+                    println!("Fork at operation referencing {}", truncate_cid(&fork.prev_cid));
+
+                    for (j, fork_op) in fork.operations.iter().enumerate() {
+                        let symbol = if fork_op.is_winner { "✓" } else { "✗" };
+                        let color = if fork_op.is_winner { "🟢" } else { "🔴" };
+                        let prefix = if j == fork.operations.len() - 1 {
+                            "└─"
+                        } else {
+                            "├─"
+                        };
+
+                        println!(
+                            "  {} {} {} CID: {}",
+                            prefix,
+                            color,
+                            symbol,
+                            truncate_cid(&fork_op.cid)
+                        );
+
+                        if let Some(key_idx) = fork_op.signing_key_index {
+                            println!("     │  Signed by: rotation_key[{}]", key_idx);
+                            if verbose {
+                                if let Some(key) = &fork_op.signing_key {
+                                    println!("     │  Key: {}", truncate_cid(key));
+                                }
+                            }
+                        }
+
+                        println!(
+                            "     │  Timestamp: {}",
+                            fork_op.timestamp.format("%Y-%m-%d %H:%M:%S UTC")
+                        );
+
+                        if !fork_op.is_winner {
+                            if let Some(reason) = &fork_op.rejection_reason {
+                                println!("     │  Reason: {}", reason);
+                            }
+                        } else {
+                            println!("     │  Status: CANONICAL (winner)");
+                        }
+
+                        if j < fork.operations.len() - 1 {
+                            println!("     │");
+                        }
+                    }
+                    println!();
+                }
+                continue;
+            }
+        }
+
+        // Regular operation (not part of a fork)
+        if is_genesis {
+            println!("🌱 Genesis");
+            println!("   CID: {}", truncate_cid(&entry.cid));
+            println!("   Timestamp: {}", entry.created_at);
+            if verbose {
+                if let Operation::PlcOperation { rotation_keys, .. } = &entry.operation {
+                    println!("   Rotation keys: {}", rotation_keys.len());
+                }
+            }
+            println!();
+        }
+    }
+
+    // Summary
+    println!("═══════════════════════════════════════════════════════════════");
+    println!("📈 Summary:");
+    println!("   Total operations: {}", audit_log.len());
+    println!("   Fork points: {}", forks.len());
+
+    let total_competing_ops: usize = forks.iter().map(|f| f.operations.len()).sum();
+    let rejected_ops = total_competing_ops - forks.len();
+    println!("   Rejected operations: {}", rejected_ops);
+
+    if !forks.is_empty() {
+        println!("\n🔐 Fork Resolution Details:");
+        for (i, fork) in forks.iter().enumerate() {
+            let winner = fork.operations.iter().find(|op| op.is_winner).unwrap();
+            println!(
+                "   Fork {}: Winner is {} (signed by key[{}])",
+                i + 1,
+                truncate_cid(&winner.cid),
+                winner.signing_key_index.unwrap_or(999)
+            );
+        }
+    }
+}
+
+/// Visualize linear chain (no forks)
+fn visualize_linear_chain(audit_log: &[AuditLogEntry]) {
+    for (i, entry) in audit_log.iter().enumerate() {
+        let symbol = if i == 0 { "🌱" } else { "  ↓" };
+        println!("{} Operation {}: {}", symbol, i, truncate_cid(&entry.cid));
+        println!("     Timestamp: {}", entry.created_at);
+        if let Some(prev) = entry.operation.prev() {
+            println!("     Previous: {}", truncate_cid(prev));
+        }
+    }
+}
+
+/// Truncate a CID for display
+fn truncate_cid(cid: &str) -> String {
+    if cid.len() > 20 {
+        format!("{}...{}", &cid[..8], &cid[cid.len() - 8..])
+    } else {
+        cid.to_string()
+    }
 }

@@ -646,7 +646,7 @@ impl BundleManager {
             .bundles
             .retain(|b| b.bundle_number <= spec.target_bundle);
 
-        self.rebuild_did_index(None::<fn(u32, u32)>)?;
+        self.rebuild_did_index(None::<fn(u32, u32, u64, u64)>)?;
 
         Ok(RollbackResult {
             success: true,
@@ -685,73 +685,122 @@ impl BundleManager {
     // === DID Index ===
     pub fn rebuild_did_index<F>(&self, progress_cb: Option<F>) -> Result<RebuildStats>
     where
-        F: Fn(u32, u32) + Send + Sync,
+        F: Fn(u32, u32, u64, u64) + Send + Sync, // (current, total, bytes_processed, total_bytes)
     {
-        use std::fs;
+        use std::sync::{Arc, Mutex};
+        use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
+        use std::time::Instant;
+        use rayon::prelude::*;
 
         let last_bundle = self.get_last_bundle();
-        let new_index = did_index::Manager::new(self.directory.clone())?;
         let mut stats = RebuildStats::default();
 
-        // Create temporary directory for bundle data files
-        // This avoids keeping all bundle data in memory simultaneously during loading.
-        // We write each bundle to disk immediately after loading, freeing memory.
-        let temp_dir =
-            std::env::temp_dir().join(format!("plcbundle_rebuild_{}", std::process::id()));
-        let bundle_data_dir = temp_dir.join("bundle_data");
-        fs::create_dir_all(&bundle_data_dir)?;
+        // Create new index (this clears any existing index)
+        let new_index = did_index::Manager::new(self.directory.clone())?;
+        *self.did_index.write().unwrap() = Some(new_index);
 
-        // Pass 1: Stream bundles to temporary files
-        for bundle_num in 1..=last_bundle {
-            if let Some(ref cb) = progress_cb {
-                cb(bundle_num, last_bundle);
+        // Use incremental approach (much faster than build_from_scratch)
+        // Process bundles in parallel and update index incrementally
+        // This avoids: JSON serialization, temp files, loading all bundles into memory
+        self.ensure_did_index()?;
+        
+        // Get total uncompressed size for progress tracking
+        let index = self.index.read().unwrap();
+        let bundle_numbers: Vec<u32> = (1..=last_bundle).collect();
+        let total_uncompressed_bytes = index.total_uncompressed_size_for_bundles(&bundle_numbers);
+        drop(index);
+
+        let start = Instant::now();
+        let progress_cb_arc: Arc<Mutex<Option<F>>> = Arc::new(Mutex::new(progress_cb));
+        let count_atomic = Arc::new(AtomicUsize::new(0));
+        let bytes_atomic = Arc::new(AtomicU64::new(0));
+        let stats_atomic = Arc::new(Mutex::new(RebuildStats::default()));
+        let did_index_arc = Arc::clone(&self.did_index);
+        let directory = self.directory.clone();
+
+        // Update progress bar less frequently to reduce contention
+        let update_interval = (rayon::current_num_threads().max(1) * 4).max(10);
+        let bundle_count = last_bundle as usize;
+
+        // Create a parallel-safe manager clone
+        let manager_arc = Arc::new(self.clone_for_arc());
+        let index_arc = Arc::clone(&self.index);
+        
+        // Process bundles in parallel
+        (1..=last_bundle).into_par_iter().try_for_each(|bundle_num| -> Result<()> {
+            // Load bundle using manager
+            let result = match manager_arc.load_bundle(bundle_num, LoadOptions::default()) {
+                Ok(r) => r,
+                Err(_) => return Ok(()), // Skip failed bundles
+            };
+
+            // Extract operations
+            let operations: Vec<(String, bool)> = result
+                .operations
+                .iter()
+                .map(|op| (op.did.clone(), op.nullified))
+                .collect();
+
+            // Get uncompressed size for this bundle
+            let bundle_bytes = {
+                let index = index_arc.read().unwrap();
+                index.get_bundle(bundle_num)
+                    .map(|meta| meta.uncompressed_size)
+                    .unwrap_or(0)
+            };
+
+            // Update stats
+            {
+                let mut stats_guard = stats_atomic.lock().unwrap();
+                stats_guard.operations_indexed += operations.len() as u64;
+                stats_guard.bundles_processed += 1;
             }
 
-            if let Ok(result) = self.load_bundle(bundle_num, LoadOptions::default()) {
-                let operations: Vec<(String, bool)> = result
-                    .operations
-                    .iter()
-                    .map(|op| (op.did.clone(), op.nullified))
-                    .collect();
-
-                stats.operations_indexed += operations.len() as u64;
-                stats.bundles_processed += 1;
-
-                // Write bundle data to temp file immediately (frees memory)
-                let bundle_file = bundle_data_dir.join(format!("{:06}.json", bundle_num));
-                let bundle_data = (bundle_num, operations);
-                let json_data = serde_json::to_string(&bundle_data)?;
-                fs::write(&bundle_file, json_data)?;
+            // Update index incrementally (fast with delta segments)
+            // Note: We need to use the shared did_index, but update_for_bundle needs &mut
+            // So we'll need to lock it for each bundle update
+            {
+                let mut did_index_guard = did_index_arc.write().unwrap();
+                if let Some(ref mut idx) = *did_index_guard {
+                    idx.update_for_bundle(bundle_num, operations)?;
+                }
             }
-        }
 
-        // Pass 2: Read bundle data from temp files and build index
-        // NOTE: build_from_scratch requires all data upfront, so we still need to load
-        // all bundles into memory. However, by writing to temp files first, we:
-        // 1. Verify all bundles are readable before starting the expensive build
-        // 2. Free memory between loading and building phases
-        // 3. Use disk space instead of keeping everything in memory during the entire process
-        let mut bundles_data = Vec::with_capacity(last_bundle as usize);
-        for bundle_num in 1..=last_bundle {
-            let bundle_file = bundle_data_dir.join(format!("{:06}.json", bundle_num));
-            if bundle_file.exists() {
-                let json_data = fs::read_to_string(&bundle_file)?;
-                let bundle_data: (u32, Vec<(String, bool)>) = serde_json::from_str(&json_data)?;
-                bundles_data.push(bundle_data);
-            }
-        }
+            // Update progress atomically
+            let bytes_processed = bytes_atomic.fetch_add(bundle_bytes, Ordering::Relaxed) + bundle_bytes;
+            let current_count = count_atomic.fetch_add(1, Ordering::Relaxed) + 1;
 
-        // Build index from scratch
-        new_index.build_from_scratch(bundles_data, |current, total| {
-            if let Some(ref cb) = progress_cb {
-                cb(current as u32, total as u32);
+            // Update progress periodically
+            if current_count % update_interval == 0 || current_count == 1 || current_count == bundle_count {
+                if let Ok(cb_guard) = progress_cb_arc.lock() {
+                    if let Some(ref cb) = *cb_guard {
+                        cb(current_count as u32, bundle_count as u32, bytes_processed, total_uncompressed_bytes);
+                    }
+                }
             }
+
+            Ok(())
         })?;
 
-        // Clean up temporary bundle data files
-        fs::remove_dir_all(&bundle_data_dir).ok();
+        // Final progress update
+        if let Ok(cb_guard) = progress_cb_arc.lock() {
+            if let Some(ref cb) = *cb_guard {
+                let final_count = count_atomic.load(Ordering::Relaxed);
+                let final_bytes = bytes_atomic.load(Ordering::Relaxed);
+                cb(final_count as u32, bundle_count as u32, final_bytes, total_uncompressed_bytes);
+            }
+        }
 
-        *self.did_index.write().unwrap() = Some(new_index);
+        stats = stats_atomic.lock().unwrap().clone();
+
+        let duration = start.elapsed();
+        log::debug!(
+            "[DID Index Rebuild] Processed {} bundles ({} operations) in {:.3}s ({:.0} ops/sec)",
+            stats.bundles_processed,
+            stats.operations_indexed,
+            duration.as_secs_f64(),
+            stats.operations_indexed as f64 / duration.as_secs_f64()
+        );
 
         Ok(stats)
     }
@@ -2897,7 +2946,7 @@ pub enum WarmUpStrategy {
     All,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct RebuildStats {
     pub bundles_processed: u32,
     pub operations_indexed: u64,

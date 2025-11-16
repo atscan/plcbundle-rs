@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use tokio::time::Duration;
 
 #[cfg(feature = "server")]
+use super::progress::ProgressBar;
+#[cfg(feature = "server")]
 use super::utils;
 #[cfg(feature = "server")]
 use plcbundle::BundleManager;
@@ -244,22 +246,25 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf, global_verbose: bool
 
                 let verbose = global_verbose; // Copy for closure
                 let start_time = std::time::Instant::now();
-                manager.rebuild_did_index(Some(move |current, total| {
-                    if current % 10 == 0 || current == total {
-                        eprint!(
-                            "\rProgress: {}/{} ({:.1}%)",
-                            current,
-                            total,
-                            (current as f64 / total as f64) * 100.0
-                        );
-                    }
+                
+                // Calculate total uncompressed size for progress tracking
+                let index = manager.get_index();
+                let bundle_numbers: Vec<u32> = (1..=last_bundle).collect();
+                let total_uncompressed_size = index.total_uncompressed_size_for_bundles(&bundle_numbers);
+                
+                use std::sync::{Arc, Mutex};
+                let progress = Arc::new(Mutex::new(ProgressBar::with_bytes(last_bundle as usize, total_uncompressed_size)));
+                let progress_clone = progress.clone();
+                manager.rebuild_did_index(Some(move |current, _total, bytes_processed, _total_bytes| {
+                    let pb = progress_clone.lock().unwrap();
+                    pb.set_with_bytes(current as usize, bytes_processed);
                     if verbose && current % 100 == 0 {
-                        log::debug!("[Resolver] Index progress: {}/{} bundles", current, total);
+                        log::debug!("[Resolver] Index progress: {}/{} bundles", current, _total);
                     }
                 }))?;
+                progress.lock().unwrap().finish();
 
                 let elapsed = start_time.elapsed();
-                eprintln!();
 
                 let stats = manager.get_did_index_stats();
                 let final_total_dids = stats

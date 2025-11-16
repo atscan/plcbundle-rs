@@ -150,7 +150,7 @@ pub fn cmd_index_build(dir: PathBuf, force: bool) -> Result<()> {
 
     let start = Instant::now();
 
-    manager.rebuild_did_index(Some(|current, total| {
+    manager.rebuild_did_index(Some(|current, total, _bytes_processed, _total_bytes| {
         if current % 10 == 0 || current == total {
             eprint!(
                 "\rProgress: {}/{} ({:.1}%)",
@@ -207,7 +207,7 @@ pub fn cmd_index_repair(dir: PathBuf) -> Result<()> {
 
     let start = Instant::now();
 
-    manager.rebuild_did_index(Some(|current, total| {
+    manager.rebuild_did_index(Some(|current, total, _bytes_processed, _total_bytes| {
         if current % 10 == 0 || current == total {
             eprint!(
                 "\rProgress: {}/{} ({:.1}%)",
