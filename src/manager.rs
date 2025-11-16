@@ -43,7 +43,7 @@ pub struct BundleManager {
     directory: PathBuf,
     index: Arc<RwLock<Index>>,
     cache: Arc<cache::BundleCache>,
-    did_index: Arc<RwLock<did_index::Manager>>,
+    did_index: Arc<RwLock<Option<did_index::Manager>>>,
     stats: Arc<RwLock<ManagerStats>>,
     mempool: Arc<RwLock<Option<mempool::Mempool>>>,
     handle_resolver: Option<Arc<handle_resolver::HandleResolver>>,
@@ -96,22 +96,45 @@ impl BundleManager {
         directory: PathBuf,
         handle_resolver_url: Option<String>,
     ) -> Result<Self> {
+        let init_start = std::time::Instant::now();
+        log::debug!("[BundleManager] Initializing BundleManager from: {}", directory.display());
         let index = Index::load(&directory)?;
-        let did_index = did_index::Manager::new(directory.clone())?;
 
         let handle_resolver =
             handle_resolver_url.map(|url| Arc::new(handle_resolver::HandleResolver::new(url)));
 
+        if handle_resolver.is_some() {
+            log::debug!("[BundleManager] Handle resolver configured");
+        }
+
+        let total_elapsed = init_start.elapsed();
+        let total_elapsed_ms = total_elapsed.as_secs_f64() * 1000.0;
+        log::debug!("[BundleManager] BundleManager initialized successfully ({:.3}ms total)", total_elapsed_ms);
         Ok(Self {
             directory: directory.clone(),
             index: Arc::new(RwLock::new(index)),
             cache: Arc::new(cache::BundleCache::new(100)),
-            did_index: Arc::new(RwLock::new(did_index)),
+            did_index: Arc::new(RwLock::new(None)),
             stats: Arc::new(RwLock::new(ManagerStats::default())),
             mempool: Arc::new(RwLock::new(None)),
             handle_resolver,
             verbose: Arc::new(Mutex::new(false)),
         })
+    }
+
+    /// Ensure DID index is loaded (lazy initialization)
+    fn ensure_did_index(&self) -> Result<()> {
+        let mut did_index_guard = self.did_index.write().unwrap();
+        if did_index_guard.is_none() {
+            let did_index_start = std::time::Instant::now();
+            log::debug!("[BundleManager] Loading DID index...");
+            let did_index = did_index::Manager::new(self.directory.clone())?;
+            let did_index_elapsed = did_index_start.elapsed();
+            let did_index_elapsed_ms = did_index_elapsed.as_secs_f64() * 1000.0;
+            log::debug!("[BundleManager] DID index loaded ({:.3}ms)", did_index_elapsed_ms);
+            *did_index_guard = Some(did_index);
+        }
+        Ok(())
     }
 
     pub fn with_verbose(self, verbose: bool) -> Self {
@@ -309,8 +332,9 @@ impl BundleManager {
 
     // === DID Operations ===
     pub fn get_did_operations(&self, did: &str) -> Result<Vec<Operation>> {
+        self.ensure_did_index()?;
         let did_index = self.did_index.read().unwrap();
-        let bundle_refs = did_index.get_bundles_for_did(did)?;
+        let bundle_refs = did_index.as_ref().unwrap().get_bundles_for_did(did)?;
 
         let mut operations = Vec::new();
         for bundle_num in bundle_refs {
@@ -335,9 +359,10 @@ impl BundleManager {
         &self,
         did: &str,
     ) -> Result<Vec<OperationWithLocation>> {
+        self.ensure_did_index()?;
         let locations = {
             let did_index = self.did_index.read().unwrap();
-            did_index.get_did_locations(did)?
+            did_index.as_ref().unwrap().get_did_locations(did)?
         };
 
         let (ops_with_loc, _) = self.collect_operations_for_locations(&locations)?;
@@ -357,10 +382,11 @@ impl BundleManager {
     )> {
         use std::time::Instant;
 
+        self.ensure_did_index()?;
         let index_start = Instant::now();
         let (locations, shard_stats, shard_num, lookup_timings) = {
             let did_index = self.did_index.read().unwrap();
-            did_index.get_did_locations_with_stats(did)?
+            did_index.as_ref().unwrap().get_did_locations_with_stats(did)?
         };
         let _index_time = index_start.elapsed();
 
@@ -377,8 +403,9 @@ impl BundleManager {
 
     /// Sample random DIDs directly from the DID index without reading bundles.
     pub fn sample_random_dids(&self, count: usize, seed: Option<u64>) -> Result<Vec<String>> {
+        self.ensure_did_index()?;
         let did_index = self.did_index.read().unwrap();
-        did_index.sample_random_dids(count, seed)
+        did_index.as_ref().unwrap().sample_random_dids(count, seed)
     }
 
     /// Get DID operations from mempool
@@ -406,10 +433,11 @@ impl BundleManager {
         crate::resolver::validate_did_format(did)?;
 
         // Get all operations for this DID with timing
+        self.ensure_did_index()?;
         let index_start = Instant::now();
         let did_index = self.did_index.read().unwrap();
         let (locations, shard_stats, shard_num, lookup_timings) =
-            did_index.get_did_locations_with_stats(did)?;
+            did_index.as_ref().unwrap().get_did_locations_with_stats(did)?;
         let index_time = index_start.elapsed();
 
         if locations.is_empty() {
@@ -722,13 +750,14 @@ impl BundleManager {
         // Clean up temporary bundle data files
         fs::remove_dir_all(&bundle_data_dir).ok();
 
-        *self.did_index.write().unwrap() = new_index;
+        *self.did_index.write().unwrap() = Some(new_index);
 
         Ok(stats)
     }
 
     pub fn get_did_index_stats(&self) -> HashMap<String, serde_json::Value> {
-        self.did_index.read().unwrap().get_stats()
+        self.ensure_did_index().ok(); // Stats might be called even if index doesn't exist
+        self.did_index.read().unwrap().as_ref().map(|idx| idx.get_stats()).unwrap_or_default()
     }
 
     /// Get DID index stats as struct (legacy format)
@@ -746,7 +775,7 @@ impl BundleManager {
         }
     }
 
-    pub fn get_did_index(&self) -> Arc<RwLock<did_index::Manager>> {
+    pub fn get_did_index(&self) -> Arc<RwLock<Option<did_index::Manager>>> {
         Arc::clone(&self.did_index)
     }
 
@@ -1084,6 +1113,7 @@ impl BundleManager {
         let mut bundles_processed = 0usize;
 
         // Update DID index for each bundle as we load it (memory efficient)
+        self.ensure_did_index()?;
         let update_start = Instant::now();
         for bundle_num in start_bundle..=end_bundle {
             if let Ok(result) = self.load_bundle(bundle_num, LoadOptions::default()) {
@@ -1098,6 +1128,8 @@ impl BundleManager {
                 let _ = self
                     .did_index
                     .write()
+                    .unwrap()
+                    .as_mut()
                     .unwrap()
                     .update_for_bundle(bundle_num, operations)?;
                 bundles_processed += 1;
@@ -1892,9 +1924,12 @@ impl BundleManager {
             .map(|op| (op.did.clone(), op.nullified))
             .collect();
 
+        self.ensure_did_index()?;
         let did_index_compacted = self
             .did_index
             .write()
+            .unwrap()
+            .as_mut()
             .unwrap()
             .update_for_bundle(bundle_num, did_ops)?;
         let did_index_time = did_index_start.elapsed();

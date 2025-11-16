@@ -15,8 +15,7 @@ pub async fn handle_debug_memory(State(state): State<ServerState>) -> impl IntoR
     let did_stats = tokio::task::spawn_blocking({
         let manager = Arc::clone(&state.manager);
         move || {
-            let did_index = manager.get_did_index();
-            did_index.read().unwrap().get_stats()
+            manager.get_did_index_stats()
         }
     })
     .await
@@ -45,8 +44,7 @@ pub async fn handle_debug_didindex(State(state): State<ServerState>) -> impl Int
     let stats = tokio::task::spawn_blocking({
         let manager = Arc::clone(&state.manager);
         move || {
-            let did_index = manager.get_did_index();
-            did_index.read().unwrap().get_stats()
+            manager.get_did_index_stats()
         }
     })
     .await

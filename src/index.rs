@@ -38,8 +38,21 @@ pub struct BundleMetadata {
 impl Index {
     pub fn load<P: AsRef<Path>>(directory: P) -> Result<Self> {
         let index_path = directory.as_ref().join("plc_bundles.json");
+        log::debug!("[BundleManager] Loading index from: {}", index_path.display());
+        let start = std::time::Instant::now();
         let file = File::open(&index_path)?;
-        Ok(sonic_rs::from_reader(file)?)
+        let index: Index = sonic_rs::from_reader(file)?;
+        let elapsed = start.elapsed();
+        let elapsed_ms = elapsed.as_secs_f64() * 1000.0;
+        log::debug!(
+            "[BundleManager] Index loaded: v{} ({}), {} bundles, last bundle: {} ({:.3}ms)",
+            index.version,
+            index.origin,
+            index.bundles.len(),
+            index.last_bundle,
+            elapsed_ms
+        );
+        Ok(index)
     }
 
     /// Save index to disk atomically

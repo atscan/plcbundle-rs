@@ -189,8 +189,7 @@ pub fn cmd_index_repair(dir: PathBuf) -> Result<()> {
     let manager = super::utils::create_manager(dir.clone(), false, false)?;
 
     // Check if index config exists (even if corrupted)
-    let did_index = manager.get_did_index();
-    let stats_map = did_index.read().unwrap().get_stats();
+    let stats_map = manager.get_did_index_stats();
     let index_exists = stats_map
         .get("exists")
         .and_then(|v| v.as_bool())
@@ -242,8 +241,7 @@ pub fn cmd_index_stats(dir: PathBuf, json: bool) -> Result<()> {
     let manager = super::utils::create_manager(dir.clone(), false, false)?;
 
     // Get raw stats from did_index
-    let did_index = manager.get_did_index();
-    let stats_map = did_index.read().unwrap().get_stats();
+    let stats_map = manager.get_did_index_stats();
 
     if json {
         let json_str = serde_json::to_string_pretty(&stats_map)?;
@@ -491,7 +489,7 @@ fn rebuild_and_compare_index(
         .and_then(|v| v.as_i64())
         .unwrap_or(0) as usize;
 
-    let existing_stats = manager.get_did_index().read().unwrap().get_stats();
+    let existing_stats = manager.get_did_index_stats();
     let existing_total_dids = existing_stats
         .get("total_dids")
         .and_then(|v| v.as_i64())
@@ -597,8 +595,7 @@ fn rebuild_and_compare_index(
 pub fn cmd_index_verify(dir: PathBuf, verbose: bool) -> Result<()> {
     let manager = super::utils::create_manager(dir.clone(), false, false)?;
 
-    let did_index = manager.get_did_index();
-    let stats_map = did_index.read().unwrap().get_stats();
+    let stats_map = manager.get_did_index_stats();
 
     if !stats_map
         .get("exists")
@@ -642,7 +639,8 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool) -> Result<()> {
 
     // Check 2: Verify shard files exist and are readable
     log::info!("Checking shard files...");
-    let shard_details = did_index.read().unwrap().get_shard_details(None)?;
+    let did_index = manager.get_did_index();
+    let shard_details = did_index.read().unwrap().as_ref().unwrap().get_shard_details(None)?;
 
     let mut missing_base_shards = 0;
     let mut missing_delta_segments = 0;
@@ -849,8 +847,7 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool) -> Result<()> {
 pub fn cmd_index_debug(dir: PathBuf, shard: Option<u8>, json: bool) -> Result<()> {
     let manager = super::utils::create_manager(dir.clone(), false, false)?;
 
-    let did_index = manager.get_did_index();
-    let stats_map = did_index.read().unwrap().get_stats();
+    let stats_map = manager.get_did_index_stats();
 
     if !stats_map
         .get("exists")
@@ -862,7 +859,8 @@ pub fn cmd_index_debug(dir: PathBuf, shard: Option<u8>, json: bool) -> Result<()
         return Ok(());
     }
 
-    let shard_details = did_index.read().unwrap().get_shard_details(shard)?;
+    let did_index = manager.get_did_index();
+    let shard_details = did_index.read().unwrap().as_ref().unwrap().get_shard_details(shard)?;
 
     if json {
         let json_str = serde_json::to_string_pretty(&shard_details)?;
@@ -1078,8 +1076,7 @@ pub fn cmd_index_debug(dir: PathBuf, shard: Option<u8>, json: bool) -> Result<()
 pub fn cmd_index_compact(dir: PathBuf, shards: Option<Vec<u8>>) -> Result<()> {
     let manager = super::utils::create_manager(dir.clone(), false, false)?;
 
-    let did_index = manager.get_did_index();
-    let stats_map = did_index.read().unwrap().get_stats();
+    let stats_map = manager.get_did_index_stats();
 
     if !stats_map
         .get("exists")
@@ -1108,14 +1105,17 @@ pub fn cmd_index_compact(dir: PathBuf, shards: Option<Vec<u8>>) -> Result<()> {
         log::info!("  Compacting all shards");
     }
 
+    let did_index = manager.get_did_index();
     let start = Instant::now();
     did_index
         .write()
         .unwrap()
+        .as_mut()
+        .unwrap()
         .compact_pending_segments(shards)?;
     let elapsed = start.elapsed();
 
-    let stats_map_after = did_index.read().unwrap().get_stats();
+    let stats_map_after = manager.get_did_index_stats();
     let delta_segments_after = stats_map_after
         .get("delta_segments")
         .and_then(|v| v.as_u64())

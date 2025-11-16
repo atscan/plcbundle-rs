@@ -482,12 +482,24 @@ fn bench_did_index_lookup(
         anyhow::bail!("No DIDs found in repository");
     }
 
+    // Ensure DID index is loaded (sample_random_dids already does this, but be explicit)
+    // The did_index will be loaded by sample_random_dids above
     let did_index = manager.get_did_index();
+    
+    // Ensure it's actually loaded (in case sample_random_dids didn't load it)
+    {
+        let guard = did_index.read().unwrap();
+        if guard.is_none() {
+            anyhow::bail!("DID index not available");
+        }
+    }
 
     // Warmup
     for i in 0..warmup.min(10) {
         let _ = did_index
             .read()
+            .unwrap()
+            .as_ref()
             .unwrap()
             .get_did_locations(&dids[i % dids.len()])?;
     }
@@ -508,7 +520,7 @@ fn bench_did_index_lookup(
 
         let did = &dids[i % dids.len()];
         let start = Instant::now();
-        let _ = did_index.read().unwrap().get_did_locations(did)?;
+        let _ = did_index.read().unwrap().as_ref().unwrap().get_did_locations(did)?;
         timings.push(start.elapsed().as_secs_f64() * 1000.0);
     }
 

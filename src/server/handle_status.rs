@@ -83,8 +83,7 @@ pub async fn handle_status(State(state): State<ServerState>) -> impl IntoRespons
     let did_stats = tokio::task::spawn_blocking({
         let manager = Arc::clone(&state.manager);
         move || {
-            let did_index = manager.get_did_index();
-            did_index.read().unwrap().get_stats()
+            manager.get_did_index_stats()
         }
     })
     .await
