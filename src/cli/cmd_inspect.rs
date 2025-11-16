@@ -29,18 +29,19 @@ service pattern extraction. Use --samples to see example operations from the bun
 
 This command is invaluable for understanding bundle composition, identifying data
 quality issues, and analyzing patterns in the PLC directory data.",
-    after_help = "Examples:\n  \
-            # Inspect from repository\n  \
-            {bin} inspect 42\n\n  \
-            # Inspect specific file\n  \
-            {bin} inspect /path/to/000042.jsonl.zst\n  \
-            {bin} inspect 000042.jsonl.zst\n\n  \
-            # Skip certain analysis sections\n  \
-            {bin} inspect 42 --skip-patterns\n\n  \
-            # Show sample operations\n  \
-            {bin} inspect 42 --samples --sample-count 20\n\n  \
-            # JSON output (for scripting)\n  \
-            {bin} inspect 42 --json"
+    help_template = crate::clap_help!(
+        examples: "  # Inspect from repository\n  \
+                   {bin} inspect 42\n\n  \
+                   # Inspect specific file\n  \
+                   {bin} inspect /path/to/000042.jsonl.zst\n  \
+                   {bin} inspect 000042.jsonl.zst\n\n  \
+                   # Skip certain analysis sections\n  \
+                   {bin} inspect 42 --skip-patterns\n\n  \
+                   # Show sample operations\n  \
+                   {bin} inspect 42 --samples --sample-count 20\n\n  \
+                   # JSON output (for scripting)\n  \
+                   {bin} inspect 42 --json"
+    )
 )]
 pub struct InspectCommand {
     /// Bundle number or file path to inspect

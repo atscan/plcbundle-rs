@@ -26,17 +26,18 @@ iterations are used to warm up caches before measurement begins.
 
 This tool is essential for performance regression testing, capacity planning,
 and understanding how repository size and access patterns affect performance.",
-    after_help = "Examples:\n  \
-            # Run all benchmarks with default iterations\n  \
-            {bin} bench\n\n  \
-            # Benchmark specific operation\n  \
-            {bin} bench --op-read --iterations 1000\n\n  \
-            # Benchmark DID lookup\n  \
-            {bin} bench --did-lookup -n 500\n\n  \
-            # Run on specific bundle\n  \
-            {bin} bench --bundles 100\n\n  \
-            # JSON output for analysis\n  \
-            {bin} bench --json > benchmark.json"
+    help_template = crate::clap_help!(
+        examples: "  # Run all benchmarks with default iterations\n  \
+                   {bin} bench\n\n  \
+                   # Benchmark specific operation\n  \
+                   {bin} bench --op-read --iterations 1000\n\n  \
+                   # Benchmark DID lookup\n  \
+                   {bin} bench --did-lookup -n 500\n\n  \
+                   # Run on specific bundle\n  \
+                   {bin} bench --bundles 100\n\n  \
+                   # JSON output for analysis\n  \
+                   {bin} bench --json > benchmark.json"
+    )
 )]
 pub struct BenchCommand {
     /// Number of iterations for each benchmark

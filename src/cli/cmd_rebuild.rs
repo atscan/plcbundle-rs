@@ -25,15 +25,16 @@ Legacy bundles without metadata frames cannot be reconstructed this way. Use
 
 After rebuilding, verify the repository with 'verify' to ensure chain integrity
 is correct.",
-    after_help = "Examples:\n  \
-        # Rebuild index from current directory\n  \
-        {bin} rebuild\n\n  \
-        # Rebuild from specific directory\n  \
-        {bin} rebuild -C /path/to/bundles\n\n  \
-        # Show verbose output\n  \
-        {bin} rebuild -v\n\n  \
-        # Dry-run (just scan, don't write)\n  \
-        {bin} rebuild --dry-run"
+    help_template = crate::clap_help!(
+        examples: "  # Rebuild index from current directory\n  \
+                   {bin} rebuild\n\n  \
+                   # Rebuild from specific directory\n  \
+                   {bin} rebuild -C /path/to/bundles\n\n  \
+                   # Show verbose output\n  \
+                   {bin} rebuild -v\n\n  \
+                   # Dry-run (just scan, don't write)\n  \
+                   {bin} rebuild --dry-run"
+    )
 )]
 pub struct RebuildCommand {
     /// Show what would be done without writing index

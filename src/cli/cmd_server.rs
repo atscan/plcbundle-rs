@@ -37,7 +37,23 @@ or updates the DID index on startup if needed.
 
 This is the primary way to expose your repository to other systems, applications,
 or users over the network. The server is designed for production use with proper
-error handling, graceful shutdown, and resource management."
+error handling, graceful shutdown, and resource management.",
+    help_template = crate::clap_help!(
+        examples: "  # Start server on default port (8080)\n  \
+                   {bin} server\n\n  \
+                   # Custom host and port\n  \
+                   {bin} server --host 0.0.0.0 --port 3000\n\n  \
+                   # Server with sync mode (daemon)\n  \
+                   {bin} server --sync\n\n  \
+                   # Sync with custom interval\n  \
+                   {bin} server --sync --interval 30s\n\n  \
+                   # Enable WebSocket streaming\n  \
+                   {bin} server --websocket\n\n  \
+                   # Enable DID resolution endpoints\n  \
+                   {bin} server --resolver\n\n  \
+                   # Full-featured server\n  \
+                   {bin} server --sync --websocket --resolver --port 8080"
+    )
 )]
 pub struct ServerCommand {
     /// HTTP server port

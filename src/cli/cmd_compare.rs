@@ -30,17 +30,18 @@ differences and --sample to control how many operations are displayed.
 
 The target can be a remote HTTP URL (e.g., https://plc.example.com), a remote
 index URL, or a local file path to another repository's index file.",
-    after_help = "Examples:\n  \
-        # High-level comparison\n  \
-        {bin} compare https://plc.example.com\n\n  \
-        # Show all differences (verbose)\n  \
-        {bin} compare https://plc.example.com -v\n\n  \
-        # Deep dive into specific bundle\n  \
-        {bin} compare https://plc.example.com --bundles 23\n\n  \
-        # Compare bundle with operation samples\n  \
-        {bin} compare https://plc.example.com --bundles 23 --show-operations\n\n  \
-        # Show first 50 operations\n  \
-        {bin} compare https://plc.example.com --bundles 23 --sample 50"
+    help_template = crate::clap_help!(
+        examples: "  # High-level comparison\n  \
+                   {bin} compare https://plc.example.com\n\n  \
+                   # Show all differences (verbose)\n  \
+                   {bin} compare https://plc.example.com -v\n\n  \
+                   # Deep dive into specific bundle\n  \
+                   {bin} compare https://plc.example.com --bundles 23\n\n  \
+                   # Compare bundle with operation samples\n  \
+                   {bin} compare https://plc.example.com --bundles 23 --show-operations\n\n  \
+                   # Show first 50 operations\n  \
+                   {bin} compare https://plc.example.com --bundles 23 --sample 50"
+    )
 )]
 pub struct CompareCommand {
     /// Target to compare against (URL or local path)

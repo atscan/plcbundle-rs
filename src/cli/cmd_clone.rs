@@ -22,13 +22,14 @@ correctness.
 This is the fastest way to create a local copy of an existing repository, whether
 for backup, local development, or creating a mirror. After cloning, the repository
 is immediately ready to use with all standard commands.",
-    after_help = "Examples:\n  \
-            # Clone from remote instance\n  \
-            {bin} clone https://plc.example.com /path/to/local\n\n  \
-            # Clone to current directory\n  \
-            {bin} clone https://plc.example.com .\n\n  \
-            # Clone with custom parallelism\n  \
-            {bin} clone https://plc.example.com /path/to/local --parallel 8"
+    help_template = crate::clap_help!(
+        examples: "  # Clone from remote instance\n  \
+                   {bin} clone https://plc.example.com /path/to/local\n\n  \
+                   # Clone to current directory\n  \
+                   {bin} clone https://plc.example.com .\n\n  \
+                   # Clone with custom parallelism\n  \
+                   {bin} clone https://plc.example.com /path/to/local --parallel 8"
+    )
 )]
 pub struct CloneCommand {
     /// Remote plcbundle instance URL

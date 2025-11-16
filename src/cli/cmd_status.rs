@@ -26,15 +26,16 @@ and suggests next steps to improve repository functionality. This makes it an
 excellent starting point for understanding repository state and planning
 maintenance tasks.",
     alias = "info",
-    after_help = "Examples:\n  \
-            # Show repository status\n  \
-            {bin} status\n\n  \
-            # Show detailed status with recent bundles\n  \
-            {bin} status --detailed\n\n  \
-            # JSON output for scripting\n  \
-            {bin} status --json\n\n  \
-            # Using legacy 'info' alias\n  \
-            {bin} info"
+    help_template = crate::clap_help!(
+        examples: "  # Show repository status\n  \
+                   {bin} status\n\n  \
+                   # Show detailed status with recent bundles\n  \
+                   {bin} status --detailed\n\n  \
+                   # JSON output for scripting\n  \
+                   {bin} status --json\n\n  \
+                   # Using legacy 'info' alias\n  \
+                   {bin} info"
+    )
 )]
 pub struct StatusCommand {
     /// Show detailed information

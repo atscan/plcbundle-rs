@@ -15,7 +15,19 @@ sampling for reproducible results across runs.
 
 This command is particularly useful for generating test datasets, performing
 statistical analysis on DID distributions, or creating random samples for
-benchmarking and performance testing."
+benchmarking and performance testing.",
+    help_template = crate::clap_help!(
+        examples: "  # Sample 10 random DIDs (default)\n  \
+                   {bin} random\n\n  \
+                   # Sample specific number\n  \
+                   {bin} random --count 50\n\n  \
+                   # Deterministic sampling with seed\n  \
+                   {bin} random --count 20 --seed 12345\n\n  \
+                   # Output as JSON array\n  \
+                   {bin} random --count 10 --json\n\n  \
+                   # Using short flag\n  \
+                   {bin} random -n 5"
+    )
 )]
 pub struct RandomCommand {
     /// Number of random DIDs to output

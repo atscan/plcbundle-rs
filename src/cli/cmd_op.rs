@@ -25,15 +25,16 @@ All subcommands support JMESPath queries to extract specific fields from operati
 making it easy to script and process operation data.",
     alias = "operation",
     alias = "record",
-    after_help = "Examples:\n  \
-            # Get operation as JSON\n  \
-            {bin} op get 42 1337\n  \
-            {bin} op get 420000\n\n  \
-            # Show operation (formatted)\n  \
-            {bin} op show 42 1337\n  \
-            {bin} op show 88410345\n\n  \
-            # Find by CID\n  \
-            {bin} op find bafyreig3..."
+    help_template = crate::clap_help!(
+        examples: "  # Get operation as JSON\n  \
+                   {bin} op get 42 1337\n  \
+                   {bin} op get 420000\n\n  \
+                   # Show operation (formatted)\n  \
+                   {bin} op show 42 1337\n  \
+                   {bin} op show 88410345\n\n  \
+                   # Find by CID\n  \
+                   {bin} op find bafyreig3..."
+    )
 )]
 pub struct OpCommand {
     #[command(subcommand)]
@@ -53,19 +54,20 @@ pub enum OpCommands {
     /// By default, pretty-prints with colors when outputting to a terminal.
     /// Use --raw to force raw JSON output (useful for piping).
     /// Use -q/--query to extract a value using JMESPath.
-    #[command(after_help = "Examples:\n  \
-            # By bundle + position (auto pretty-print in terminal)\n  \
-            {bin} op get 42 1337\n\n  \
-            # By global position\n  \
-            {bin} op get 88410345\n\n  \
-            # Query with JMESPath\n  \
-            {bin} op get 42 1337 -q 'operation.type'\n  \
-            {bin} op get 42 1337 -q 'did'\n  \
-            {bin} op get 88410345 -q 'did'\n\n  \
-            # Force raw JSON output\n  \
-            {bin} op get 42 1337 --raw\n\n  \
-            # Pipe to jq (auto-detects non-TTY, uses raw)\n  \
-            {bin} op get 42 1337 | jq .did")]
+    #[command(help_template = crate::clap_help!(
+        examples: "  # By bundle + position (auto pretty-print in terminal)\n  \
+                   {bin} op get 42 1337\n\n  \
+                   # By global position\n  \
+                   {bin} op get 88410345\n\n  \
+                   # Query with JMESPath\n  \
+                   {bin} op get 42 1337 -q 'operation.type'\n  \
+                   {bin} op get 42 1337 -q 'did'\n  \
+                   {bin} op get 88410345 -q 'did'\n\n  \
+                   # Force raw JSON output\n  \
+                   {bin} op get 42 1337 --raw\n\n  \
+                   # Pipe to jq (auto-detects non-TTY, uses raw)\n  \
+                   {bin} op get 42 1337 | jq .did"
+    ))]
     Get {
         /// Bundle number (or global position if only one arg provided)
         bundle: u32,
@@ -98,13 +100,14 @@ pub enum OpCommands {
     ///   • Nullification status
     ///   • Parsed operation details
     ///   • Performance metrics (when not quiet)
-    #[command(after_help = "Examples:\n  \
-            # By bundle + position\n  \
-            {bin} op show 42 1337\n\n  \
-            # By global position\n  \
-            {bin} op show 88410345\n\n  \
-            # Quiet mode (minimal output)\n  \
-            {bin} op show 42 1337 -q")]
+    #[command(help_template = crate::clap_help!(
+        examples: "  # By bundle + position\n  \
+                   {bin} op show 42 1337\n\n  \
+                   # By global position\n  \
+                   {bin} op show 88410345\n\n  \
+                   # Quiet mode (minimal output)\n  \
+                   {bin} op show 42 1337 -q"
+    ))]
     Show {
         /// Bundle number (or global position if only one arg)
         bundle: u32,
@@ -119,11 +122,12 @@ pub enum OpCommands {
     /// and returns its location (bundle + position).
     ///
     /// Note: This performs a full scan and can be slow on large repositories.
-    #[command(after_help = "Examples:\n  \
-            # Find by CID\n  \
-            {bin} op find bafyreig3tg4k...\n\n  \
-            # Use with op get\n  \
-            {bin} op find bafyreig3... | awk '{print $3, $5}' | xargs {bin} op get")]
+    #[command(help_template = crate::clap_help!(
+        examples: "  # Find by CID\n  \
+                   {bin} op find bafyreig3tg4k...\n\n  \
+                   # Use with op get\n  \
+                   {bin} op find bafyreig3... | awk '{print $3, $5}' | xargs {bin} op get"
+    ))]
     Find {
         /// CID to search for
         cid: String,

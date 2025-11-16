@@ -28,22 +28,23 @@ individual bundle integrity and chain continuity.
 
 Use --bundles to verify specific bundles or ranges, or omit it to verify
 the entire repository chain.",
-    after_help = "Examples:\n  \
-            # Verify entire chain\n  \
-            {bin} verify\n  \
-            {bin} verify --chain\n\n  \
-            # Verify specific bundle\n  \
-            {bin} verify --bundles 42\n\n  \
-            # Verify range of bundles\n  \
-            {bin} verify --bundles 1-100\n\n  \
-            # Verify multiple ranges\n  \
-            {bin} verify --bundles 1-10,20-30\n\n  \
-            # Fast verification (metadata only)\n  \
-            {bin} verify --fast\n\n  \
-            # Full verification (content hash)\n  \
-            {bin} verify --full\n\n  \
-            # Parallel verification (faster for ranges)\n  \
-            {bin} verify --bundles 1-1000 -j 8"
+    help_template = crate::clap_help!(
+        examples: "  # Verify entire chain\n  \
+                   {bin} verify\n  \
+                   {bin} verify --chain\n\n  \
+                   # Verify specific bundle\n  \
+                   {bin} verify --bundles 42\n\n  \
+                   # Verify range of bundles\n  \
+                   {bin} verify --bundles 1-100\n\n  \
+                   # Verify multiple ranges\n  \
+                   {bin} verify --bundles 1-10,20-30\n\n  \
+                   # Fast verification (metadata only)\n  \
+                   {bin} verify --fast\n\n  \
+                   # Full verification (content hash)\n  \
+                   {bin} verify --full\n\n  \
+                   # Parallel verification (faster for ranges)\n  \
+                   {bin} verify --bundles 1-1000 -j 8"
+    )
 )]
 pub struct VerifyCommand {
     /// Bundle range to verify (e.g., "42", "1-100", or "1-10,20-30")

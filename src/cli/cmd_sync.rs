@@ -32,15 +32,16 @@ This is the primary way to populate and update your repository with data from
 the PLC directory. The command handles rate limiting, error recovery, and
 maintains chain integrity throughout the sync process.",
     alias = "fetch",
-    after_help = "Examples:\n  \
-            # Fetch new bundles once\n  \
-            {bin} sync\n\n  \
-            # Run continuously (daemon mode)\n  \
-            {bin} sync --continuous\n\n  \
-            # Custom sync interval\n  \
-            {bin} sync --continuous --interval 30s\n\n  \
-            # Fetch maximum 10 bundles then stop\n  \
-            {bin} sync --max-bundles 10"
+    help_template = crate::clap_help!(
+        examples: "  # Fetch new bundles once\n  \
+                   {bin} sync\n\n  \
+                   # Run continuously (daemon mode)\n  \
+                   {bin} sync --continuous\n\n  \
+                   # Custom sync interval\n  \
+                   {bin} sync --continuous --interval 30s\n\n  \
+                   # Fetch maximum 10 bundles then stop\n  \
+                   {bin} sync --max-bundles 10"
+    )
 )]
 pub struct SyncCommand {
     /// PLC directory URL

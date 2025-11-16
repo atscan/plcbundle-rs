@@ -21,15 +21,16 @@ all such files after showing you what will be deleted.
 This is a safe operation that only affects temporary files. Your actual bundle
 data and index files are never touched. Use this command periodically or after
 interrupted operations to keep your repository clean.",
-    after_help = "Examples:\n  \
-            # Clean all temporary files (with confirmation)\n  \
-            {bin} clean\n\n  \
-            # Clean without confirmation prompt\n  \
-            {bin} clean --force\n\n  \
-            # Clean with verbose output\n  \
-            {bin} clean --verbose\n\n  \
-            # Using alias\n  \
-            {bin} cleanup"
+    help_template = crate::clap_help!(
+        examples: "  # Clean all temporary files (with confirmation)\n  \
+                   {bin} clean\n\n  \
+                   # Clean without confirmation prompt\n  \
+                   {bin} clean --force\n\n  \
+                   # Clean with verbose output\n  \
+                   {bin} clean --verbose\n\n  \
+                   # Using alias\n  \
+                   {bin} cleanup"
+    )
 )]
 pub struct CleanCommand {
     /// Show verbose output

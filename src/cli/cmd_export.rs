@@ -65,7 +65,20 @@ useful for sampling or testing. Output goes to stdout by default, or specify
 --output to write to a file.
 
 This is the primary way to extract raw operation data from the repository
-for analysis, backup, or migration to other systems."
+for analysis, backup, or migration to other systems.",
+    help_template = crate::clap_help!(
+        examples: "  # Export all bundles to stdout\n  \
+                   {bin} export --all\n\n  \
+                   # Export specific bundles\n  \
+                   {bin} export 1-100\n  \
+                   {bin} export 42\n\n  \
+                   # Export to file\n  \
+                   {bin} export --all -o operations.jsonl\n\n  \
+                   # Export first 1000 operations\n  \
+                   {bin} export --all --count 1000\n\n  \
+                   # Export in reverse order\n  \
+                   {bin} export --all --reverse"
+    )
 )]
 pub struct ExportCommand {
     /// Bundle range to export (e.g., "42", "1-100", or "1-10,20-30")

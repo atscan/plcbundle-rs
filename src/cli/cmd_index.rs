@@ -27,17 +27,18 @@ segments and optimize index performance.
 Regular index maintenance ensures optimal performance for DID lookups. The index
 is automatically updated during sync operations, but manual repair or compaction
 may be needed for optimal performance.",
-    after_help = "Examples:\n  \
-            # Build DID position index\n  \
-            {bin} index build\n\n  \
-            # Repair DID index (rebuild from bundles)\n  \
-            {bin} index repair\n\n  \
-            # Show DID index statistics\n  \
-            {bin} index stats\n\n  \
-            # Verify DID index integrity\n  \
-            {bin} index verify\n\n  \
-            # Compact index segments\n  \
-            {bin} index compact"
+    help_template = crate::clap_help!(
+        examples: "  # Build DID position index\n  \
+                   {bin} index build\n\n  \
+                   # Repair DID index (rebuild from bundles)\n  \
+                   {bin} index repair\n\n  \
+                   # Show DID index statistics\n  \
+                   {bin} index stats\n\n  \
+                   # Verify DID index integrity\n  \
+                   {bin} index verify\n\n  \
+                   # Compact index segments\n  \
+                   {bin} index compact"
+    )
 )]
 pub struct IndexCommand {
     #[command(subcommand)]
@@ -47,17 +48,18 @@ pub struct IndexCommand {
 #[derive(Subcommand)]
 pub enum IndexCommands {
     /// Build DID position index
-    #[command(after_help = "Examples:\n  \
-            # Build index (default: flush every 64 bundles)\n  \
-            {bin} index build\n\n  \
-            # Force rebuild from scratch\n  \
-            {bin} index build --force\n\n  \
-            # Use 8 parallel threads\n  \
-            {bin} index build -j 8\n\n  \
-            # Flush every 100 bundles (reduce memory usage)\n  \
-            {bin} index build --flush-interval 100\n\n  \
-            # No intermediate flushes (maximum speed, high memory)\n  \
-            {bin} index build --flush-interval 0")]
+    #[command(help_template = crate::clap_help!(
+        examples: "  # Build index (default: flush every 64 bundles)\n  \
+                   {bin} index build\n\n  \
+                   # Force rebuild from scratch\n  \
+                   {bin} index build --force\n\n  \
+                   # Use 8 parallel threads\n  \
+                   {bin} index build -j 8\n\n  \
+                   # Flush every 100 bundles (reduce memory usage)\n  \
+                   {bin} index build --flush-interval 100\n\n  \
+                   # No intermediate flushes (maximum speed, high memory)\n  \
+                   {bin} index build --flush-interval 0"
+    ))]
     Build {
         /// Rebuild even if index exists
         #[arg(short, long)]
@@ -75,15 +77,16 @@ pub enum IndexCommands {
     /// Repair DID index (incremental update + compaction)
     #[command(
         alias = "rebuild",
-        after_help = "Intelligently repairs the DID index by:\n  \
-            - Incrementally updating missing bundles (if < 1000 behind)\n  \
-            - Performing full rebuild (if > 1000 bundles behind)\n  \
-            - Compacting delta segments (if > 50 segments)\n\n  \
-            Use this after syncing new bundles or if index is corrupted.\n\n  \
-            Examples:\n  \
-            {bin} index repair\n  \
-            {bin} index repair -j 8\n  \
-            {bin} index repair --flush-interval 100"
+        help_template = crate::clap_help!(
+            before: "Intelligently repairs the DID index by:\n  \
+                     - Incrementally updating missing bundles (if < 1000 behind)\n  \
+                     - Performing full rebuild (if > 1000 bundles behind)\n  \
+                     - Compacting delta segments (if > 50 segments)\n\n  \
+                     Use this after syncing new bundles or if index is corrupted.",
+            examples: "  {bin} index repair\n  \
+                       {bin} index repair -j 8\n  \
+                       {bin} index repair --flush-interval 100"
+        )
     )]
     Repair {
         /// Number of threads to use (0 = auto-detect)
@@ -124,11 +127,12 @@ pub enum IndexCommands {
     },
 
     /// Compact delta segments in DID index
-    #[command(after_help = "Examples:\n  \
-            # Compact all shards\n  \
-            {bin} index compact\n\n  \
-            # Compact specific shards\n  \
-            {bin} index compact --shards 0xac 0x12 0xff")]
+    #[command(help_template = crate::clap_help!(
+        examples: "  # Compact all shards\n  \
+                   {bin} index compact\n\n  \
+                   # Compact specific shards\n  \
+                   {bin} index compact --shards 0xac 0x12 0xff"
+    ))]
     Compact {
         /// Specific shards to compact (0-255 or hex like 0xac)
         #[arg(short, long, value_delimiter = ' ')]

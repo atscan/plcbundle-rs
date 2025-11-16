@@ -26,7 +26,23 @@ repository if omitted. Use --json for machine-readable output suitable for
 further processing or visualization.
 
 This command provides insights into repository health, data distribution,
-and usage patterns that help with capacity planning and optimization."
+and usage patterns that help with capacity planning and optimization.",
+    help_template = crate::clap_help!(
+        examples: "  # Summary statistics (default)\n  \
+                   {bin} stats\n\n  \
+                   # Statistics for specific bundles\n  \
+                   {bin} stats --bundles 1-100\n\n  \
+                   # Operation type distribution\n  \
+                   {bin} stats --stat-type operations\n\n  \
+                   # DID statistics\n  \
+                   {bin} stats --stat-type dids\n\n  \
+                   # Timeline statistics\n  \
+                   {bin} stats --stat-type timeline\n\n  \
+                   # JSON output for scripting\n  \
+                   {bin} stats --json\n\n  \
+                   # Parallel processing\n  \
+                   {bin} stats --stat-type operations -j 8"
+    )
 )]
 pub struct StatsCommand {
     /// Bundle range

@@ -24,17 +24,18 @@ to automatically rebuild the DID index after rollback.
 
 This operation cannot be undone, so use with caution. The command requires
 explicit confirmation by typing 'rollback' unless --force is used.",
-    after_help = "Examples:\n  \
-            # Rollback TO bundle 100 (keeps 1-100, removes 101+)\n  \
-            {bin} rollback --to 100\n\n  \
-            # Remove last 5 bundles\n  \
-            {bin} rollback --last 5\n\n  \
-            # Rollback without confirmation\n  \
-            {bin} rollback --to 50 -f\n\n  \
-            # Rollback and rebuild DID index\n  \
-            {bin} rollback --to 100 --rebuild-did-index\n\n  \
-            # Rollback but keep bundle files (index-only)\n  \
-            {bin} rollback --to 100 --keep-files"
+    help_template = crate::clap_help!(
+        examples: "  # Rollback TO bundle 100 (keeps 1-100, removes 101+)\n  \
+                   {bin} rollback --to 100\n\n  \
+                   # Remove last 5 bundles\n  \
+                   {bin} rollback --last 5\n\n  \
+                   # Rollback without confirmation\n  \
+                   {bin} rollback --to 50 -f\n\n  \
+                   # Rollback and rebuild DID index\n  \
+                   {bin} rollback --to 100 --rebuild-did-index\n\n  \
+                   # Rollback but keep bundle files (index-only)\n  \
+                   {bin} rollback --to 100 --keep-files"
+    )
 )]
 pub struct RollbackCommand {
     /// Rollback TO this bundle (keeps it)

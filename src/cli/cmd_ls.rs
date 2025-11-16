@@ -21,25 +21,26 @@ to show oldest first. Use --last to limit output to the most recent N bundles.
 This command is optimized for programmatic use: output is consistent, fields
 are well-defined, and the format is designed to be easily parsed by both
 humans and machines.",
-    after_help = "Examples:\n  \
-            # List all bundles\n  \
-            {bin} ls\n\n  \
-            # Human-readable sizes\n  \
-            {bin} ls -h\n\n  \
-            # Last 10 bundles\n  \
-            {bin} ls -n 10\n\n  \
-            # Oldest first\n  \
-            {bin} ls --reverse\n\n  \
-            # Custom format\n  \
-            {bin} ls --format \"bundle,hash,date,size\"\n\n  \
-            # CSV format\n  \
-            {bin} ls --separator \",\"\n\n  \
-            # Scripting examples\n  \
-            {bin} ls | awk '{print $1}'           # Just bundle numbers\n  \
-            {bin} ls | grep 000150                # Find specific bundle\n  \
-            {bin} ls -n 5 | cut -f1,4             # First and 4th columns\n  \
-            {bin} ls --format bundle,hash         # Custom columns\n  \
-            {bin} ls --separator \",\" > bundles.csv # Export to CSV"
+    help_template = crate::clap_help!(
+        examples: "  # List all bundles\n  \
+                   {bin} ls\n\n  \
+                   # Human-readable sizes\n  \
+                   {bin} ls -h\n\n  \
+                   # Last 10 bundles\n  \
+                   {bin} ls -n 10\n\n  \
+                   # Oldest first\n  \
+                   {bin} ls --reverse\n\n  \
+                   # Custom format\n  \
+                   {bin} ls --format \"bundle,hash,date,size\"\n\n  \
+                   # CSV format\n  \
+                   {bin} ls --separator \",\"\n\n  \
+                   # Scripting examples\n  \
+                   {bin} ls | awk '{print $1}'           # Just bundle numbers\n  \
+                   {bin} ls | grep 000150                # Find specific bundle\n  \
+                   {bin} ls -n 5 | cut -f1,4             # First and 4th columns\n  \
+                   {bin} ls --format bundle,hash         # Custom columns\n  \
+                   {bin} ls --separator \",\" > bundles.csv # Export to CSV"
+    )
 )]
 pub struct LsCommand {
     /// Show only last N bundles (0 = all)

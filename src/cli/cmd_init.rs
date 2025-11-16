@@ -18,15 +18,16 @@ the expected source.
 After initialization, use 'sync' to fetch bundles from the PLC directory, or
 'clone' to copy bundles from an existing repository. The repository is ready
 to use immediately after initialization.",
-    after_help = "Examples:\n  \
-            # Initialize in current directory\n  \
-            {bin} init\n\n  \
-            # Initialize in specific directory\n  \
-            {bin} init /path/to/bundles\n\n  \
-            # Set custom origin identifier\n  \
-            {bin} init --origin my-node\n\n  \
-            # Force reinitialize existing repository\n  \
-            {bin} init --force"
+    help_template = crate::clap_help!(
+        examples: "  # Initialize in current directory\n  \
+                   {bin} init\n\n  \
+                   # Initialize in specific directory\n  \
+                   {bin} init /path/to/bundles\n\n  \
+                   # Set PLC directory URL\n  \
+                   {bin} init --plc https://plc.directory\n\n  \
+                   # Force reinitialize existing repository\n  \
+                   {bin} init --force"
+    )
 )]
 pub struct InitCommand {
     /// Directory to initialize (default: current directory)

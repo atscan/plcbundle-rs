@@ -30,7 +30,26 @@ default, making it easy to pipe to other tools like jq or process in scripts.
 
 Use --json for pretty-printed JSON output, or --stats-only to see query
 statistics without outputting results.",
-    alias = "q"
+    alias = "q",
+    help_template = crate::clap_help!(
+        examples: "  # Simple path query (extract DID field)\n  \
+                   {bin} query did\n\n  \
+                   # Query specific bundles\n  \
+                   {bin} query did --bundles 1-100\n\n  \
+                   # JMESPath query (complex filtering)\n  \
+                   {bin} query 'operation.type == \"create\"'\n\n  \
+                   # Query with mode specification\n  \
+                   {bin} query did --mode simple\n  \
+                   {bin} query 'operation.type' --mode jmespath\n\n  \
+                   # Output to file\n  \
+                   {bin} query did -o results.jsonl\n\n  \
+                   # Pretty-printed JSON output\n  \
+                   {bin} query did --json\n\n  \
+                   # Statistics only (no results)\n  \
+                   {bin} query did --stats-only\n\n  \
+                   # Using alias\n  \
+                   {bin} q did --bundles latest:10"
+    )
 )]
 pub struct QueryCommand {
     /// Query expression (e.g., "did", "operation.type", etc.)

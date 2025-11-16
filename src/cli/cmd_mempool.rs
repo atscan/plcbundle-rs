@@ -28,17 +28,18 @@ Mempool operations are stored in a temporary file that gets converted to a bundl
 file when the threshold is reached. The mempool ensures operations are processed
 in the correct order and maintains consistency with the bundle chain.",
     alias = "mp",
-    after_help = "Examples:\n  \
-            # Show mempool status\n  \
-            {bin} mempool\n  \
-            {bin} mempool status\n\n  \
-            # Clear all operations\n  \
-            {bin} mempool clear\n\n  \
-            # Export operations as JSONL\n  \
-            {bin} mempool dump\n  \
-            {bin} mempool dump > operations.jsonl\n\n  \
-            # Using alias\n  \
-            {bin} mp status"
+    help_template = crate::clap_help!(
+        examples: "  # Show mempool status\n  \
+                   {bin} mempool\n  \
+                   {bin} mempool status\n\n  \
+                   # Clear all operations\n  \
+                   {bin} mempool clear\n\n  \
+                   # Export operations as JSONL\n  \
+                   {bin} mempool dump\n  \
+                   {bin} mempool dump > operations.jsonl\n\n  \
+                   # Using alias\n  \
+                   {bin} mp status"
+    )
 )]
 pub struct MempoolCommand {
     #[command(subcommand)]

@@ -23,15 +23,16 @@ signatures.
 
 These commands are essential for DID-based applications, identity verification,
 and understanding how DIDs evolve over time through their operation history.",
-    after_help = "Examples:\n  \
-            # Resolve DID to current document\n  \
-            {bin} did resolve did:plc:524tuhdhh3m7li5gycdn6boe\n\n  \
-            # Show DID operation log\n  \
-            {bin} did log did:plc:524tuhdhh3m7li5gycdn6boe\n\n  \
-            # Show complete audit log\n  \
-            {bin} did history did:plc:524tuhdhh3m7li5gycdn6boe\n\n  \
-            # Validate DID chain\n  \
-            {bin} did validate did:plc:524tuhdhh3m7li5gycdn6boe"
+    help_template = crate::clap_help!(
+        examples: "  # Resolve DID to current document\n  \
+                   {bin} did resolve did:plc:524tuhdhh3m7li5gycdn6boe\n\n  \
+                   # Show DID operation log\n  \
+                   {bin} did log did:plc:524tuhdhh3m7li5gycdn6boe\n\n  \
+                   # Show complete audit log\n  \
+                   {bin} did history did:plc:524tuhdhh3m7li5gycdn6boe\n\n  \
+                   # Validate DID chain\n  \
+                   {bin} did validate did:plc:524tuhdhh3m7li5gycdn6boe"
+    )
 )]
 pub struct DidCommand {
     #[command(subcommand)]
@@ -72,15 +73,16 @@ pub enum DIDCommands {
     #[command(
         alias = "doc",
         alias = "document",
-        after_help = "Examples:\n  \
-            # Resolve DID to full document\n  \
-            {bin} did resolve did:plc:524tuhdhh3m7li5gycdn6boe\n\n  \
-            # Query with JMESPath\n  \
-            {bin} did resolve did:plc:524tuhdhh3m7li5gycdn6boe -q 'id'\n  \
-            {bin} did resolve did:plc:524tuhdhh3m7li5gycdn6boe -q 'verificationMethod[0].id'\n  \
-            {bin} did resolve did:plc:524tuhdhh3m7li5gycdn6boe -q 'service[].id'\n\n  \
-            # Force raw JSON output\n  \
-            {bin} did resolve did:plc:524tuhdhh3m7li5gycdn6boe --raw"
+        help_template = crate::clap_help!(
+            examples: "  # Resolve DID to full document\n  \
+                       {bin} did resolve did:plc:524tuhdhh3m7li5gycdn6boe\n\n  \
+                       # Query with JMESPath\n  \
+                       {bin} did resolve did:plc:524tuhdhh3m7li5gycdn6boe -q 'id'\n  \
+                       {bin} did resolve did:plc:524tuhdhh3m7li5gycdn6boe -q 'verificationMethod[0].id'\n  \
+                       {bin} did resolve did:plc:524tuhdhh3m7li5gycdn6boe -q 'service[].id'\n\n  \
+                       # Force raw JSON output\n  \
+                       {bin} did resolve did:plc:524tuhdhh3m7li5gycdn6boe --raw"
+        )
     )]
     Resolve {
         /// DID or handle to resolve

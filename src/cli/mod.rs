@@ -125,3 +125,32 @@ fn main() -> Result<()> {
 
     Ok(())
 }
+
+/// Macro to create clap help templates with examples
+/// This works around the limitation that {bin} doesn't work in after_help
+/// Uses env! macro to get binary name at compile time
+#[macro_export]
+macro_rules! clap_help {
+    (examples: $examples:literal) => {{
+        const BIN: &str = env!("CARGO_PKG_NAME");
+        concat!(
+            "{about-with-newline}\n",
+            "{usage-heading} {usage}\n\n",
+            "{all-args}\n\n",
+            "Examples:\n",
+            $examples
+        ).replace("{bin}", BIN)
+    }};
+
+    (before: $before:literal, examples: $examples:literal) => {{
+        const BIN: &str = env!("CARGO_PKG_NAME");
+        concat!(
+            "{about-with-newline}\n",
+            $before, "\n\n",
+            "{usage-heading} {usage}\n\n",
+            "{all-args}\n\n",
+            "Examples:\n",
+            $examples
+        ).replace("{bin}", BIN)
+    }};
+}
