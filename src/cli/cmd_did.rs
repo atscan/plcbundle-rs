@@ -137,7 +137,7 @@ pub enum DIDCommands {
         ///   - cid: operation CID
         ///   - created_at/created/date/time: creation timestamp
         ///   - nullified: nullified flag
-        #[arg(long, default_value = "bundle,position,status,cid,created_at")]
+        #[arg(long, default_value = "bundle,position,global,status,cid,created_at")]
         format: String,
 
         /// Omit header row
@@ -444,8 +444,8 @@ pub fn cmd_did_resolve(
             result.total_time
         );
 
-        // Calculate global position: (bundle * BUNDLE_SIZE) + position
-        let global_pos = (result.bundle_number as u64 * plcbundle::constants::BUNDLE_SIZE as u64)
+        // Calculate global position: ((bundle - 1) * BUNDLE_SIZE) + position
+        let global_pos = ((result.bundle_number - 1) as u64 * plcbundle::constants::BUNDLE_SIZE as u64)
             + result.position as u64;
         log::info!(
             "Source: bundle {}, position {} (global: {})\n",

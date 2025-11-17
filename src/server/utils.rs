@@ -114,10 +114,11 @@ pub fn parse_operation_pointer(pointer: &str) -> anyhow::Result<(u32, usize)> {
     }
 
     // Convert global position to bundle + position
-    let bundle_num = (global_pos / constants::BUNDLE_SIZE as u64) as u32;
+    // Global positions start from 0, so bundle = (global_pos / BUNDLE_SIZE) + 1
+    let bundle_num = ((global_pos / constants::BUNDLE_SIZE as u64) + 1) as u32;
     let position = (global_pos % constants::BUNDLE_SIZE as u64) as usize;
 
-    Ok((bundle_num.max(1), position))
+    Ok((bundle_num, position))
 }
 
 /// Extract base URL from request headers and URI

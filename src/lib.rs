@@ -48,7 +48,7 @@ pub use manager::{
 pub use mempool::{Mempool, MempoolStats};
 pub use operations::{Operation, OperationFilter, OperationRequest, OperationWithLocation};
 pub use options::{Options, OptionsBuilder, QueryMode};
-pub use processor::{OutputHandler, Processor, QueryEngine, Stats, parse_bundle_range};
+pub use processor::{OutputHandler, Processor, QueryEngine, Stats, parse_bundle_range, parse_operation_range};
 // remote functions are methods on RemoteClient, not standalone functions
 pub use resolver::{
     AuditLogEntry, DIDDocument, DIDState, build_did_state, format_audit_log, resolve_did_document,

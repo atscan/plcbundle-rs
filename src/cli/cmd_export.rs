@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{Args, ValueHint};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
@@ -9,7 +10,9 @@ use std::time::Instant;
 
 use super::progress::ProgressBar;
 use super::utils;
+use plcbundle::constants::BUNDLE_SIZE;
 use plcbundle::format_std_duration_auto;
+use plcbundle::parse_operation_range;
 
 #[derive(Args)]
 #[command(
@@ -40,17 +43,24 @@ for analysis, backup, or migration to other systems.",
                    # Export first 1000 operations\n  \
                    {bin} export --all --count 1000\n\n  \
                    # Export in reverse order\n  \
-                   {bin} export --all --reverse"
+                   {bin} export --all --reverse\n\n  \
+                   # Export specific operations by global position (0-indexed)\n  \
+                   {bin} export --ops 0-999\n  \
+                   {bin} export --ops 3255,553,0-9"
     )
 )]
 pub struct ExportCommand {
     /// Bundle range to export (e.g., "42", "1-100", or "1-10,20-30")
-    #[arg(value_name = "BUNDLES", conflicts_with = "all")]
+    #[arg(value_name = "BUNDLES", conflicts_with_all = ["all", "ops"])]
     pub bundles: Option<String>,
 
     /// Export all bundles
-    #[arg(long)]
+    #[arg(long, conflicts_with = "ops")]
     pub all: bool,
+
+    /// Export specific operations by global position (0-indexed, e.g., "0-999", "3255,553,0-9")
+    #[arg(long, conflicts_with_all = ["all", "bundles"])]
+    pub ops: Option<String>,
 
     /// Output file (default: stdout)
     #[arg(short, long, value_hint = ValueHint::FilePath)]
@@ -66,6 +76,16 @@ pub struct ExportCommand {
 }
 
 
+/// Convert global operation number (0-indexed) to (bundle, position) pair
+/// Bundle is 1-indexed, position is 0-indexed within bundle
+/// Global positions are 0-indexed: 0 = bundle 1 position 0, 1 = bundle 1 position 1, etc.
+fn global_op_to_bundle_position(global_op: u64) -> (u32, usize) {
+    // Global positions are 0-indexed: bundle = (global_pos / BUNDLE_SIZE) + 1
+    let bundle_num = ((global_op / BUNDLE_SIZE as u64) + 1) as u32;
+    let position = (global_op % BUNDLE_SIZE as u64) as usize;
+    (bundle_num, position)
+}
+
 pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Result<()> {
     let output = cmd.output;
     let count = cmd.count;
@@ -75,13 +95,42 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
     let index = manager.get_index();
     let max_bundle = index.last_bundle;
 
+    // Determine what to export: bundles or specific operations
+    let ops_to_export: Option<HashMap<(u32, usize), bool>> = if let Some(ops_str) = cmd.ops {
+        // Calculate max operation number (0-indexed: (max_bundle * BUNDLE_SIZE) - 1)
+        // This is an upper bound; actual last operation may be lower if last bundle isn't full
+        let max_operation = (max_bundle as u64 * BUNDLE_SIZE as u64).saturating_sub(1);
+        let global_ops = parse_operation_range(&ops_str, max_operation)?;
+        
+        // Convert to (bundle, position) pairs and create a lookup map
+        let mut ops_map = HashMap::new();
+        for global_op in global_ops {
+            let (bundle, position) = global_op_to_bundle_position(global_op);
+            ops_map.insert((bundle, position), true);
+        }
+        Some(ops_map)
+    } else {
+        None
+    };
+
     // Determine bundle numbers to process
     let mut bundle_numbers: Vec<u32> = if let Some(bundles_str) = cmd.bundles {
         utils::parse_bundle_spec(Some(bundles_str), max_bundle)?
     } else if cmd.all {
         (1..=max_bundle).collect()
+    } else if ops_to_export.is_some() {
+        // When exporting specific operations, collect unique bundle numbers
+        let mut bundles: Vec<u32> = ops_to_export
+            .as_ref()
+            .unwrap()
+            .keys()
+            .map(|(bundle, _)| *bundle)
+            .collect();
+        bundles.sort_unstable();
+        bundles.dedup();
+        bundles
     } else {
-        anyhow::bail!("Must specify either --bundles or --all");
+        anyhow::bail!("Must specify either --bundles, --all, or --ops");
     };
 
     // Reverse bundle order if requested
@@ -100,10 +149,15 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
         }
     }
 
-    // Display which bundles are being exported (always visible unless quiet)
+    // Display what is being exported (always visible unless quiet)
     if !quiet {
-        let bundle_range_str = format_bundle_range(&bundle_numbers);
-        eprintln!("Exporting bundles: {} ({})", bundle_range_str, bundle_numbers.len());
+        if let Some(ref ops_map) = ops_to_export {
+            let op_count = ops_map.len();
+            eprintln!("Exporting {} operations", utils::format_number(op_count as u64));
+        } else {
+            let bundle_range_str = format_bundle_range(&bundle_numbers);
+            eprintln!("Exporting bundles: {} ({})", bundle_range_str, bundle_numbers.len());
+        }
     }
 
     // Open output with buffering
@@ -131,7 +185,8 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
         .sum();
     
     // Create progress bar tracking bundles processed
-    let pb = if quiet {
+    // Skip progress bar if quiet mode or if only one bundle needs to be loaded
+    let pb = if quiet || bundle_numbers.len() == 1 {
         None
     } else {
         Some(ProgressBar::with_bytes(bundle_numbers.len(), total_uncompressed_size))
@@ -169,23 +224,30 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
         };
         let reader = BufReader::with_capacity(1024 * 1024, decoder);
 
-        // Collect lines from bundle
+        // Collect lines from bundle with their positions
         let mut bundle_lines = Vec::new();
-        for line in reader.lines() {
-            let line = line?;
+        for (pos, line_result) in reader.lines().enumerate() {
+            let line = line_result?;
             if line.is_empty() {
                 continue;
             }
-            bundle_lines.push(line);
+            bundle_lines.push((pos, line));
         }
 
-        // Reverse lines if requested
+        // Reverse lines if requested (preserve position information for filtering)
         if reverse {
             bundle_lines.reverse();
         }
 
-        // Write lines
-        for line in bundle_lines {
+        // Write lines (filtering by operation position if --ops is specified)
+        for (pos, line) in bundle_lines {
+            // Check if this operation should be exported
+            if let Some(ref ops_map) = ops_to_export {
+                if !ops_map.contains_key(&(bundle_num, pos)) {
+                    continue;
+                }
+            }
+
             // Check count limit
             if let Some(limit) = count {
                 if exported_count >= limit {

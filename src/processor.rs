@@ -345,3 +345,65 @@ pub fn parse_bundle_range(spec: &str, max_bundle: u32) -> Result<Vec<u32>> {
     bundles.dedup();
     Ok(bundles)
 }
+
+/// Parse operation range specification (e.g., "0-999", "3255,553,0-9")
+/// Operations are 0-indexed global positions (0 = first operation, bundle 1 position 0)
+pub fn parse_operation_range(spec: &str, max_operation: u64) -> Result<Vec<u64>> {
+    use anyhow::Context;
+    
+    if max_operation == 0 {
+        anyhow::bail!("No operations available");
+    }
+
+    let mut operations = Vec::new();
+    for part in spec.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+
+        if part.contains('-') {
+            let range: Vec<&str> = part.split('-').collect();
+            if range.len() != 2 {
+                anyhow::bail!("Invalid range format: {}", part);
+            }
+            let start_str = range[0].trim();
+            let end_str = range[1].trim();
+
+            let start: u64 = start_str
+                .parse()
+                .with_context(|| format!("Invalid operation number: {}", start_str))?;
+            let end: u64 = end_str
+                .parse()
+                .with_context(|| format!("Invalid operation number: {}", end_str))?;
+
+            if start > end {
+                anyhow::bail!("Invalid range: {} > {} (start must be <= end)", start, end);
+            }
+            if start > max_operation || end > max_operation {
+                anyhow::bail!(
+                    "Invalid range: {}-{} (exceeds maximum operation {})",
+                    start,
+                    end,
+                    max_operation
+                );
+            }
+            operations.extend(start..=end);
+        } else {
+            let num: u64 = part
+                .parse()
+                .with_context(|| format!("Invalid operation number: {}", part))?;
+            if num > max_operation {
+                anyhow::bail!(
+                    "Operation number {} out of range (max: {})",
+                    num,
+                    max_operation
+                );
+            }
+            operations.push(num);
+        }
+    }
+    operations.sort_unstable();
+    operations.dedup();
+    Ok(operations)
+}

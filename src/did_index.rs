@@ -29,7 +29,7 @@ pub struct OpLocation(u32);
 
 impl OpLocation {
     pub fn new(bundle: u16, position: u16, nullified: bool) -> Self {
-        let global_pos = (bundle as u32) * constants::BUNDLE_SIZE as u32 + (position as u32);
+        let global_pos = ((bundle as u32).saturating_sub(1)) * constants::BUNDLE_SIZE as u32 + (position as u32);
         let mut loc = global_pos << 1;
         if nullified {
             loc |= 1;
@@ -42,7 +42,7 @@ impl OpLocation {
     }
 
     pub fn bundle(&self) -> u16 {
-        (self.global_position() / constants::BUNDLE_SIZE as u32) as u16
+        ((self.global_position() / constants::BUNDLE_SIZE as u32) + 1) as u16
     }
 
     pub fn position(&self) -> u16 {

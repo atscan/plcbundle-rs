@@ -529,7 +529,7 @@ impl BundleManager {
         }
 
         ops_with_loc.sort_by_key(|owl| {
-            (owl.bundle as u64) * constants::BUNDLE_SIZE as u64 + owl.position as u64
+            ((owl.bundle - 1) as u64) * constants::BUNDLE_SIZE as u64 + owl.position as u64
         });
 
         Ok((ops_with_loc, load_start.elapsed()))

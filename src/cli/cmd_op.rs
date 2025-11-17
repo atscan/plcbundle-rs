@@ -10,12 +10,12 @@ use std::time::Instant;
     about = "Operation queries and inspection",
     long_about = "Access individual operations within bundles using flexible addressing schemes.
 You can reference operations by bundle number and position (e.g., '42 1337' for
-bundle 42, position 1337), or by global position (e.g., '420000' which represents
+bundle 42, position 1337), or by global position (e.g., '410000' which represents
 bundle 42, position 0).
 
-Global positions are calculated as (bundleNumber × 10,000) + position, making it
-easy to reference operations across the entire repository with a single number.
-For example, 88410345 means bundle 8841, position 345.
+Global positions are 0-indexed and calculated as ((bundleNumber - 1) × 10,000) + position,
+making it easy to reference operations across the entire repository with a single number.
+For example, 0 = bundle 1 position 0, 1 = bundle 1 position 1, 10000 = bundle 2 position 0.
 
 The 'get' subcommand retrieves operations as JSON, with automatic pretty-printing
 and syntax highlighting when outputting to a terminal. The 'show' subcommand
@@ -46,9 +46,9 @@ pub enum OpCommands {
     ///
     /// Supports two input formats:
     ///   1. Bundle number + position: get 42 1337
-    ///   2. Global position: get 420000
+    ///   2. Global position (0-indexed): get 0 (first operation), get 410000 (bundle 42 position 0)
     ///
-    /// Global position = (bundleNumber × 10,000) + position
+    /// Global position (0-indexed) = ((bundleNumber - 1) × 10,000) + position
     ///
     /// By default, pretty-prints with colors when outputting to a terminal.
     /// Use --raw to force raw JSON output (useful for piping).
@@ -56,7 +56,9 @@ pub enum OpCommands {
     #[command(help_template = crate::clap_help!(
         examples: "  # By bundle + position (auto pretty-print in terminal)\n  \
                    {bin} op get 42 1337\n\n  \
-                   # By global position\n  \
+                   # By global position (0-indexed)\n  \
+                   {bin} op get 0\n  \
+                   {bin} op get 410000\n\n  \
                    {bin} op get 88410345\n\n  \
                    # Query with JMESPath\n  \
                    {bin} op get 42 1337 -q 'operation.type'\n  \
@@ -102,7 +104,8 @@ pub enum OpCommands {
     #[command(help_template = crate::clap_help!(
         examples: "  # By bundle + position\n  \
                    {bin} op show 42 1337\n\n  \
-                   # By global position\n  \
+                   # By global position (0-indexed)\n  \
+                   {bin} op show 0\n  \
                    {bin} op show 88410345\n\n  \
                    # Quiet mode (minimal output)\n  \
                    {bin} op show 42 1337 -q"
@@ -149,23 +152,25 @@ pub fn run(cmd: OpCommand, dir: PathBuf, quiet: bool) -> Result<()> {
 }
 
 /// Parse operation position - supports both global position and bundle + position
-/// Mimics Go version: small numbers (< 10000) are treated as bundle 1, position N
+/// Small numbers (< 10000) are treated as bundle 1, position N (0-indexed)
+/// Global positions are 0-indexed: 0 = bundle 1 position 0, 10000 = bundle 2 position 0
 pub fn parse_op_position(bundle: u32, position: Option<usize>) -> (u32, usize) {
     match position {
         Some(pos) => (bundle, pos),
         None => {
             // Single argument: interpret as global or shorthand
             if bundle < constants::BUNDLE_SIZE as u32 {
-                // Small numbers: shorthand for "bundle 1, position N"
+                // Small numbers: shorthand for "bundle 1, position N" (0-indexed)
+                // op get 0 → bundle 1, position 0
                 // op get 1 → bundle 1, position 1
-                // op get 100 → bundle 1, position 100
+                // op get 9999 → bundle 1, position 9999
                 (1, bundle as usize)
             } else {
-                // Large numbers: global position
+                // Large numbers: global position (0-indexed)
                 // op get 10000 → bundle 2, position 0
                 // op get 88410345 → bundle 8842, position 345
                 let global_pos = bundle as u64;
-                let bundle_num = 1 + (global_pos / constants::BUNDLE_SIZE as u64) as u32;
+                let bundle_num = ((global_pos / constants::BUNDLE_SIZE as u64) + 1) as u32;
                 let op_pos = (global_pos % constants::BUNDLE_SIZE as u64) as usize;
                 (bundle_num, op_pos)
             }

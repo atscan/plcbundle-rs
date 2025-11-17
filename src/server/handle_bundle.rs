@@ -126,7 +126,7 @@ pub async fn handle_operation(
             let load_duration = load_start.elapsed();
             let total_duration = total_start.elapsed();
 
-            let global_pos = (bundle_num as u64 * constants::BUNDLE_SIZE as u64) + position as u64;
+            let global_pos = ((bundle_num - 1) as u64 * constants::BUNDLE_SIZE as u64) + position as u64;
 
             let mut headers = HeaderMap::new();
             headers.insert("X-Bundle-Number", HeaderValue::from(bundle_num));
