@@ -145,6 +145,61 @@ println!("  Last bundle: {:06}", bundle_num);
 log::info!("Bundle {:06} processed", bundle_num);
 ```
 
+## Command File Structure
+
+All command files (`src/cli/cmd_*.rs`) must follow a consistent structure:
+
+1. **Imports** - All `use` statements at the top
+2. **Command Definitions** - All `#[derive(Args)]`, `#[derive(Subcommand)]` structs and enums
+3. **Trait Implementations** - Any `impl` blocks for command structs (e.g., `impl HasGlobalFlags`)
+4. **Run Function** - The main `pub fn run()` function
+5. **Helper Functions** - All private helper functions at the end
+
+**Exception**: Helper functions that are referenced in struct definitions (e.g., `value_parser = parse_duration`) must be defined before the struct that uses them.
+
+**Examples:**
+
+**✅ CORRECT - Proper structure:**
+```rust
+use anyhow::Result;
+use clap::Args;
+use plcbundle::BundleManager;
+use std::path::PathBuf;
+
+#[derive(Args)]
+#[command(about = "Example command")]
+pub struct ExampleCommand {
+    // ...
+}
+
+impl HasGlobalFlags for ExampleCommand {
+    // ...
+}
+
+pub fn run(cmd: ExampleCommand, dir: PathBuf) -> Result<()> {
+    // ...
+}
+
+fn helper_function() {
+    // ...
+}
+```
+
+**❌ WRONG - Helper function before command struct:**
+```rust
+use anyhow::Result;
+use clap::Args;
+
+fn helper_function() {
+    // ...
+}
+
+#[derive(Args)]
+pub struct ExampleCommand {
+    // ...
+}
+```
+
 ## Questions?
 
 If you're implementing a feature and need file access:

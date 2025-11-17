@@ -11,6 +11,22 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+fn parse_duration(s: &str) -> Result<Duration, String> {
+    if let Some(s) = s.strip_suffix('s') {
+        s.parse::<u64>()
+            .map(Duration::from_secs)
+            .map_err(|e| e.to_string())
+    } else if let Some(s) = s.strip_suffix('m') {
+        s.parse::<u64>()
+            .map(|m| Duration::from_secs(m * 60))
+            .map_err(|e| e.to_string())
+    } else {
+        s.parse::<u64>()
+            .map(Duration::from_secs)
+            .map_err(|e| e.to_string())
+    }
+}
+
 #[derive(Args)]
 #[command(
     about = "Fetch new bundles from PLC directory",
@@ -65,22 +81,6 @@ pub struct SyncCommand {
 impl HasGlobalFlags for SyncCommand {
     fn verbose(&self) -> bool { false }
     fn quiet(&self) -> bool { false }
-}
-
-fn parse_duration(s: &str) -> Result<Duration, String> {
-    if let Some(s) = s.strip_suffix('s') {
-        s.parse::<u64>()
-            .map(Duration::from_secs)
-            .map_err(|e| e.to_string())
-    } else if let Some(s) = s.strip_suffix('m') {
-        s.parse::<u64>()
-            .map(|m| Duration::from_secs(m * 60))
-            .map_err(|e| e.to_string())
-    } else {
-        s.parse::<u64>()
-            .map(Duration::from_secs)
-            .map_err(|e| e.to_string())
-    }
 }
 
 pub fn run(cmd: SyncCommand, dir: PathBuf, global_quiet: bool, global_verbose: bool) -> Result<()> {

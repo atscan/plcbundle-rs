@@ -19,6 +19,31 @@ use tokio::signal;
 #[cfg(feature = "server")]
 use tokio::task::{JoinHandle, JoinSet};
 
+fn parse_duration(s: &str) -> Result<Duration> {
+    // Simple parser: "60s", "5m", "1h"
+    let s = s.trim();
+    if s.ends_with('s') {
+        let secs: u64 = s[..s.len() - 1]
+            .parse()
+            .context("Invalid duration format")?;
+        Ok(Duration::from_secs(secs))
+    } else if s.ends_with('m') {
+        let mins: u64 = s[..s.len() - 1]
+            .parse()
+            .context("Invalid duration format")?;
+        Ok(Duration::from_secs(mins * 60))
+    } else if s.ends_with('h') {
+        let hours: u64 = s[..s.len() - 1]
+            .parse()
+            .context("Invalid duration format")?;
+        Ok(Duration::from_secs(hours * 3600))
+    } else {
+        // Try parsing as seconds
+        let secs: u64 = s.parse().context("Invalid duration format")?;
+        Ok(Duration::from_secs(secs))
+    }
+}
+
 #[derive(Args)]
 #[command(
     about = "Start HTTP server",
@@ -92,31 +117,6 @@ pub struct ServerCommand {
     #[arg(long, help_heading = "Feature Options", value_hint = ValueHint::Url)]
     pub handle_resolver: Option<String>,
 
-}
-
-fn parse_duration(s: &str) -> Result<Duration> {
-    // Simple parser: "60s", "5m", "1h"
-    let s = s.trim();
-    if s.ends_with('s') {
-        let secs: u64 = s[..s.len() - 1]
-            .parse()
-            .context("Invalid duration format")?;
-        Ok(Duration::from_secs(secs))
-    } else if s.ends_with('m') {
-        let mins: u64 = s[..s.len() - 1]
-            .parse()
-            .context("Invalid duration format")?;
-        Ok(Duration::from_secs(mins * 60))
-    } else if s.ends_with('h') {
-        let hours: u64 = s[..s.len() - 1]
-            .parse()
-            .context("Invalid duration format")?;
-        Ok(Duration::from_secs(hours * 3600))
-    } else {
-        // Try parsing as seconds
-        let secs: u64 = s.parse().context("Invalid duration format")?;
-        Ok(Duration::from_secs(secs))
-    }
 }
 
 pub fn run(cmd: ServerCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {

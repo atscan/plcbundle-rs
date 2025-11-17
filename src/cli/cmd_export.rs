@@ -11,43 +11,6 @@ use super::progress::ProgressBar;
 use super::utils;
 use plcbundle::format_std_duration_auto;
 
-/// Format bundle numbers as a compact range string (e.g., "1-10", "1, 5, 10", "1-5, 10-15")
-fn format_bundle_range(bundles: &[u32]) -> String {
-    if bundles.is_empty() {
-        return String::new();
-    }
-    if bundles.len() == 1 {
-        return bundles[0].to_string();
-    }
-
-    let mut ranges = Vec::new();
-    let mut range_start = bundles[0];
-    let mut range_end = bundles[0];
-
-    for &bundle in bundles.iter().skip(1) {
-        if bundle == range_end + 1 {
-            range_end = bundle;
-        } else {
-            if range_start == range_end {
-                ranges.push(range_start.to_string());
-            } else {
-                ranges.push(format!("{}-{}", range_start, range_end));
-            }
-            range_start = bundle;
-            range_end = bundle;
-        }
-    }
-
-    // Add the last range
-    if range_start == range_end {
-        ranges.push(range_start.to_string());
-    } else {
-        ranges.push(format!("{}-{}", range_start, range_end));
-    }
-
-    ranges.join(", ")
-}
-
 #[derive(Args)]
 #[command(
     about = "Export operations to stdout or file",
@@ -311,4 +274,41 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
     }
 
     Ok(())
+}
+
+/// Format bundle numbers as a compact range string (e.g., "1-10", "1, 5, 10", "1-5, 10-15")
+fn format_bundle_range(bundles: &[u32]) -> String {
+    if bundles.is_empty() {
+        return String::new();
+    }
+    if bundles.len() == 1 {
+        return bundles[0].to_string();
+    }
+
+    let mut ranges = Vec::new();
+    let mut range_start = bundles[0];
+    let mut range_end = bundles[0];
+
+    for &bundle in bundles.iter().skip(1) {
+        if bundle == range_end + 1 {
+            range_end = bundle;
+        } else {
+            if range_start == range_end {
+                ranges.push(range_start.to_string());
+            } else {
+                ranges.push(format!("{}-{}", range_start, range_end));
+            }
+            range_start = bundle;
+            range_end = bundle;
+        }
+    }
+
+    // Add the last range
+    if range_start == range_end {
+        ranges.push(range_start.to_string());
+    } else {
+        ranges.push(format!("{}-{}", range_start, range_end));
+    }
+
+    ranges.join(", ")
 }

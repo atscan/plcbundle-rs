@@ -6,52 +6,6 @@ use plcbundle::{BundleManager, VerifyResult, VerifySpec};
 use std::path::PathBuf;
 use std::time::Instant;
 
-/// Print failed bundles with their error messages
-/// 
-/// # Arguments
-/// * `failed_bundles` - Vector of (bundle_num, errors) tuples
-/// * `threshold` - Maximum number of bundles to list in full before truncating (e.g., 10 or 20)
-fn print_failed_bundles(failed_bundles: &[(u32, Vec<String>)], threshold: usize) {
-    if failed_bundles.is_empty() {
-        return;
-    }
-
-    if failed_bundles.len() <= threshold {
-        eprintln!("\n   ⚠️  Failed bundles:");
-        for (bundle_num, errors) in failed_bundles {
-            eprintln!("      Bundle {}:", bundle_num);
-            if errors.is_empty() {
-                eprintln!("         • Verification failed (no error details)");
-            } else {
-                for err in errors {
-                    eprintln!("         • {}", err);
-                }
-            }
-        }
-    } else {
-        eprintln!(
-            "   ⚠️  Failed bundles: {} (too many to list)",
-            failed_bundles.len()
-        );
-        // Show first few with details
-        eprintln!("\n   First few failures:");
-        for (bundle_num, errors) in failed_bundles.iter().take(5) {
-            eprintln!("      Bundle {}:", bundle_num);
-            if errors.is_empty() {
-                eprintln!("         • Verification failed (no error details)");
-            } else {
-                for err in errors.iter().take(3) {
-                    eprintln!("         • {}", err);
-                }
-                if errors.len() > 3 {
-                    eprintln!("         • ... and {} more error(s)", errors.len() - 3);
-                }
-            }
-        }
-        eprintln!("      ... and {} more failed bundles", failed_bundles.len() - 5);
-    }
-}
-
 #[derive(Args)]
 #[command(
     about = "Verify bundle integrity and chain",
@@ -808,4 +762,50 @@ fn verify_range_parallel(
     }
     eprintln!("Note: Parallel verification not yet fully implemented, using sequential");
     verify_range_sequential(manager, start, end, total, verbose, full, fast)
+}
+
+/// Print failed bundles with their error messages
+/// 
+/// # Arguments
+/// * `failed_bundles` - Vector of (bundle_num, errors) tuples
+/// * `threshold` - Maximum number of bundles to list in full before truncating (e.g., 10 or 20)
+fn print_failed_bundles(failed_bundles: &[(u32, Vec<String>)], threshold: usize) {
+    if failed_bundles.is_empty() {
+        return;
+    }
+
+    if failed_bundles.len() <= threshold {
+        eprintln!("\n   ⚠️  Failed bundles:");
+        for (bundle_num, errors) in failed_bundles {
+            eprintln!("      Bundle {}:", bundle_num);
+            if errors.is_empty() {
+                eprintln!("         • Verification failed (no error details)");
+            } else {
+                for err in errors {
+                    eprintln!("         • {}", err);
+                }
+            }
+        }
+    } else {
+        eprintln!(
+            "   ⚠️  Failed bundles: {} (too many to list)",
+            failed_bundles.len()
+        );
+        // Show first few with details
+        eprintln!("\n   First few failures:");
+        for (bundle_num, errors) in failed_bundles.iter().take(5) {
+            eprintln!("      Bundle {}:", bundle_num);
+            if errors.is_empty() {
+                eprintln!("         • Verification failed (no error details)");
+            } else {
+                for err in errors.iter().take(3) {
+                    eprintln!("         • {}", err);
+                }
+                if errors.len() > 3 {
+                    eprintln!("         • ... and {} more error(s)", errors.len() - 3);
+                }
+            }
+        }
+        eprintln!("      ... and {} more failed bundles", failed_bundles.len() - 5);
+    }
 }
