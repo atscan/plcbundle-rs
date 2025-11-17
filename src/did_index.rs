@@ -21,16 +21,21 @@ const DIDINDEX_MAGIC: &[u8; 4] = b"PLCD";
 const DIDINDEX_VERSION: u32 = 4;
 
 // ============================================================================
-// OpLocation - Packed 32-bit location with nullified flag
+// OpLocation - Packed 32-bit global position with nullified flag
+// 
+// Storage format:
+//   - Bits 31-1: Global position (0-indexed across all bundles)
+//   - Bit 0: Nullified flag (1 if nullified, 0 otherwise)
+// 
+// Global position = ((bundle - 1) * BUNDLE_SIZE) + position
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OpLocation(u32);
 
 impl OpLocation {
-    pub fn new(bundle: u16, position: u16, nullified: bool) -> Self {
-        let global_pos = ((bundle as u32).saturating_sub(1)) * constants::BUNDLE_SIZE as u32 + (position as u32);
-        let mut loc = global_pos << 1;
+    pub fn new(global_position: u32, nullified: bool) -> Self {
+        let mut loc = global_position << 1;
         if nullified {
             loc |= 1;
         }
@@ -769,7 +774,8 @@ impl Manager {
                         let identifier = &did[DID_PREFIX.len()..DID_PREFIX.len() + DID_IDENTIFIER_LEN];
                         let identifier = identifier.to_string();
                         
-                        let loc = OpLocation::new(bundle_num as u16, position, nullified);
+                        let global_pos = ((bundle_num as u32).saturating_sub(1)) * constants::BUNDLE_SIZE as u32 + (position as u32);
+                        let loc = OpLocation::new(global_pos, nullified);
 
                         shard_entries
                             .entry(shard_num)
@@ -1248,7 +1254,8 @@ impl Manager {
 
             valid_dids += 1;
             let shard_num = self.calculate_shard(&identifier);
-            let loc = OpLocation::new(bundle_num as u16, position as u16, *nullified);
+            let global_pos = ((bundle_num as u32).saturating_sub(1)) * constants::BUNDLE_SIZE as u32 + (position as u32);
+            let loc = OpLocation::new(global_pos, *nullified);
 
             shard_ops
                 .entry(shard_num)

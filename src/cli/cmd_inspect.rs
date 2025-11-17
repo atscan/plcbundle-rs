@@ -413,7 +413,7 @@ fn analyze_operations(operations: &[Operation], cmd: &InspectCommand) -> Result<
 
                 // Extract PDS endpoints
                 if let Some(pds_val) = op_val.get("services").and_then(|v| v.get("atproto_pds")) {
-                    if let Some(pds) = pds_val.as_object() {
+                    if let Some(_pds) = pds_val.as_object() {
                         if let Some(endpoint) = pds_val.get("endpoint").and_then(|v| v.as_str()) {
                             // Normalize endpoint
                             let endpoint = endpoint

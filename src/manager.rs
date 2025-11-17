@@ -11,7 +11,6 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
-use std::fs::File;
 
 /// Result of a sync_next_bundle operation
 #[derive(Debug, Clone)]

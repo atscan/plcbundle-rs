@@ -1205,6 +1205,7 @@ fn get_raw_shard_data_json(dir: &PathBuf, shard_num: u8) -> Result<serde_json::V
             locations.push(json!({
                 "bundle": loc.bundle(),
                 "position": loc.position(),
+                "global_position": loc.global_position(),
                 "nullified": loc.nullified()
             }));
             current_offset += 4;
@@ -1308,6 +1309,7 @@ fn get_raw_segment_data_json(dir: &PathBuf, shard_num: u8, file_name: &str) -> R
             locations.push(json!({
                 "bundle": loc.bundle(),
                 "position": loc.position(),
+                "global_position": loc.global_position(),
                 "nullified": loc.nullified()
             }));
             current_offset += 4;
@@ -1427,7 +1429,7 @@ fn display_raw_shard_data(dir: &PathBuf, shard_num: u8) -> Result<()> {
                 if idx > 0 {
                     print!(", ");
                 }
-                print!("{}:{}", loc.bundle(), loc.position());
+                print!("{}", loc.global_position());
                 if loc.nullified() {
                     print!(" (nullified)");
                 }
@@ -1541,7 +1543,7 @@ fn display_raw_segment_data(dir: &PathBuf, shard_num: u8, file_name: &str) -> Re
                 if idx > 0 {
                     print!(", ");
                 }
-                print!("{}:{}", loc.bundle(), loc.position());
+                print!("{}", loc.global_position());
                 if loc.nullified() {
                     print!(" (nullified)");
                 }
@@ -1693,7 +1695,7 @@ fn cmd_index_debug_did_lookup(dir: PathBuf, input: String, json: bool) -> Result
             current_line.push_str(", ");
         }
         
-        let mut loc_str = format!("{}:{}", loc.bundle(), loc.position());
+        let mut loc_str = format!("{}", loc.global_position());
         if loc.nullified() {
             loc_str.push_str(" (nullified)");
         }
