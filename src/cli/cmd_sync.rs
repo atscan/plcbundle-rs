@@ -6,6 +6,7 @@ use plcbundle::{
     constants,
     plc_client::PLCClient,
     sync::{CliLogger, ServerLogger, SyncConfig, SyncManager},
+    BundleRuntime,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -91,7 +92,6 @@ pub fn run(cmd: SyncCommand, dir: PathBuf, global_quiet: bool, global_verbose: b
             if cmd.continuous {
                 println!("Mode: continuous (interval: {:?})", cmd.interval);
             }
-            println!();
         }
 
         let client = PLCClient::new(&cmd.plc)?;
@@ -110,21 +110,40 @@ pub fn run(cmd: SyncCommand, dir: PathBuf, global_quiet: bool, global_verbose: b
         let quiet = global_quiet;
 
         if cmd.continuous {
-            // For continuous mode, use run_continuous() with ServerLogger to enable verbose toggle
+            // For continuous mode, use run_continuous() with ServerLogger and BundleRuntime for graceful shutdown
+            let runtime = BundleRuntime::new();
+            let shutdown_signal = runtime.shutdown_signal();
+            let shutdown_sender = runtime.shutdown_sender();
+
             let config = SyncConfig {
                 plc_url: cmd.plc.clone(),
                 continuous: true,
                 interval: cmd.interval,
                 max_bundles: 0,
                 verbose: global_verbose,
-                shutdown_rx: None,
-                shutdown_tx: None,
+                shutdown_rx: Some(shutdown_signal),
+                shutdown_tx: Some(shutdown_sender),
             };
 
             let logger = ServerLogger::new(global_verbose, cmd.interval);
             let sync_manager = SyncManager::new(manager, client, config).with_logger(logger);
 
-            sync_manager.run_continuous().await?;
+            // Run sync with graceful shutdown handling
+            tokio::select! {
+                result = sync_manager.run_continuous() => {
+                    if let Err(e) = result {
+                        eprintln!("[Sync] Sync error: {}", e);
+                        runtime.trigger_fatal_shutdown();
+                        return Err(e);
+                    }
+                }
+                _ = runtime.create_shutdown_future() => {
+                    if !global_quiet {
+                        eprintln!("\n⚠️  Shutdown signal received, stopping sync...");
+                    }
+                }
+            }
+
             Ok(())
         } else {
             // For one-time sync, use run_once() with logger
@@ -140,9 +159,9 @@ pub fn run(cmd: SyncCommand, dir: PathBuf, global_quiet: bool, global_verbose: b
 
             if !quiet {
                 if synced == 0 {
-                    eprintln!("\n✓ Already up to date");
+                    eprintln!("✓ Already up to date");
                 } else {
-                    eprintln!("\n✓ Sync complete: {} bundle(s) fetched", synced);
+                    eprintln!("✓ Sync complete: {} bundle(s) fetched", synced);
                 }
             }
 

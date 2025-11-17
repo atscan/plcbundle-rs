@@ -13,11 +13,11 @@ use plcbundle::BundleManager;
 #[cfg(feature = "server")]
 use plcbundle::server::{Server, ServerConfig};
 #[cfg(feature = "server")]
+use plcbundle::BundleRuntime;
+#[cfg(feature = "server")]
 use std::sync::Arc;
 #[cfg(feature = "server")]
-use tokio::signal;
-#[cfg(feature = "server")]
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::task::JoinSet;
 
 fn parse_duration(s: &str) -> Result<Duration> {
     // Simple parser: "60s", "5m", "1h"
@@ -145,14 +145,15 @@ fn run_server(cmd: ServerCommand, dir: PathBuf, global_verbose: bool) -> Result<
 async fn run_server_async(cmd: ServerCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
     use std::net::SocketAddr;
 
-    // Initialize manager with handle resolver
-    // Always use default resolver URL if not explicitly provided (DID endpoints always available)
+    // Initialize manager with handle resolver (external service for handle->DID conversion)
+    // Always use default handle resolver URL if not explicitly provided
+    // Note: DID resolver (in-app) is always available when --resolver is enabled
     use plcbundle::constants;
 
     let handle_resolver_url = if cmd.handle_resolver.is_none() {
         if global_verbose {
             log::debug!(
-                "[Resolver] Using default handle resolver: {}",
+                "[HandleResolver] Using default handle resolver: {}",
                 constants::DEFAULT_HANDLE_RESOLVER_URL
             );
         }
@@ -160,7 +161,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf, global_verbose: bool
     } else {
         if global_verbose {
             log::debug!(
-                "[Resolver] Using custom handle resolver: {}",
+                "[HandleResolver] Using custom handle resolver: {}",
                 cmd.handle_resolver.as_ref().unwrap()
             );
         }
@@ -187,28 +188,22 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf, global_verbose: bool
         ))?
     };
 
-    // Print ASCII art banner after repository validation succeeds
-    eprint!(
-        "{}\n",
-        plcbundle::server::get_ascii_art_banner(env!("CARGO_PKG_VERSION"))
-    );
-
     // Set verbose mode on manager
     let manager = manager.with_verbose(global_verbose);
 
-    // Log handle resolver configuration
+    // Log handle resolver configuration (external service for handle->DID resolution)
     if global_verbose {
         if let Some(url) = manager.get_handle_resolver_base_url() {
-            log::debug!("[Resolver] Handle resolver configured: {}", url);
+            log::debug!("[HandleResolver] External handle resolver configured: {}", url);
         } else {
-            log::debug!("[Resolver] Handle resolver not configured");
+            log::debug!("[HandleResolver] External handle resolver not configured");
         }
     }
 
-    // Build/verify DID index if resolver enabled
+    // Build/verify DID index if DID resolver enabled (in-app resolver for DID->document resolution)
     if cmd.resolver {
         if global_verbose {
-            log::debug!("[Resolver] Checking DID index status...");
+            log::debug!("[DIDResolver] Checking DID index status...");
         }
 
         let did_index_stats = manager.get_did_index_stats();
@@ -222,7 +217,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf, global_verbose: bool
             .unwrap_or(0);
         if global_verbose {
             log::debug!(
-                "[Resolver] DID index stats: total_dids={}, total_entries={}",
+                "[DIDResolver] DID index stats: total_dids={}, total_entries={}",
                 total_dids,
                 total_entries
             );
@@ -230,12 +225,12 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf, global_verbose: bool
 
         if total_dids == 0 {
             if global_verbose {
-                log::debug!("[Resolver] DID index is empty or missing");
+                log::debug!("[DIDResolver] DID index is empty or missing");
             }
 
             if global_verbose {
                 log::debug!(
-                    "[Resolver] Last bundle number: {}",
+                    "[DIDResolver] Last bundle number: {}",
                     manager.get_last_bundle()
                 );
             }
@@ -248,7 +243,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf, global_verbose: bool
                     plcbundle::constants::BINARY_NAME
                 );
                 if global_verbose {
-                    log::debug!("[Resolver] Skipping index build - no bundles available");
+                    log::debug!("[DIDResolver] Skipping index build - no bundles available");
                 }
             } else {
                 let last_bundle = manager.get_last_bundle();
@@ -257,7 +252,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf, global_verbose: bool
 
                 if global_verbose {
                     log::debug!(
-                        "[Resolver] Starting index rebuild for {} bundles",
+                        "[DIDResolver] Starting index rebuild for {} bundles",
                         last_bundle
                     );
                 }
@@ -278,7 +273,7 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf, global_verbose: bool
                     let pb = progress_clone.lock().unwrap();
                     pb.set_with_bytes(current as usize, bytes_processed);
                     if verbose && current % 100 == 0 {
-                        log::debug!("[Resolver] Index progress: {}/{} bundles", current, _total);
+                        log::debug!("[DIDResolver] Index progress: {}/{} bundles", current, _total);
                     }
                 }))?;
                 progress.lock().unwrap().finish();
@@ -298,9 +293,9 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf, global_verbose: bool
                 eprintln!("  Total DIDs: {}\n", final_total_dids);
 
                 if global_verbose {
-                    log::debug!("[Resolver] Index build completed in {:?}", elapsed);
+                    log::debug!("[DIDResolver] Index build completed in {:?}", elapsed);
                     log::debug!(
-                        "[Resolver] Final stats: total_dids={}, total_entries={}",
+                        "[DIDResolver] Final stats: total_dids={}, total_entries={}",
                         final_total_dids,
                         final_total_entries
                     );
@@ -309,14 +304,57 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf, global_verbose: bool
         } else {
             if global_verbose {
                 log::debug!(
-                    "[Resolver] DID index already exists with {} DIDs",
+                    "[DIDResolver] DID index already exists with {} DIDs",
                     total_dids
                 );
             }
         }
     } else {
         if global_verbose {
-            log::debug!("[Resolver] Resolver disabled, skipping DID index check");
+            log::debug!("[DIDResolver] DID resolver disabled, skipping DID index check");
+        }
+    }
+
+    // Test handle resolver on startup if resolver is enabled
+    // This performs an actual handle resolution to verify the external handle resolver works correctly
+    if cmd.resolver {
+        if let Some(handle_resolver) = manager.get_handle_resolver() {
+            if global_verbose {
+                log::debug!("[HandleResolver] Testing external handle resolver with handle resolution...");
+            }
+            eprintln!("Testing handle resolver...");
+            
+            // Use a well-known handle that should always resolve
+            let test_handle = "bsky.app";
+            let start = std::time::Instant::now();
+            match handle_resolver.resolve_handle(test_handle).await {
+                Ok(did) => {
+                    let duration = start.elapsed();
+                    eprintln!("✓ Handle resolver test successful ({:.3}s)", duration.as_secs_f64());
+                    if global_verbose {
+                        log::debug!(
+                            "[HandleResolver] Test resolution of '{}' -> '{}' successful in {:.3}s",
+                            test_handle,
+                            did,
+                            duration.as_secs_f64()
+                        );
+                    }
+                }
+                Err(e) => {
+                    let duration = start.elapsed();
+                    eprintln!("⚠️  Handle resolver test failed ({:.3}s): {}", duration.as_secs_f64(), e);
+                    if global_verbose {
+                        log::warn!(
+                            "[HandleResolver] Test resolution of '{}' failed after {:.3}s: {}",
+                            test_handle,
+                            duration.as_secs_f64(),
+                            e
+                        );
+                    }
+                    eprintln!("    Handle resolution endpoints may not work correctly.");
+                }
+            }
+            eprintln!();
         }
     }
 
@@ -324,9 +362,6 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf, global_verbose: bool
 
     let addr = format!("{}:{}", cmd.host, cmd.port);
     let socket_addr: SocketAddr = addr.parse().context("Invalid address format")?;
-
-    // Display server info
-    display_server_info(&manager, &addr, &cmd);
 
     // Create server config
     let config = ServerConfig {
@@ -341,20 +376,10 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf, global_verbose: bool
     let server = Server::new(Arc::clone(&manager), config);
     let app = server.router();
 
-    // Create shutdown notification channel for immediate cancellation
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let mut background_tasks: Vec<BackgroundTaskHandle> = Vec::new();
-
-    // Setup immediate shutdown signal
-    let shutdown_tx_clone = shutdown_tx.clone();
-    let shutdown_signal = async move {
-        signal::ctrl_c()
-            .await
-            .expect("Failed to install signal handler");
-        eprintln!("\n⚠️  Shutdown signal received...");
-        // Notify all tasks to stop immediately
-        let _ = shutdown_tx_clone.send(true);
-    };
+    // Create shutdown coordinator
+    let server_runtime = BundleRuntime::new();
+    let mut background_tasks = JoinSet::new();
+    let mut resolver_tasks = JoinSet::new();
 
     // Start sync loop if enabled
     if cmd.sync {
@@ -363,10 +388,10 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf, global_verbose: bool
         let interval = cmd.interval;
         let max_bundles = cmd.max_bundles;
         let verbose = global_verbose;
-        let shutdown_rx_sync = shutdown_rx.clone();
-        let shutdown_tx_sync = shutdown_tx.clone();
+        let shutdown_signal = server_runtime.shutdown_signal();
+        let sync_runtime = server_runtime.clone();
 
-        let sync_handle = tokio::spawn(async move {
+        background_tasks.spawn(async move {
             use plcbundle::plc_client::PLCClient;
             use plcbundle::sync::{SyncConfig, SyncManager};
 
@@ -385,8 +410,8 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf, global_verbose: bool
                 interval,
                 max_bundles: max_bundles as usize,
                 verbose,
-                shutdown_rx: Some(shutdown_rx_sync),
-                shutdown_tx: Some(shutdown_tx_sync),
+                shutdown_rx: Some(shutdown_signal),
+                shutdown_tx: Some(sync_runtime.shutdown_sender()),
             };
 
             use plcbundle::sync::ServerLogger;
@@ -395,51 +420,87 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf, global_verbose: bool
 
             if let Err(e) = sync_manager.run_continuous().await {
                 eprintln!("[Sync] Sync loop error: {}", e);
+                // Trigger fatal shutdown on sync errors
+                sync_runtime.trigger_fatal_shutdown();
             }
-        });
-        background_tasks.push(BackgroundTaskHandle {
-            name: "sync loop",
-            handle: sync_handle,
-            immediate_abort: false,
         });
     }
 
     // Start handle resolver keep-alive ping task if resolver is enabled
+    // Handle resolver tasks are tracked separately so they can be aborted immediately on shutdown
     if cmd.resolver {
-        if let Some(resolver) = manager.get_handle_resolver() {
+        if let Some(handle_resolver) = manager.get_handle_resolver() {
             let verbose = global_verbose;
-            let shutdown_rx_resolver = shutdown_rx.clone();
-            let resolver_handle = tokio::spawn(async move {
-                run_resolver_ping_loop(resolver, verbose, shutdown_rx_resolver).await;
-            });
-            background_tasks.push(BackgroundTaskHandle {
-                name: "resolver keep-alive",
-                handle: resolver_handle,
-                immediate_abort: true,
+            let shutdown_signal = server_runtime.shutdown_signal();
+            resolver_tasks.spawn(async move {
+                run_resolver_ping_loop(handle_resolver, verbose, shutdown_signal).await;
             });
         }
     }
-
-    eprintln!("\nPress Ctrl+C to stop\n");
 
     // Run server with immediate shutdown
     let listener = tokio::net::TcpListener::bind(socket_addr)
         .await
         .context("Failed to bind to address")?;
 
-    // Run the server - the shutdown_signal future will complete when Ctrl+C is pressed
+    // Display server info with ASCII art banner after successful bind
+    display_server_info(&manager, &addr, &cmd);
+    eprintln!("\nPress Ctrl+C to stop\n");
+
+    // Run the server - the shutdown future will complete when Ctrl+C is pressed
+    // or when a background task triggers shutdown
     // This triggers graceful shutdown, which stops accepting new connections
     // and waits for existing connections to finish (or timeout after 10 seconds)
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal)
+        .with_graceful_shutdown(server_runtime.create_shutdown_future())
         .await
         .context("Server error")?;
 
     // Ensure every background task sees the shutdown flag, even on non-signal exits
-    let _ = shutdown_tx.send(true);
-    wait_for_background_tasks(background_tasks).await;
+    server_runtime.trigger_shutdown();
 
-    eprintln!("Server stopped");
+    // Always abort resolver tasks immediately - they're just keep-alive pings
+    if !resolver_tasks.is_empty() {
+        resolver_tasks.abort_all();
+        while let Some(result) = resolver_tasks.join_next().await {
+            if let Err(e) = result {
+                if e.is_cancelled() {
+                    // Task was aborted, which is expected
+                } else {
+                    eprintln!("⚠️  Resolver task error: {}", e);
+                }
+            }
+        }
+    }
+
+    // If shutdown was triggered by a fatal error, abort all tasks immediately
+    // Otherwise, wait for them to finish gracefully
+    if server_runtime.is_fatal_shutdown() {
+        eprintln!("\n⚠️  Fatal error detected - aborting background tasks...");
+        background_tasks.abort_all();
+        // Wait briefly for aborted tasks to finish
+        while let Some(result) = background_tasks.join_next().await {
+            if let Err(e) = result {
+                if e.is_cancelled() {
+                    // Task was aborted, which is expected
+                } else {
+                    eprintln!("⚠️  Background task error: {}", e);
+                }
+            }
+        }
+    } else {
+        // Normal shutdown - wait for tasks to finish gracefully
+        if !background_tasks.is_empty() {
+            eprintln!("\n⏳ Waiting for background tasks to finish...");
+            while let Some(result) = background_tasks.join_next().await {
+                if let Err(e) = result {
+                    eprintln!("⚠️  Background task error: {}", e);
+                }
+            }
+        }
+    }
+
+    eprintln!("✅ Server stopped");
     Ok(())
 }
 
@@ -456,15 +517,15 @@ async fn run_resolver_ping_loop(
 
     if verbose {
         log::debug!(
-            "[Resolver] Starting keep-alive ping loop (interval: {:?})",
+            "[HandleResolver] Starting keep-alive ping loop (interval: {:?})",
             ping_interval
         );
-        log::debug!("[Resolver] Resolver URL: {}", resolver.get_base_url());
+        log::debug!("[HandleResolver] Handle resolver URL: {}", resolver.get_base_url());
     }
 
     // Initial delay before first ping
     if verbose {
-        log::debug!("[Resolver] Waiting 30s before first ping...");
+        log::debug!("[HandleResolver] Waiting 30s before first ping...");
     }
     sleep(Duration::from_secs(30)).await;
 
@@ -476,7 +537,7 @@ async fn run_resolver_ping_loop(
         // Check for shutdown
         if *shutdown_rx.borrow() {
             if verbose {
-                log::debug!("[Resolver] Shutdown requested, stopping ping loop");
+                log::debug!("[HandleResolver] Shutdown requested, stopping ping loop");
             }
             break;
         }
@@ -486,7 +547,7 @@ async fn run_resolver_ping_loop(
 
         if verbose {
             log::debug!(
-                "[Resolver] Ping #{}: sending keep-alive request...",
+                "[HandleResolver] Ping #{}: sending keep-alive request...",
                 ping_count
             );
         }
@@ -497,7 +558,7 @@ async fn run_resolver_ping_loop(
                 let duration = start.elapsed();
                 if verbose {
                     log::info!(
-                        "[Resolver] Ping #{} successful in {:.3}s (success: {}/{}, failures: {})",
+                        "[HandleResolver] Ping #{} successful in {:.3}s (success: {}/{}, failures: {})",
                         ping_count,
                         duration.as_secs_f64(),
                         success_count,
@@ -511,7 +572,7 @@ async fn run_resolver_ping_loop(
                 let duration = start.elapsed();
                 if verbose {
                     log::warn!(
-                        "[Resolver] Ping #{} failed after {:.3}s: {} (success: {}/{}, failures: {})",
+                        "[HandleResolver] Ping #{} failed after {:.3}s: {} (success: {}/{}, failures: {})",
                         ping_count,
                         duration.as_secs_f64(),
                         e,
@@ -525,7 +586,7 @@ async fn run_resolver_ping_loop(
         }
 
         if verbose {
-            log::debug!("[Resolver] Next ping in {:?}...", ping_interval);
+            log::debug!("[HandleResolver] Next ping in {:?}...", ping_interval);
         }
 
         // Use select to allow cancellation during sleep
@@ -540,117 +601,15 @@ async fn run_resolver_ping_loop(
     }
 }
 
-#[cfg(feature = "server")]
-struct BackgroundTaskHandle {
-    name: &'static str,
-    handle: JoinHandle<()>,
-    immediate_abort: bool,
-}
-
-#[cfg(feature = "server")]
-async fn wait_for_background_tasks(tasks: Vec<BackgroundTaskHandle>) {
-    if tasks.is_empty() {
-        return;
-    }
-
-    let mut immediate_tasks = Vec::new();
-    let mut graceful_tasks = Vec::new();
-
-    for task in tasks {
-        if task.immediate_abort {
-            immediate_tasks.push(task);
-        } else {
-            graceful_tasks.push(task);
-        }
-    }
-
-    if !immediate_tasks.is_empty() {
-        eprintln!();
-        eprintln!(
-            "Stopping {} immediate background task(s)...",
-            immediate_tasks.len()
-        );
-        for task in immediate_tasks {
-            let BackgroundTaskHandle { name, handle, .. } = task;
-            handle.abort();
-            match handle.await {
-                Ok(()) => eprintln!("✗ {} aborted", name),
-                Err(e) if e.is_cancelled() => eprintln!("✗ {} aborted", name),
-                Err(e) => eprintln!("⚠️  {} abort error: {}", name, e),
-            }
-        }
-    }
-
-    if graceful_tasks.is_empty() {
-        return;
-    }
-
-    let total = graceful_tasks.len();
-    let task_names: Vec<&'static str> = graceful_tasks.iter().map(|t| t.name).collect();
-
-    eprintln!();
-    eprintln!("Waiting for {} background task(s) to finish...", total);
-    eprintln!("Press Ctrl+C again to force-stop remaining tasks.");
-    for name in &task_names {
-        eprintln!("  • {}", name);
-    }
-
-    let mut join_set = JoinSet::new();
-    for task in graceful_tasks {
-        join_set.spawn(async move {
-            let name = task.name;
-            let result = task.handle.await;
-            (name, result)
-        });
-    }
-
-    let mut remaining = total;
-    let force_signal = signal::ctrl_c();
-    tokio::pin!(force_signal);
-
-    while remaining > 0 {
-        tokio::select! {
-            Some(join_result) = join_set.join_next() => {
-                remaining -= 1;
-                match join_result {
-                    Ok((name, Ok(()))) => eprintln!("✓ {} stopped", name),
-                    Ok((name, Err(e))) if e.is_cancelled() => eprintln!("✓ {} aborted", name),
-                    Ok((name, Err(e))) => eprintln!("⚠️  {} ended with error: {}", name, e),
-                    Err(e) => eprintln!("⚠️  Background task join error: {}", e),
-                }
-            }
-            res = &mut force_signal => {
-                match res {
-                    Ok(()) => {
-                        eprintln!("Force shutdown requested. Aborting remaining background tasks...");
-                    }
-                    Err(err) => {
-                        eprintln!("⚠️  Failed to listen for Ctrl+C for force shutdown: {}", err);
-                        continue;
-                    }
-                }
-
-                join_set.abort_all();
-                while let Some(join_result) = join_set.join_next().await {
-                    match join_result {
-                        Ok((name, _)) => eprintln!("✗ {} aborted", name),
-                        Err(e) => eprintln!("⚠️  Background task join error: {}", e),
-                    }
-                }
-                return;
-            }
-        }
-    }
-
-    eprintln!("All background tasks stopped.");
-}
 
 #[cfg(feature = "server")]
 fn display_server_info(manager: &BundleManager, addr: &str, cmd: &ServerCommand) {
-    eprintln!(
-        "Starting {} HTTP server...",
-        plcbundle::constants::BINARY_NAME
+    // Print ASCII art banner
+    eprint!(
+        "{}\n",
+        plcbundle::server::get_ascii_art_banner(env!("CARGO_PKG_VERSION"))
     );
+    eprintln!("{} HTTP server started", plcbundle::constants::BINARY_NAME);
     eprintln!(
         "  Directory: {}",
         utils::display_path(manager.directory()).display()
@@ -676,12 +635,16 @@ fn display_server_info(manager: &BundleManager, addr: &str, cmd: &ServerCommand)
     }
 
     if cmd.resolver {
-        eprintln!("  Resolver: ENABLED (/:did endpoints)");
+        eprintln!("  DID Resolver: ENABLED (/:did endpoints)");
         if manager.get_handle_resolver_base_url().is_some() {
+            eprintln!("  Handle Resolver: ENABLED (handle->DID conversion)");
             eprintln!("    Keep-alive ping: every 2 minutes");
+        } else {
+            eprintln!("  Handle Resolver: disabled (handle->DID conversion unavailable)");
         }
     } else {
-        eprintln!("  Resolver: disabled");
+        eprintln!("  DID Resolver: disabled");
+        eprintln!("  Handle Resolver: disabled");
     }
 
     let index = manager.get_index();

@@ -288,10 +288,12 @@ impl BundleManager {
     /// Get a single operation as parsed struct
     ///
     /// This method retrieves the raw JSON and parses it into an Operation struct.
+    /// Uses sonic_rs for parsing (not serde) to avoid compatibility issues.
     /// Use `get_operation_raw()` if you only need the JSON.
     pub fn get_operation(&self, bundle_num: u32, position: usize) -> Result<Operation> {
         let json = self.get_operation_raw(bundle_num, position)?;
-        let op: Operation = sonic_rs::from_str(&json)?;
+        let op = Operation::from_json(&json)
+            .with_context(|| format!("Failed to parse operation JSON (bundle {}, position {})", bundle_num, position))?;
         Ok(op)
     }
 
@@ -2962,8 +2964,8 @@ impl BundleManager {
             // This is required by the V1 specification (docs/specification.md § 4.2)
             // to ensure content_hash remains reproducible during migration.
             // Without this, re-serialization would change the hash.
-            let mut op: Operation = sonic_rs::from_str(&line)?;
-            op.raw_json = Some(line);
+            // Use Operation::from_json (sonic_rs) instead of serde deserialization
+            let op = Operation::from_json(&line)?;
             operations.push(op);
         }
 

@@ -16,6 +16,7 @@ pub mod plc_client;
 pub mod processor;
 pub mod remote;
 pub mod resolver;
+pub mod runtime;
 #[cfg(feature = "server")]
 pub mod server;
 pub mod sync;
@@ -57,3 +58,4 @@ pub use plc_client::PLCClient;
 pub use sync::{
     CliLogger, ServerLogger, SyncConfig, SyncEvent, SyncLogger, SyncManager, SyncStats,
 };
+pub use runtime::BundleRuntime;

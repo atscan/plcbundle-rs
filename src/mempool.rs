@@ -428,8 +428,8 @@ impl Mempool {
             // This is required by the V1 specification (docs/specification.md § 4.2)
             // to ensure content_hash remains reproducible.
             // Without this, re-serialization would change the hash.
-            let mut op: Operation = sonic_rs::from_str(&line)?;
-            op.raw_json = Some(line);
+            // Use Operation::from_json (sonic_rs) instead of serde deserialization
+            let op = Operation::from_json(&line)?;
             self.operations.push(op);
         }
 
