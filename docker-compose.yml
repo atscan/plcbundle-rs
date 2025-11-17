@@ -1,0 +1,39 @@
+networks:
+  plcbundle:
+
+services:
+  plcbundle:
+    build: .
+    image: atscan/plcbundle:latest
+    container_name: plcbundle
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+    volumes:
+      - ${DATA_DIR:-./data}:/data
+    environment:
+      - TZ=${TZ:-UTC}
+    command: [
+      "server",
+      "-C","/data",
+      "--host","0.0.0.0",
+      "--port","8080",
+      "--sync",
+      "--websocket",
+      "--resolver"
+    ]
+    networks:
+      - plcbundle
+
+  watchtower:
+    container_name: watchtower
+    image: containrrr/watchtower:latest
+    network_mode: host
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+    restart: unless-stopped
+    environment:
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_SCHEDULE: "@midnight"

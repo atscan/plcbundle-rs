@@ -18,10 +18,6 @@ pub mod colors {
     
     /// Dim/bright black color (used for context, unchanged lines, etc.)
     pub const DIM: &str = "\x1b[2m";
-    
-    /// Bold text
-    #[allow(dead_code)]
-    pub const BOLD: &str = "\x1b[1m";
 }
 
 #[cfg(feature = "cli")]

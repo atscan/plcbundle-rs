@@ -1,0 +1,8 @@
+target
+.git
+.github
+.DS_Store
+**/*.rs.bk
+**/*.swp
+node_modules
+data

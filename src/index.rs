@@ -298,7 +298,7 @@ impl Index {
 
                 // Extract embedded metadata from bundle file
                 let embedded = crate::bundle_format::extract_metadata_from_file(bundle_path)
-                    .with_context(|| format!("Failed to extract metadata from bundle {:06}", bundle_num))?;
+                    .with_context(|| format!("Failed to extract metadata from bundle {}", bundle_num))?;
 
                 // Auto-detect origin from first bundle if not provided
                 {
