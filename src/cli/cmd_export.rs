@@ -45,7 +45,7 @@ for analysis, backup, or migration to other systems.",
 )]
 pub struct ExportCommand {
     /// Bundle range to export (e.g., "42", "1-100", or "1-10,20-30")
-    #[arg(value_name = "BUNDLES")]
+    #[arg(value_name = "BUNDLES", conflicts_with = "all")]
     pub bundles: Option<String>,
 
     /// Export all bundles
@@ -277,12 +277,20 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
 }
 
 /// Format bundle numbers as a compact range string (e.g., "1-10", "1, 5, 10", "1-5, 10-15")
+/// For large lists, shows a simple min-max range to avoid verbose output
 fn format_bundle_range(bundles: &[u32]) -> String {
     if bundles.is_empty() {
         return String::new();
     }
     if bundles.len() == 1 {
         return bundles[0].to_string();
+    }
+
+    // For large lists, just show min-max range
+    if bundles.len() > 50 {
+        let min = bundles.iter().min().copied().unwrap_or(0);
+        let max = bundles.iter().max().copied().unwrap_or(0);
+        return format!("{}-{}", min, max);
     }
 
     let mut ranges = Vec::new();
@@ -310,5 +318,14 @@ fn format_bundle_range(bundles: &[u32]) -> String {
         ranges.push(format!("{}-{}", range_start, range_end));
     }
 
-    ranges.join(", ")
+    let result = ranges.join(", ");
+    
+    // If the formatted string is too long, fall back to min-max
+    if result.len() > 200 {
+        let min = bundles.iter().min().copied().unwrap_or(0);
+        let max = bundles.iter().max().copied().unwrap_or(0);
+        format!("{}-{}", min, max)
+    } else {
+        result
+    }
 }
