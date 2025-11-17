@@ -152,6 +152,28 @@ pub fn create_manager_from_cmd<C: HasGlobalFlags>(dir: PathBuf, cmd: &C) -> Resu
     create_manager(dir, cmd.verbose(), cmd.quiet())
 }
 
+/// Resolve a target string (bundle number or path) into a bundle number and canonical path.
+/// This utility ensures that file existence checks for bundles are done through the BundleManager.
+pub fn resolve_bundle_target(
+    manager: &BundleManager,
+    target: &str,
+    repo_dir: &PathBuf,
+) -> Result<(Option<u32>, PathBuf)> {
+    // Try to parse as bundle number
+    if let Ok(num) = target.parse::<u32>() {
+        let path = plcbundle::constants::bundle_path(repo_dir, num);
+        // Check if bundle exists via BundleManager's index
+        if manager.get_bundle_metadata(num)?.is_some() {
+            Ok((Some(num), path))
+        } else {
+            anyhow::bail!("Bundle {} not found in repository index", num);
+        }
+    } else {
+        // Otherwise treat as file path. For now, this is an error as direct file access is disallowed.
+        anyhow::bail!("Loading from arbitrary paths not yet implemented. Please specify a bundle number.");
+    }
+}
+
 /// Get all bundle metadata from the repository
 /// This is more efficient than iterating through bundle numbers
 pub fn get_all_bundle_metadata(manager: &BundleManager) -> Vec<plcbundle::index::BundleMetadata> {

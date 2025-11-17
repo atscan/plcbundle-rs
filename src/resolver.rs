@@ -2,6 +2,7 @@
 use crate::operations::Operation;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use sonic_rs::{JsonContainerTrait, JsonValueTrait, Value};
 use std::collections::HashMap;
 
 // ============================================================================
@@ -117,7 +118,7 @@ pub fn build_did_state(did: &str, operations: &[Operation]) -> Result<DIDState> 
 }
 
 /// Apply a single operation to the state
-fn apply_operation_to_state(state: &mut DIDState, op_data: &serde_json::Value) {
+fn apply_operation_to_state(state: &mut DIDState, op_data: &Value) {
     // Update rotation keys
     if let Some(rot_keys) = op_data.get("rotationKeys").and_then(|v| v.as_array()) {
         state.rotation_keys = rot_keys
@@ -133,7 +134,7 @@ fn apply_operation_to_state(state: &mut DIDState, op_data: &serde_json::Value) {
     {
         state.verification_methods = vm
             .iter()
-            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+            .filter_map(|(k, v)| v.as_str().map(|s| (k.to_string(), s.to_string())))
             .collect();
     }
 
@@ -167,7 +168,7 @@ fn apply_operation_to_state(state: &mut DIDState, op_data: &serde_json::Value) {
                 let service_type = v.get("type")?.as_str()?.to_string();
                 let endpoint = v.get("endpoint")?.as_str()?.to_string();
                 Some((
-                    k.clone(),
+                    k.to_string(),
                     ServiceDefinition {
                         service_type,
                         endpoint: normalize_service_endpoint(&endpoint),
@@ -334,7 +335,8 @@ pub fn validate_did_format(did: &str) -> Result<()> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditLogEntry {
     pub did: String,
-    pub operation: serde_json::Value,
+    #[serde(skip)]
+    pub operation: Value,
     pub cid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nullified: Option<bool>,

@@ -1,5 +1,6 @@
 // src/operations.rs
 use serde::{Deserialize, Serialize};
+use sonic_rs::{self, Value};
 
 /// PLC Operation
 ///
@@ -8,7 +9,7 @@ use serde::{Deserialize, Serialize};
 pub struct Operation {
     pub did: String,
     #[serde(alias = "operation")]
-    pub operation: serde_json::Value,
+    pub operation: Value,
     #[serde(default)]
     pub cid: Option<String>,
     #[serde(default)]
@@ -16,7 +17,7 @@ pub struct Operation {
     #[serde(rename = "createdAt", alias = "created_at")]
     pub created_at: String,
     #[serde(flatten)]
-    pub extra: serde_json::Value,
+    pub extra: Value,
 
     /// CRITICAL: Raw JSON bytes as received from source
     ///

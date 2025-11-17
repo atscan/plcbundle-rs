@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use plcbundle::{LoadOptions, constants};
+use sonic_rs::{JsonContainerTrait, JsonValueTrait};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -299,10 +300,8 @@ pub fn cmd_op_show(dir: PathBuf, bundle: u32, position: Option<usize>, quiet: bo
     let pds = op
         .operation
         .get("services")
-        .and_then(|v| v.as_object())
-        .and_then(|services| services.get("atproto_pds"))
-        .and_then(|v| v.as_object())
-        .and_then(|pds| pds.get("endpoint"))
+        .and_then(|services_val| services_val.get("atproto_pds"))
+        .and_then(|pds_val| pds_val.get("endpoint"))
         .and_then(|v| v.as_str());
 
     // Display formatted output

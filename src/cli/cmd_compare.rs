@@ -2,6 +2,7 @@
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueHint};
 use plcbundle::{BundleManager, constants, remote};
+use sonic_rs::JsonValueTrait;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::runtime::Runtime;

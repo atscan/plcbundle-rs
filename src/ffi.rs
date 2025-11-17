@@ -1,6 +1,7 @@
 use crate::constants;
 use crate::manager::*;
 use crate::operations::*;
+use sonic_rs::JsonValueTrait;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::path::PathBuf;

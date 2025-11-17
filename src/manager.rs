@@ -5,12 +5,13 @@ use crate::iterators::{ExportIterator, QueryIterator, RangeIterator};
 use crate::operations::{Operation, OperationFilter, OperationRequest, OperationWithLocation};
 use crate::options::QueryMode;
 use crate::{cache, did_index, handle_resolver, mempool, verification};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
+use std::fs::File;
 
 /// Result of a sync_next_bundle operation
 #[derive(Debug, Clone)]
@@ -3169,6 +3170,24 @@ impl BundleManager {
         let failed_count = failed.load(Ordering::SeqCst);
 
         Ok((downloaded_count, failed_count))
+    }
+
+    /// Deletes a bundle file from the repository.
+    ///
+    /// This method removes a bundle file from the repository directory.
+    ///
+    /// # Arguments
+    /// * `bundle_num` - The number of the bundle to delete.
+    ///
+    /// # Returns
+    /// A `Result` indicating whether the operation was successful.
+    pub fn delete_bundle_file(&self, bundle_num: u32) -> Result<()> {
+        let bundle_path = constants::bundle_path(&self.directory, bundle_num);
+        if bundle_path.exists() {
+            std::fs::remove_file(bundle_path)?;
+        }
+        self.cache.remove(bundle_num);
+        Ok(())
     }
 }
 

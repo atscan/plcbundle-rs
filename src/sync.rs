@@ -4,6 +4,7 @@ use crate::operations::Operation;
 use crate::plc_client::PLCClient;
 use anyhow::Result;
 use serde::Deserialize;
+use sonic_rs::{JsonValueTrait, Value};
 use std::any::Any;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -12,10 +13,10 @@ use std::time::Duration;
 #[derive(Debug, Deserialize)]
 pub struct PLCOperation {
     did: String,
-    operation: serde_json::Value,
+    operation: Value,
     cid: String,
     #[serde(default)]
-    nullified: Option<serde_json::Value>,
+    nullified: Option<Value>,
     #[serde(rename = "createdAt")]
     created_at: String,
     #[serde(skip)]
@@ -34,7 +35,7 @@ impl From<PLCOperation> for Operation {
             cid: Some(plc.cid),
             nullified: is_nullified,
             created_at: plc.created_at,
-            extra: serde_json::Value::Null,
+            extra: sonic_rs::from_str("null").unwrap_or_else(|_| Value::new()),
             raw_json: plc.raw_json,
         }
     }
@@ -897,29 +898,29 @@ mod tests {
         let ops = vec![
             Operation {
                 did: "did:plc:1".into(),
-                operation: serde_json::Value::Null,
+                operation: sonic_rs::from_str("null").unwrap_or_else(|_| Value::new()),
                 cid: Some("cid1".into()),
                 nullified: false,
                 created_at: "2024-01-01T00:00:00Z".into(),
-                extra: serde_json::Value::Null,
+                extra: sonic_rs::from_str("null").unwrap_or_else(|_| Value::new()),
                 raw_json: None,
             },
             Operation {
                 did: "did:plc:2".into(),
-                operation: serde_json::Value::Null,
+                operation: sonic_rs::from_str("null").unwrap_or_else(|_| Value::new()),
                 cid: Some("cid2".into()),
                 nullified: false,
                 created_at: "2024-01-01T00:00:01Z".into(),
-                extra: serde_json::Value::Null,
+                extra: sonic_rs::from_str("null").unwrap_or_else(|_| Value::new()),
                 raw_json: None,
             },
             Operation {
                 did: "did:plc:3".into(),
-                operation: serde_json::Value::Null,
+                operation: sonic_rs::from_str("null").unwrap_or_else(|_| Value::new()),
                 cid: Some("cid3".into()),
                 nullified: false,
                 created_at: "2024-01-01T00:00:01Z".into(), // Same time as cid2
-                extra: serde_json::Value::Null,
+                extra: sonic_rs::from_str("null").unwrap_or_else(|_| Value::new()),
                 raw_json: None,
             },
         ];
@@ -938,20 +939,20 @@ mod tests {
         let ops = vec![
             Operation {
                 did: "did:plc:1".into(),
-                operation: serde_json::Value::Null,
+                operation: sonic_rs::from_str("null").unwrap_or_else(|_| Value::new()),
                 cid: Some("cid1".into()), // Duplicate
                 nullified: false,
                 created_at: "2024-01-01T00:00:00Z".into(),
-                extra: serde_json::Value::Null,
+                extra: sonic_rs::from_str("null").unwrap_or_else(|_| Value::new()),
                 raw_json: None,
             },
             Operation {
                 did: "did:plc:2".into(),
-                operation: serde_json::Value::Null,
+                operation: sonic_rs::from_str("null").unwrap_or_else(|_| Value::new()),
                 cid: Some("cid2".into()), // New
                 nullified: false,
                 created_at: "2024-01-01T00:00:01Z".into(),
-                extra: serde_json::Value::Null,
+                extra: sonic_rs::from_str("null").unwrap_or_else(|_| Value::new()),
                 raw_json: None,
             },
         ];

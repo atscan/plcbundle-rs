@@ -2,11 +2,10 @@
 use anyhow::Result;
 use chrono::DateTime;
 use clap::{Args, ValueHint};
-use plcbundle::constants;
 use plcbundle::format::{format_bytes, format_duration_verbose, format_number};
 use plcbundle::{BundleManager, LoadOptions, Operation};
 use serde::Serialize;
-use serde_json::Value;
+use sonic_rs::{JsonContainerTrait, JsonValueTrait};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -189,22 +188,20 @@ pub fn run(cmd: InspectCommand, dir: PathBuf) -> Result<()> {
     let manager = super::utils::create_manager(dir.clone(), false, false)?;
 
     // Resolve target to bundle number or file path
-    let (bundle_num, file_path) = resolve_target(&cmd.target, &dir)?;
+    let (bundle_num, file_path) = super::utils::resolve_bundle_target(&manager, &cmd.target, &dir)?;
 
-    // Get file size - use bundle metadata if available, otherwise read from filesystem
+    // Get file size - always use bundle metadata if available, otherwise read from filesystem
     let file_size = if let Some(num) = bundle_num {
         // Use bundle metadata from index (avoids direct file access per RULES.md)
         manager
             .get_bundle_metadata(num)?
             .map(|meta| meta.compressed_size)
-            .unwrap_or_else(|| {
-                // Fallback to filesystem if metadata not available
-                std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0)
-            })
+            .unwrap_or(0)
     } else {
-        // For arbitrary file paths, we still need filesystem access
-        // TODO: Add method to load from arbitrary path
-        anyhow::bail!("Loading from arbitrary paths not yet implemented");
+        // For arbitrary file paths, we still need filesystem access - this should be refactored
+        // to use a manager method for loading from arbitrary paths in the future if supported.
+        // For now, it will return an error as per `resolve_bundle_target`.
+        anyhow::bail!("Loading from arbitrary paths not yet implemented. Please specify a bundle number.");
     };
 
     if !cmd.json {
@@ -371,52 +368,53 @@ fn analyze_operations(operations: &[Operation], cmd: &InspectCommand) -> Result<
         max_op_size = max_op_size.max(op_size);
 
         // Parse operation for detailed analysis
-        if let Value::Object(ref map) = op.operation {
-            // Operation type
-            if let Some(Value::String(op_type)) = map.get("type") {
-                *operation_types.entry(op_type.clone()).or_insert(0) += 1;
-            }
+        let op_val = &op.operation;
+        // Operation type
+        if let Some(op_type) = op_val.get("type").and_then(|v| v.as_str()) {
+            *operation_types.entry(op_type.to_string()).or_insert(0) += 1;
+        }
 
-            // Pattern analysis (if not skipped)
-            if !cmd.skip_patterns {
-                // Handle analysis
-                if let Some(Value::Array(aka)) = map.get("alsoKnownAs") {
-                    for item in aka {
-                        if let Value::String(aka_str) = item {
-                            if aka_str.starts_with("at://") {
-                                total_handles += 1;
+        // Pattern analysis (if not skipped)
+        if !cmd.skip_patterns {
+            // Handle analysis
+            if let Some(aka) = op_val.get("alsoKnownAs").and_then(|v| v.as_array()) {
+                for item in aka.iter() {
+                    if let Some(aka_str) = item.as_str() {
+                        if aka_str.starts_with("at://") {
+                            total_handles += 1;
 
-                                // Extract domain
-                                let handle = aka_str.strip_prefix("at://").unwrap_or("");
-                                let handle = handle.split('/').next().unwrap_or("");
+                            // Extract domain
+                            let handle = aka_str.strip_prefix("at://").unwrap_or("");
+                            let handle = handle.split('/').next().unwrap_or("");
 
-                                // Count domain (TLD)
-                                let parts: Vec<&str> = handle.split('.').collect();
-                                if parts.len() >= 2 {
-                                    let domain = format!(
-                                        "{}.{}",
-                                        parts[parts.len() - 2],
-                                        parts[parts.len() - 1]
-                                    );
-                                    *domain_counts.entry(domain).or_insert(0) += 1;
-                                }
+                            // Count domain (TLD)
+                            let parts: Vec<&str> = handle.split('.').collect();
+                            if parts.len() >= 2 {
+                                let domain = format!(
+                                    "{}.{}",
+                                    parts[parts.len() - 2],
+                                    parts[parts.len() - 1]
+                                );
+                                *domain_counts.entry(domain).or_insert(0) += 1;
+                            }
 
-                                // Check for invalid patterns
-                                if handle.contains('_') {
-                                    invalid_handles += 1;
-                                }
+                            // Check for invalid patterns
+                            if handle.contains('_') {
+                                invalid_handles += 1;
                             }
                         }
                     }
                 }
+            }
 
-                // Service analysis
-                if let Some(Value::Object(services)) = map.get("services") {
-                    total_services += services.len();
+            // Service analysis
+            if let Some(services) = op_val.get("services").and_then(|v| v.as_object()) {
+                total_services += services.len();
 
-                    // Extract PDS endpoints
-                    if let Some(Value::Object(pds)) = services.get("atproto_pds") {
-                        if let Some(Value::String(endpoint)) = pds.get("endpoint") {
+                // Extract PDS endpoints
+                if let Some(pds_val) = op_val.get("services").and_then(|v| v.get("atproto_pds")) {
+                    if let Some(pds) = pds_val.as_object() {
+                        if let Some(endpoint) = pds_val.get("endpoint").and_then(|v| v.as_str()) {
                             // Normalize endpoint
                             let endpoint = endpoint
                                 .strip_prefix("https://")
@@ -920,24 +918,4 @@ fn display_human(
     }
 
     Ok(())
-}
-
-fn resolve_target(target: &str, dir: &PathBuf) -> Result<(Option<u32>, PathBuf)> {
-    // Try to parse as bundle number
-    if let Ok(num) = target.parse::<u32>() {
-        let path = constants::bundle_path(dir, num);
-        if path.exists() {
-            return Ok((Some(num), path));
-        } else {
-            anyhow::bail!("Bundle {} not found in repository", num);
-        }
-    }
-
-    // Otherwise treat as file path
-    let path = PathBuf::from(target);
-    if path.exists() {
-        Ok((None, path))
-    } else {
-        anyhow::bail!("File not found: {}", target)
-    }
 }

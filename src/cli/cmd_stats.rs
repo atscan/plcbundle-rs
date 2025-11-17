@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Args, ValueEnum};
 use plcbundle::BundleManager;
-use serde_json::Value;
+use sonic_rs::JsonValueTrait;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -231,12 +231,8 @@ fn collect_operation_stats(
                 nullified_operations += 1;
             }
 
-            if let Value::Object(ref map) = op.operation {
-                if let Some(Value::String(op_type)) = map.get("type") {
-                    *operation_types.entry(op_type.clone()).or_insert(0) += 1;
-                } else {
-                    *operation_types.entry("unknown".to_string()).or_insert(0) += 1;
-                }
+            if let Some(op_type) = op.operation.get("type").and_then(|v| v.as_str()) {
+                *operation_types.entry(op_type.to_string()).or_insert(0) += 1;
             } else {
                 *operation_types.entry("unknown".to_string()).or_insert(0) += 1;
             }

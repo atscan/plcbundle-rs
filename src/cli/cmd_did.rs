@@ -2,6 +2,7 @@
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueHint};
 use plcbundle::{BundleManager, DIDLookupStats, DIDLookupTimings};
+use sonic_rs::{JsonContainerTrait, JsonValueTrait};
 use std::path::PathBuf;
 
 #[derive(Args)]
@@ -1001,13 +1002,14 @@ fn display_lookup_results(
         println!("{}", values.join(separator));
         
         if verbose && !owl.nullified {
-            if let Some(op_data) = owl.operation.operation.as_object() {
-                if let Some(op_type) = op_data.get("type").and_then(|v| v.as_str()) {
-                    eprintln!("      type: {}", op_type);
-                }
-                if let Some(handle) = op_data.get("handle").and_then(|v| v.as_str()) {
-                    eprintln!("      handle: {}", handle);
-                } else if let Some(aka) = op_data.get("alsoKnownAs").and_then(|v| v.as_array()) {
+            let op_val = &owl.operation.operation;
+            if let Some(op_type) = op_val.get("type").and_then(|v| v.as_str()) {
+                eprintln!("      type: {}", op_type);
+            }
+            if let Some(handle) = op_val.get("handle").and_then(|v| v.as_str()) {
+                eprintln!("      handle: {}", handle);
+            } else {
+                if let Some(aka) = op_val.get("alsoKnownAs").and_then(|v| v.as_array()) {
                     if let Some(aka_str) = aka.first().and_then(|v| v.as_str()) {
                         let handle = aka_str.strip_prefix("at://").unwrap_or(aka_str);
                         eprintln!("      handle: {}", handle);
