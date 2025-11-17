@@ -1,7 +1,7 @@
 // Root page handler
 
 use crate::constants;
-use crate::format::format_number;
+use crate::format::{format_number, format_std_duration_verbose};
 use crate::server::ServerState;
 use crate::server::utils::extract_base_url;
 use axum::{
@@ -169,7 +169,7 @@ pub async fn handle_root(
 
     response.push_str("Server Stats\n");
     response.push_str("━━━━━━━━━━━━\n");
-    response.push_str(&format!("  Version:           {}\n", state.config.version));
+    response.push_str(&format!("  Version:           v{} (rust)\n", state.config.version));
     response.push_str(&format!(
         "  Sync mode:         {}\n",
         state.config.sync_mode
@@ -183,7 +183,7 @@ pub async fn handle_root(
     } else {
         response.push_str("  Handle Resolver:   (not configured)\n");
     }
-    response.push_str(&format!("  Uptime:            {:?}\n", uptime));
+    response.push_str(&format!("  Uptime:            {}\n", format_std_duration_verbose(uptime)));
 
     // Get base URL from request
     let base_url = extract_base_url(&headers, &uri);

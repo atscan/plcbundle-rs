@@ -65,18 +65,16 @@ where
     result.chars().rev().collect()
 }
 
-/// Format a chrono duration using verbose units (e.g. "2d 3h 10m 5s").
-pub fn format_duration_verbose(duration: ChronoDuration) -> String {
-    let seconds = duration.num_seconds();
-    let sign = if seconds < 0 { "-" } else { "" };
-    let seconds = seconds.abs();
+// Internal helpers for duration formatting
 
+/// Format seconds as verbose units (e.g. "2d 3h 10m 5s").
+fn format_seconds_verbose(seconds: u64) -> String {
     let days = seconds / 86_400;
     let hours = (seconds % 86_400) / 3_600;
     let minutes = (seconds % 3_600) / 60;
     let secs = seconds % 60;
 
-    let body = if days > 0 {
+    if days > 0 {
         format!("{}d {}h {}m {}s", days, hours, minutes, secs)
     } else if hours > 0 {
         format!("{}h {}m {}s", hours, minutes, secs)
@@ -84,18 +82,12 @@ pub fn format_duration_verbose(duration: ChronoDuration) -> String {
         format!("{}m {}s", minutes, secs)
     } else {
         format!("{}s", secs)
-    };
-
-    format!("{sign}{body}")
+    }
 }
 
-/// Format a duration using compact units (e.g. "5s", "3m", "4h", "2d").
-pub fn format_duration_compact(duration: ChronoDuration) -> String {
-    let seconds = duration.num_seconds();
-    let sign = if seconds < 0 { "-" } else { "" };
-    let seconds = seconds.abs();
-
-    let body = if seconds < 60 {
+/// Format seconds as compact units (e.g. "5s", "3m", "4h", "2d").
+fn format_seconds_compact(seconds: u64) -> String {
+    if seconds < 60 {
         format!("{}s", seconds)
     } else if seconds < 3_600 {
         format!("{}m", seconds / 60)
@@ -105,25 +97,42 @@ pub fn format_duration_compact(duration: ChronoDuration) -> String {
         format!("{}d", seconds / 86_400)
     } else {
         format!("{}y", seconds / 31_536_000)
-    };
-
-    format!("{sign}{body}")
-}
-
-/// Convenience wrapper for formatting std::time::Duration using compact units.
-pub fn format_std_duration(duration: StdDuration) -> String {
-    match ChronoDuration::from_std(duration) {
-        Ok(d) => format_duration_compact(d),
-        Err(_) => format!("{}s", duration.as_secs()),
     }
 }
 
+// Public duration formatting functions
+
+/// Format a chrono duration using verbose units (e.g. "2d 3h 10m 5s").
+pub fn format_duration_verbose(duration: ChronoDuration) -> String {
+    let seconds = duration.num_seconds();
+    let sign = if seconds < 0 { "-" } else { "" };
+    let abs_seconds = seconds.unsigned_abs();
+    format!("{}{}", sign, format_seconds_verbose(abs_seconds))
+}
+
+/// Format a duration using compact units (e.g. "5s", "3m", "4h", "2d").
+pub fn format_duration_compact(duration: ChronoDuration) -> String {
+    let seconds = duration.num_seconds();
+    let sign = if seconds < 0 { "-" } else { "" };
+    let abs_seconds = seconds.unsigned_abs();
+    format!("{}{}", sign, format_seconds_compact(abs_seconds))
+}
+
+/// Format a std::time::Duration using compact units (e.g. "5s", "3m", "4h", "2d").
+pub fn format_std_duration(duration: StdDuration) -> String {
+    format_seconds_compact(duration.as_secs())
+}
+
+/// Format a std::time::Duration using verbose units (e.g. "2d 3h 10m 5s").
+pub fn format_std_duration_verbose(duration: StdDuration) -> String {
+    format_seconds_verbose(duration.as_secs())
+}
+
+/// Format a duration in milliseconds (e.g. "123ms", "1.234ms").
 pub fn format_std_duration_ms(duration: StdDuration) -> String {
     let ms = duration.as_secs_f64() * 1000.0;
     if ms < 100.0 {
         format!("{:.3}ms", ms)
-    } else if ms < 1000.0 {
-        format!("{:.0}ms", ms)
     } else {
         format!("{:.0}ms", ms)
     }

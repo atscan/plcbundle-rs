@@ -32,7 +32,7 @@ pub use did_index::{DIDLookupStats, DIDLookupTimings};
 pub use format::{
     format_bytes, format_bytes_compact, format_bytes_per_sec, format_duration_compact,
     format_duration_verbose, format_number, format_std_duration, format_std_duration_auto,
-    format_std_duration_ms,
+    format_std_duration_ms, format_std_duration_verbose,
 };
 pub use handle_resolver::{HandleResolver, is_handle, normalize_handle, validate_handle_format};
 pub use index::{BundleMetadata, Index};
