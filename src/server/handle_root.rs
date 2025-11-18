@@ -203,6 +203,7 @@ pub async fn handle_root(
     response.push_str("  GET  /op/:pointer         Get single operation\n");
     response.push_str("  GET  /status              Server status\n");
     response.push_str("  GET  /mempool             Mempool operations (JSONL)\n");
+    response.push_str("  GET  /random              Random DID sample (JSON)\n");
 
     if state.config.enable_websocket {
         response.push_str("\nWebSocket Endpoints\n");
@@ -229,6 +230,7 @@ pub async fn handle_root(
     ));
     response.push_str(&format!("  curl {}/jsonl/1\n", base_url));
     response.push_str(&format!("  curl {}/op/0\n", base_url));
+    response.push_str(&format!("  curl {}/random?count=10&seed=12345\n", base_url));
 
     if state.config.sync_mode {
         response.push_str(&format!("  curl {}/status\n", base_url));

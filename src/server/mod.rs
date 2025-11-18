@@ -12,6 +12,8 @@ mod handle_debug;
 #[cfg(feature = "server")]
 mod handle_did;
 #[cfg(feature = "server")]
+mod handle_random;
+#[cfg(feature = "server")]
 mod handle_root;
 #[cfg(feature = "server")]
 mod handle_status;
@@ -86,6 +88,8 @@ pub use handle_bundle::*;
 pub use handle_debug::*;
 #[cfg(feature = "server")]
 pub use handle_did::*;
+#[cfg(feature = "server")]
+pub use handle_random::*;
 #[cfg(feature = "server")]
 pub use handle_root::*;
 #[cfg(feature = "server")]
