@@ -668,7 +668,7 @@ impl BundleManager {
             .retain(|b| b.bundle_number <= spec.target_bundle);
 
         // Use default flush interval for rollback
-        self.build_did_index(crate::constants::DID_INDEX_FLUSH_INTERVAL, None::<fn(u32, u32, u64, u64)>)?;
+        self.build_did_index(crate::constants::DID_INDEX_FLUSH_INTERVAL, None::<fn(u32, u32, u64, u64)>, None, None)?;
 
         Ok(RollbackResult {
             success: true,
@@ -705,19 +705,14 @@ impl BundleManager {
     }
 
     // === DID Index ===
-    pub fn build_did_index<F>(&self, flush_interval: u32, progress_cb: Option<F>) -> Result<RebuildStats>
-    where
-        F: Fn(u32, u32, u64, u64) + Send + Sync, // (current, total, bytes_processed, total_bytes)
-    {
-        self.build_did_index_with_threads(flush_interval, progress_cb, 0) // Default to auto-detect
-    }
-
-    pub fn build_did_index_with_threads<F>(&self, flush_interval: u32, progress_cb: Option<F>, num_threads: usize) -> Result<RebuildStats>
+    pub fn build_did_index<F>(&self, flush_interval: u32, progress_cb: Option<F>, num_threads: Option<usize>, interrupted: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>) -> Result<RebuildStats>
     where
         F: Fn(u32, u32, u64, u64) + Send + Sync, // (current, total, bytes_processed, total_bytes)
     {
         use std::time::Instant;
 
+        let actual_threads = num_threads.unwrap_or(0); // 0 = auto-detect
+        
         let last_bundle = self.get_last_bundle();
         let mut stats = RebuildStats::default();
 
@@ -779,7 +774,8 @@ impl BundleManager {
                             }
                         }
                     }),
-                    num_threads
+                    actual_threads,
+                    interrupted
                 )?
             } else {
                 return Err(anyhow::anyhow!("DID index not initialized"));

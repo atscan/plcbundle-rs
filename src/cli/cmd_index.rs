@@ -108,7 +108,11 @@ pub enum IndexCommands {
 
     /// Verify DID index integrity
     #[command(alias = "check")]
-    Verify {},
+    Verify {
+        /// Flush to disk every N bundles (0 = only at end, default = 64)
+        #[arg(long, default_value_t = constants::DID_INDEX_FLUSH_INTERVAL)]
+        flush_interval: u32,
+    },
 
     /// Debug and inspect DID index internals
     #[command(alias = "inspect")]
@@ -151,8 +155,8 @@ pub fn run(cmd: IndexCommand, dir: PathBuf, global_verbose: bool) -> Result<()> 
         IndexCommands::Stats { json } => {
             cmd_index_stats(dir, json)?;
         }
-        IndexCommands::Verify {} => {
-            cmd_index_verify(dir, global_verbose)?;
+        IndexCommands::Verify { flush_interval } => {
+            cmd_index_verify(dir, global_verbose, flush_interval)?;
         }
         IndexCommands::Debug { shard, did, json } => {
             let shard_num = shard.map(|s| parse_shard(&s)).transpose()?;
@@ -281,21 +285,22 @@ pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize, flush_interval
         manager: manager_for_cleanup.clone(),
     };
 
-    // Note: CTRL+C handler for cleanup is set up automatically in did_index.rs build_from_scratch()
-    // This follows the API-first design: cleanup logic lives in the core, not in CLI layer
+    // Set up interrupted flag to stop progress bar updates
+    // The handler in did_index.rs will set this flag when CTRL+C is pressed
     use std::sync::atomic::{AtomicBool, Ordering};
-    static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+    let interrupted = Arc::new(AtomicBool::new(false));
 
     // Wrap build call - cleanup guard will handle CTRL+C and panics
-    let build_result = manager_arc.build_did_index_with_threads(flush_interval, Some({
+    let build_result = manager_arc.build_did_index(flush_interval, Some({
         let progress = progress.clone();
         let stage2_progress = stage2_progress.clone();
         let stage2_started = stage2_started.clone();
         let stage1_finished = stage1_finished.clone();
+        let interrupted = interrupted.clone();
         let last_bundle = last_bundle;
         move |current, total, bytes_processed, _total_bytes| {
             // Stop updating progress bar if interrupted
-            if INTERRUPTED.load(Ordering::Relaxed) {
+            if interrupted.load(Ordering::Relaxed) {
                 return;
             }
             
@@ -360,7 +365,7 @@ pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize, flush_interval
                 }
             }
         }
-    }), num_threads);
+    }), Some(num_threads), Some(interrupted.clone()));
 
     // Handle build result - ensure cleanup happens on error
     match build_result {
@@ -466,9 +471,9 @@ pub fn cmd_index_repair(dir: PathBuf, threads: usize, flush_interval: u32) -> Re
             use super::progress::ProgressBar;
             let progress = ProgressBar::with_bytes(last_bundle as usize, total_bytes);
 
-            manager.build_did_index_with_threads(flush_interval, Some(|current, _total, bytes_processed, _total_bytes| {
+            manager.build_did_index(flush_interval, Some(|current, _total, bytes_processed, _total_bytes| {
                 progress.set_with_bytes(current as usize, bytes_processed);
-            }), num_threads)?;
+            }), Some(num_threads), None)?;
 
             progress.finish();
         } else {
@@ -717,6 +722,7 @@ fn rebuild_and_compare_index(
     manager: &BundleManager,
     last_bundle: u32,
     verbose: bool,
+    flush_interval: u32,
 ) -> Result<RebuildResult> {
     use super::progress::ProgressBar;
     use std::fs;
@@ -733,28 +739,127 @@ fn rebuild_and_compare_index(
     let temp_did_index = crate::did_index::Manager::new(temp_dir.clone())?;
 
     // Build index using streaming approach (no need to load bundles into memory!)
-    log::info!("Building temporary index using streaming approach...");
+    // Print header information similar to index build
+    eprintln!("\n📦 Building Temporary DID Index (for verification)");
+    eprintln!("   Strategy: Streaming (memory-efficient)");
+    eprintln!("   Bundles:  {}", last_bundle);
+    if flush_interval > 0 {
+        if flush_interval == constants::DID_INDEX_FLUSH_INTERVAL {
+            // Default value - show with tuning hint
+            eprintln!("   Flush:    Every {} bundles (tune with --flush-interval)", flush_interval);
+        } else {
+            // Non-default value - show with tuning hint
+            eprintln!("   Flush:    {} bundles (you can tune with --flush-interval)", flush_interval);
+        }
+    } else {
+        eprintln!("   Flush:    Only at end (maximum memory usage)");
+    }
+    eprintln!();
+    eprintln!("📊 Stage 1: Processing bundles...");
 
     // Calculate total uncompressed size for progress tracking
     let index = manager.get_index();
     let bundle_numbers: Vec<u32> = (1..=last_bundle).collect();
     let total_uncompressed_size = index.total_uncompressed_size_for_bundles(&bundle_numbers);
 
-    let progress = ProgressBar::with_bytes(last_bundle as usize, total_uncompressed_size);
+    // Create progress bars for both stages (similar to cmd_index_build)
+    use std::sync::{Arc, Mutex};
+    let progress = Arc::new(Mutex::new(Some(ProgressBar::with_bytes(last_bundle as usize, total_uncompressed_size))));
+    let stage2_progress = Arc::new(Mutex::new(None::<ProgressBar>));
+    let stage2_started = Arc::new(Mutex::new(false));
+    let stage1_finished = Arc::new(Mutex::new(false));
+
+    // Set up interrupted flag to stop progress bar updates
+    // The handler in did_index.rs will set this flag when CTRL+C is pressed
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let interrupted = Arc::new(AtomicBool::new(false));
 
     // Stream bundles directly from disk - memory efficient!
-    // Use default flush interval for verify
     let (_, _, _, _) = temp_did_index.build_from_scratch(
         manager.directory(),
         last_bundle,
-        constants::DID_INDEX_FLUSH_INTERVAL, // flush_interval
-        Some(|current, _total, bytes_processed, _stage| {
-            progress.set_with_bytes(current as usize, bytes_processed);
+        flush_interval,
+        Some({
+            let progress = progress.clone();
+            let stage2_progress = stage2_progress.clone();
+            let stage2_started = stage2_started.clone();
+            let stage1_finished = stage1_finished.clone();
+            let interrupted = interrupted.clone();
+            let last_bundle = last_bundle;
+            move |current, total, bytes_processed, _stage| {
+                // Stop updating progress bar if interrupted
+                if interrupted.load(Ordering::Relaxed) {
+                    return;
+                }
+                // Detect stage change: if total changes from bundle count to shard count (256), we're in stage 2
+                let is_stage_2 = total == 256 && current <= 256;
+                
+                if is_stage_2 {
+                    // Check if this is the first time we're entering stage 2
+                    let mut started = stage2_started.lock().unwrap();
+                    if !*started {
+                        *started = true;
+                        drop(started);
+                        
+                        // Finish Stage 1 progress bar if not already finished
+                        let mut finished = stage1_finished.lock().unwrap();
+                        if !*finished {
+                            *finished = true;
+                            drop(finished);
+                            if let Some(pb) = progress.lock().unwrap().take() {
+                                pb.finish();
+                            }
+                            eprintln!();
+                        }
+                        
+                        // Create new simple progress bar for Stage 2 (256 shards, no byte tracking)
+                        let mut stage2_pb = stage2_progress.lock().unwrap();
+                        *stage2_pb = Some(ProgressBar::new(256));
+                    }
+                    
+                    // Update Stage 2 progress bar
+                    let mut stage2_pb_guard = stage2_progress.lock().unwrap();
+                    if let Some(ref pb) = *stage2_pb_guard {
+                        pb.set(current as usize);
+                        
+                        // Finish progress bar when stage 2 completes (256/256)
+                        if current == 256 {
+                            if let Some(pb) = stage2_pb_guard.take() {
+                                pb.finish();
+                            }
+                        }
+                    }
+                } else {
+                    // Stage 1: use byte tracking
+                    // Check if Stage 1 is complete (current == total and total == last_bundle)
+                    if current == total && total == last_bundle {
+                        let mut finished = stage1_finished.lock().unwrap();
+                        if !*finished {
+                            *finished = true;
+                            drop(finished);
+                            // Finish Stage 1 progress bar and add extra newline
+                            if let Some(pb) = progress.lock().unwrap().take() {
+                                pb.finish();
+                            }
+                            eprintln!();
+                        }
+                    } else if let Some(ref pb) = *progress.lock().unwrap() {
+                        pb.set_with_bytes(current as usize, bytes_processed);
+                    }
+                }
+            }
         }),
-        0 // num_threads: auto-detect
+        0, // num_threads: auto-detect
+        Some(interrupted.clone()) // interrupted flag
     )?;
 
-    progress.finish();
+    // Finish any remaining progress bars
+    if let Some(pb) = progress.lock().unwrap().take() {
+        pb.finish();
+    }
+    if let Some(pb) = stage2_progress.lock().unwrap().take() {
+        pb.finish();
+    }
 
     // Compare shard files between temporary and existing index
     let existing_index_dir = manager.directory().join(crate::constants::DID_INDEX_DIR);
@@ -871,7 +976,7 @@ fn rebuild_and_compare_index(
     })
 }
 
-pub fn cmd_index_verify(dir: PathBuf, verbose: bool) -> Result<()> {
+pub fn cmd_index_verify(dir: PathBuf, verbose: bool, flush_interval: u32) -> Result<()> {
     let manager = super::utils::create_manager(dir.clone(), false, false)?;
 
     let stats_map = manager.get_did_index_stats();
@@ -1064,7 +1169,7 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool) -> Result<()> {
 
     // Check 5: Rebuild index in memory and compare
     log::info!("Rebuilding index in memory for verification...");
-    let rebuild_result = rebuild_and_compare_index(&manager, last_bundle as u32, verbose)?;
+    let rebuild_result = rebuild_and_compare_index(&manager, last_bundle as u32, verbose, flush_interval)?;
 
     if rebuild_result.errors > 0 {
         errors += rebuild_result.errors;

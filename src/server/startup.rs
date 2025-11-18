@@ -190,6 +190,8 @@ where
         manager.build_did_index(
             constants::DID_INDEX_FLUSH_INTERVAL,
             callback,
+            None,
+            None,
         )?;
         
         // Finish progress tracking if provided

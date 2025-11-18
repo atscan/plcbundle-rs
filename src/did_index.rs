@@ -804,6 +804,7 @@ impl Manager {
     /// * `flush_interval` - Flush to disk every N bundles (0 = only flush at end)
     /// * `progress_callback` - Optional callback for progress updates
     /// * `num_threads` - Number of threads for parallel processing (0 = auto, 1 = sequential)
+    /// * `interrupted` - Optional atomic flag to stop progress updates when CTRL+C is pressed
     pub fn build_from_scratch<F>(
         &self,
         bundle_dir: &PathBuf,
@@ -811,6 +812,7 @@ impl Manager {
         flush_interval: u32,
         progress_callback: Option<F>,
         num_threads: usize,
+        interrupted: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     ) -> Result<(u64, u64, std::time::Duration, std::time::Duration)> // Returns (total_operations, bundles_processed, stage1_duration, stage2_duration)
     where
         F: Fn(u32, u32, u64, Option<String>) + Send + Sync, // (current, total, bytes_processed, stage)
@@ -875,7 +877,12 @@ impl Manager {
         #[cfg(feature = "cli")]
         {
             let shard_dir_for_signal = self.shard_dir.clone();
+            let interrupted_flag = interrupted.clone();
             match ctrlc::set_handler(move || {
+                // Set interrupted flag first (if provided) to stop progress bar updates
+                if let Some(ref flag) = interrupted_flag {
+                    flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
                 eprintln!("\n\n⚠️  Interrupted by user (CTRL+C)");
                 // Cleanup temp files immediately using the same cleanup logic
                 if let Err(e) = CleanupGuard::cleanup(&shard_dir_for_signal) {

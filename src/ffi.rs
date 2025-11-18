@@ -590,7 +590,7 @@ pub unsafe extern "C" fn bundle_manager_rebuild_did_index(
     });
 
     // Use default flush interval for FFI
-    match manager.manager.build_did_index(constants::DID_INDEX_FLUSH_INTERVAL, callback) {
+    match manager.manager.build_did_index(constants::DID_INDEX_FLUSH_INTERVAL, callback, None, None) {
         Ok(stats) => {
             if !out_stats.is_null() {
                 unsafe {
