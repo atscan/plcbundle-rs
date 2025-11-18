@@ -24,11 +24,40 @@ environment:
   RUST_BACKTRACE: "1"
   # Force reproducible builds in CI
   CARGO_TERM_COLOR: "always"
+  OPENSSL_NO_PKG_CONFIG: "1"
 
 steps:
   - name: "Set up Rust"
     command: |
       rustup default stable
+
+  - name: "Configure OpenSSL"
+    command: |
+      set -euo pipefail
+      OPENSSL_BIN="$(command -v openssl || true)"
+      if [ -n "$OPENSSL_BIN" ]; then
+        OPENSSL_PREFIX="$(dirname "$(dirname "$(readlink -f "$OPENSSL_BIN")")")"
+        export OPENSSL_DIR="$OPENSSL_PREFIX"
+        export OPENSSL_LIB_DIR="$OPENSSL_PREFIX/lib"
+      fi
+      if [ -z "${OPENSSL_INCLUDE_DIR:-}" ]; then
+        INC_DIR="$(ls -d /nix/store/*openssl*-dev*/include 2>/dev/null | head -n 1 || true)"
+        if [ -n "$INC_DIR" ]; then
+          export OPENSSL_INCLUDE_DIR="$INC_DIR"
+        elif [ -d "$OPENSSL_PREFIX/include" ]; then
+          export OPENSSL_INCLUDE_DIR="$OPENSSL_PREFIX/include"
+        fi
+      fi
+      if command -v pkg-config >/dev/null 2>&1; then
+        PC_DIR="$(ls -d /nix/store/*openssl*-dev*/lib/pkgconfig 2>/dev/null | head -n 1 || true)"
+        if [ -n "$PC_DIR" ]; then
+          export PKG_CONFIG_PATH="${PC_DIR}:${PKG_CONFIG_PATH:-}"
+        fi
+      fi
+      echo "OPENSSL_DIR=${OPENSSL_DIR:-}"
+      echo "OPENSSL_LIB_DIR=${OPENSSL_LIB_DIR:-}"
+      echo "OPENSSL_INCLUDE_DIR=${OPENSSL_INCLUDE_DIR:-}"
+      echo "PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-}"
 
   - name: "Download dependencies"
     command: |
