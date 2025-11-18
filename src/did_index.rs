@@ -517,35 +517,38 @@ impl Manager {
 
         let seed = seed.unwrap_or_else(unix_timestamp);
         let mut attempts = 0usize;
-        let mut results = Vec::with_capacity(count);
+        let mut targets: Vec<(u8, u32)> = Vec::with_capacity(count);
 
-        while results.len() < count {
+        while targets.len() < count {
             if attempts > count * 20 {
                 anyhow::bail!("Unable to sample random DIDs (index inconsistent).");
             }
-
             let rand_value = deterministic_u64(seed, attempts) % total_entries;
             attempts += 1;
-
-            let Some((shard_num, local_index)) = select_shard_by_weight(&shard_weights, rand_value)
-            else {
-                continue;
-            };
-
-            match self.identifier_from_shard(shard_num, local_index as usize) {
-                Ok(identifier) => {
-                    results.push(format!("{}{}", DID_PREFIX, identifier));
-                }
-                Err(err) => {
-                    log::warn!(
-                        "[DID Index] Failed to read shard {:02x} entry {}: {}",
-                        shard_num,
-                        local_index,
-                        err
-                    );
-                }
+            if let Some((shard_num, local_index)) =
+                select_shard_by_weight(&shard_weights, rand_value)
+            {
+                targets.push((shard_num, local_index));
             }
         }
+
+        let results: Vec<String> = targets
+            .par_iter()
+            .filter_map(|(shard_num, local_index)| {
+                match self.identifier_from_shard(*shard_num, *local_index as usize) {
+                    Ok(identifier) => Some(format!("{}{}", DID_PREFIX, identifier)),
+                    Err(err) => {
+                        log::warn!(
+                            "[DID Index] Failed to read shard {:02x} entry {}: {}",
+                            shard_num,
+                            local_index,
+                            err
+                        );
+                        None
+                    }
+                }
+            })
+            .collect();
 
         Ok(results)
     }
