@@ -14,6 +14,7 @@ clone:
 dependencies:
   nixpkgs:
     - rustc
+    - cargo
     - gcc
     - git
     - zstd
