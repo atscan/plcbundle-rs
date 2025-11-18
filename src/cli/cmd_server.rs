@@ -456,51 +456,12 @@ async fn run_server_async(cmd: ServerCommand, dir: PathBuf, global_verbose: bool
         .await
         .context("Server error")?;
 
-    // Ensure every background task sees the shutdown flag, even on non-signal exits
-    server_runtime.trigger_shutdown();
-
-    // Always abort resolver tasks immediately - they're just keep-alive pings
-    if !resolver_tasks.is_empty() {
-        resolver_tasks.abort_all();
-        while let Some(result) = resolver_tasks.join_next().await {
-            if let Err(e) = result {
-                if e.is_cancelled() {
-                    // Task was aborted, which is expected
-                } else {
-                    eprintln!("⚠️  Resolver task error: {}", e);
-                }
-            }
-        }
-    }
-
-    // If shutdown was triggered by a fatal error, abort all tasks immediately
-    // Otherwise, wait for them to finish gracefully
-    if server_runtime.is_fatal_shutdown() {
-        eprintln!("\n⚠️  Fatal error detected - aborting background tasks...");
-        background_tasks.abort_all();
-        // Wait briefly for aborted tasks to finish
-        while let Some(result) = background_tasks.join_next().await {
-            if let Err(e) = result {
-                if e.is_cancelled() {
-                    // Task was aborted, which is expected
-                } else {
-                    eprintln!("⚠️  Background task error: {}", e);
-                }
-            }
-        }
-    } else {
-        // Normal shutdown - wait for tasks to finish gracefully
-        if !background_tasks.is_empty() {
-            eprintln!("\n⏳ Waiting for background tasks to finish...");
-            while let Some(result) = background_tasks.join_next().await {
-                if let Err(e) = result {
-                    eprintln!("⚠️  Background task error: {}", e);
-                }
-            }
-        }
-    }
-
-    eprintln!("✅ Server stopped");
+    // Use common shutdown cleanup handler
+    server_runtime.wait_for_shutdown_cleanup(
+        "Server",
+        Some(&mut resolver_tasks),
+        Some(&mut background_tasks),
+    ).await;
     Ok(())
 }
 

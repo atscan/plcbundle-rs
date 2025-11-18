@@ -139,10 +139,13 @@ pub fn run(cmd: SyncCommand, dir: PathBuf, global_quiet: bool, global_verbose: b
                 }
                 _ = runtime.create_shutdown_future() => {
                     if !global_quiet {
-                        eprintln!("\n⚠️  Shutdown signal received, stopping sync...");
+                        eprintln!("\nShutdown signal received, stopping sync...");
                     }
                 }
             }
+
+            // Use common shutdown cleanup handler (no tasks to clean up for sync)
+            runtime.wait_for_shutdown_cleanup::<()>("Sync", None, None).await;
 
             Ok(())
         } else {
