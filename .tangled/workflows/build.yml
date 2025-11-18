@@ -26,6 +26,10 @@ environment:
   CARGO_TERM_COLOR: "always"
 
 steps:
+  - name: "Set up Rust"
+    command: |
+      rustup default stable
+
   - name: "Download dependencies"
     command: |
       # Ensure cargo registry is populated
