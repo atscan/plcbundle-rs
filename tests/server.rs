@@ -106,7 +106,7 @@ async fn test_server_did_endpoints() -> Result<()> {
     }
     let json: serde_json::Value = serde_json::from_str(&body_text)?;
     assert!(json.is_array());
-    assert!(json.as_array().unwrap().len() >= 1);
+    assert!(!json.as_array().unwrap().is_empty());
     assert_eq!(json.as_array().unwrap()[0]["did"], "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa");
 
     server_handle.abort();

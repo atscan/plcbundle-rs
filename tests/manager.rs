@@ -33,7 +33,7 @@ async fn test_bundle_manager_core() -> Result<()> {
     // Query DID operations and resolve DID
     let did = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
     let did_ops = manager.get_did_operations(did, false, false)?;
-    assert!(did_ops.operations.len() >= 1);
+    assert!(!did_ops.operations.is_empty());
 
     let resolved = manager.resolve_did(did)?;
     assert_eq!(resolved.document.id, did);
@@ -75,9 +75,9 @@ async fn test_range_and_export_iterators() -> Result<()> {
     let arc_mgr = Arc::new(manager.clone_for_arc());
 
     // Range iterator over bundle 1 should yield 10 operations
-    let mut range_iter = arc_mgr.get_operations_range(1, 1, None);
+    let range_iter = arc_mgr.get_operations_range(1, 1, None);
     let mut count = 0usize;
-    while let Some(res) = range_iter.next() {
+    for res in range_iter {
         let op = res?;
         assert!(op.did.starts_with("did:plc:"));
         count += 1;
@@ -93,9 +93,9 @@ async fn test_range_and_export_iterators() -> Result<()> {
         count: Some(5),
         after_timestamp: None,
     };
-    let mut export_iter = plcbundle::ExportIterator::new(Arc::clone(&arc_mgr), spec);
+    let export_iter = plcbundle::ExportIterator::new(Arc::clone(&arc_mgr), spec);
     let mut exported = Vec::new();
-    while let Some(item) = export_iter.next() {
+    for item in export_iter {
         let s = item?;
         exported.push(s);
     }
@@ -130,7 +130,7 @@ async fn test_delete_bundle_and_sample_dids() -> Result<()> {
     // Verify we can query DID operations from the newly built index
     let first_did = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
     let did_ops2 = manager2.get_did_operations(first_did, false, false)?;
-    assert!(did_ops2.operations.len() >= 1);
+    assert!(!did_ops2.operations.is_empty());
 
     Ok(())
 }

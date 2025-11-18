@@ -56,7 +56,7 @@ impl Operation {
         
         let operation = value.get("operation")
             .cloned()
-            .unwrap_or_else(|| Value::new());
+            .unwrap_or_else(Value::new);
         
         // Extract optional fields with defaults
         let cid = value.get("cid")
@@ -133,7 +133,7 @@ mod tests {
 
         let op = Operation::from_json(json).unwrap();
         assert_eq!(op.did, "did:plc:abcdefghijklmnopqrstuvwx");
-        assert_eq!(op.nullified, false);
+        assert!(!op.nullified);
         assert_eq!(op.created_at, "2024-01-01T00:00:00Z");
         assert!(op.cid.is_none());
         assert!(op.raw_json.is_some());
@@ -152,7 +152,7 @@ mod tests {
 
         let op = Operation::from_json(json).unwrap();
         assert_eq!(op.did, "did:plc:abcdefghijklmnopqrstuvwx");
-        assert_eq!(op.nullified, true);
+        assert!(op.nullified);
         assert_eq!(op.created_at, "2024-01-01T12:34:56Z");
         assert_eq!(op.cid, Some("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi".to_string()));
         
@@ -224,7 +224,7 @@ mod tests {
         }"#;
 
         let op = Operation::from_json(json).unwrap();
-        assert_eq!(op.nullified, false);
+        assert!(!op.nullified);
     }
 
     #[test]
@@ -257,7 +257,7 @@ mod tests {
         assert!(filter.did.is_none());
         assert!(filter.operation_type.is_none());
         assert!(filter.time_range.is_none());
-        assert_eq!(filter.include_nullified, false);
+        assert!(!filter.include_nullified);
     }
 
     #[test]
@@ -298,7 +298,7 @@ mod tests {
 
         assert_eq!(op_with_loc.bundle, 1);
         assert_eq!(op_with_loc.position, 42);
-        assert_eq!(op_with_loc.nullified, true);
+        assert!(op_with_loc.nullified);
         assert_eq!(op_with_loc.operation.did, "did:plc:test");
     }
 }

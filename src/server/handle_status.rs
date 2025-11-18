@@ -66,8 +66,7 @@ pub async fn handle_status(State(state): State<ServerState>) -> impl IntoRespons
         response["bundles"]["total_operations"] = json!(total_ops);
     }
 
-    if state.config.sync_mode {
-        if let Ok(mempool_stats) = state.manager.get_mempool_stats() {
+    if state.config.sync_mode && let Ok(mempool_stats) = state.manager.get_mempool_stats() {
             response["mempool"] = json!({
                 "count": mempool_stats.count,
                 "target_bundle": mempool_stats.target_bundle,
@@ -76,7 +75,6 @@ pub async fn handle_status(State(state): State<ServerState>) -> impl IntoRespons
                 "bundle_size": constants::BUNDLE_SIZE,
                 "operations_needed": constants::BUNDLE_SIZE - mempool_stats.count,
             });
-        }
     }
 
     // DID Index stats (get_stats is fast, but we should still avoid holding lock in async context)

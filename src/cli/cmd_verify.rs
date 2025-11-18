@@ -349,8 +349,7 @@ fn verify_chain(
     drop(job_tx); // Close sender, workers will finish
 
     // Collect results and update progress in real-time
-    let mut results: Vec<(usize, u32, VerifyResult)> = Vec::new();
-    results.reserve(bundles.len());
+    let mut results: Vec<(usize, u32, VerifyResult)> = Vec::with_capacity(bundles.len());
 
     let mut verified_count = 0;
     let mut error_count = 0;
@@ -404,10 +403,9 @@ fn verify_chain(
             }
 
             // Store first error for summary
-            if first_error.is_none() {
-                if let Some(first_err) = errors.first() {
+            if first_error.is_none()
+                && let Some(first_err) = errors.first() {
                     first_error = Some(anyhow::anyhow!("{}", first_err));
-                }
             }
         } else {
             verified_count += 1;
@@ -617,7 +615,7 @@ fn verify_range(
         let bundles_per_sec = total as f64 / elapsed.as_secs_f64();
         eprintln!("   Throughput: {:.1} bundles/sec", bundles_per_sec);
 
-        let avg_time = elapsed / total as u32;
+        let avg_time = elapsed / total;
         eprintln!("   Avg/bundle: {:?}", avg_time);
     }
 

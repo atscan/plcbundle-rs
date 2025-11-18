@@ -3,7 +3,7 @@ use super::utils;
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use plcbundle::{BundleManager, constants};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 #[derive(Args)]
@@ -274,10 +274,9 @@ pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize, flush_interval
         fn drop(&mut self) {
             // Cleanup temp files on drop (CTRL+C, panic, or normal exit)
             let did_index = self.manager.get_did_index();
-            if let Some(idx) = did_index.read().unwrap().as_ref() {
-                if let Err(e) = idx.cleanup_temp_files() {
+            if let Some(idx) = did_index.read().unwrap().as_ref()
+                && let Err(e) = idx.cleanup_temp_files() {
                     log::warn!("[Index Build] Failed to cleanup temp files: {}", e);
-                }
             }
         }
     }
@@ -302,10 +301,9 @@ pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize, flush_interval
         Err(e) => {
             // Error occurred - explicitly cleanup temp files before returning
             let did_index = manager_arc.get_did_index();
-            if let Some(idx) = did_index.read().unwrap().as_ref() {
-                if let Err(cleanup_err) = idx.cleanup_temp_files() {
+            if let Some(idx) = did_index.read().unwrap().as_ref()
+                && let Err(cleanup_err) = idx.cleanup_temp_files() {
                     log::warn!("[Index Build] Failed to cleanup temp files after error: {}", cleanup_err);
-                }
             }
             return Err(e);
         }
@@ -433,7 +431,7 @@ pub fn cmd_index_repair(dir: PathBuf, threads: usize, flush_interval: u32) -> Re
         }
         
         // Show compaction recommendation if needed
-        if final_delta_segments >= 50 && final_delta_segments < 100 {
+        if (50..100).contains(&final_delta_segments) {
             eprintln!();
             eprintln!("💡 Tip: Consider running '{} index compact' to optimize performance", constants::BINARY_NAME);
         }
@@ -805,7 +803,7 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool, flush_interval: u32, full: 
     } else if warnings > 0 {
         use super::utils::colors;
         use super::utils::format_number;
-        eprintln!("{}⚠️{}  Index verification passed with warnings", "\x1b[33m", colors::RESET);
+        eprintln!("\x1b[33m⚠️{}  Index verification passed with warnings", colors::RESET);
         eprintln!("  Warnings: {}", warnings);
         eprintln!("  Total DIDs:  {}", format_number(total_dids as u64));
         eprintln!("  Last bundle: {}", format_number(last_bundle as u64));
@@ -831,7 +829,7 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool, flush_interval: u32, full: 
 }
 
 /// Get raw shard data as JSON
-fn get_raw_shard_data_json(dir: &PathBuf, shard_num: u8) -> Result<serde_json::Value> {
+fn get_raw_shard_data_json(dir: &Path, shard_num: u8) -> Result<serde_json::Value> {
     use std::fs;
     use crate::constants;
     use crate::did_index::OpLocation;
@@ -936,7 +934,7 @@ fn get_raw_shard_data_json(dir: &PathBuf, shard_num: u8) -> Result<serde_json::V
 }
 
 /// Get raw delta segment data as JSON
-fn get_raw_segment_data_json(dir: &PathBuf, shard_num: u8, file_name: &str) -> Result<serde_json::Value> {
+fn get_raw_segment_data_json(dir: &Path, shard_num: u8, file_name: &str) -> Result<serde_json::Value> {
     use std::fs;
     use crate::constants;
     use crate::did_index::OpLocation;
@@ -1040,7 +1038,7 @@ fn get_raw_segment_data_json(dir: &PathBuf, shard_num: u8, file_name: &str) -> R
 }
 
 /// Display raw shard data in a readable format
-fn display_raw_shard_data(dir: &PathBuf, shard_num: u8) -> Result<()> {
+fn display_raw_shard_data(dir: &Path, shard_num: u8) -> Result<()> {
     use std::fs;
     use crate::constants;
     use crate::did_index::OpLocation;
@@ -1155,7 +1153,7 @@ fn display_raw_shard_data(dir: &PathBuf, shard_num: u8) -> Result<()> {
 }
 
 /// Display raw delta segment data in a readable format
-fn display_raw_segment_data(dir: &PathBuf, shard_num: u8, file_name: &str) -> Result<()> {
+fn display_raw_segment_data(dir: &Path, shard_num: u8, file_name: &str) -> Result<()> {
     use std::fs;
     use crate::constants;
     use crate::did_index::OpLocation;
@@ -1318,8 +1316,8 @@ fn cmd_index_debug_did_lookup(dir: PathBuf, input: String, json: bool) -> Result
     let lookup_elapsed = lookup_start.elapsed();
 
     // Extract identifier for shard calculation
-    let identifier = if did.starts_with("did:plc:") {
-        &did[8..]
+    let identifier = if let Some(id) = did.strip_prefix("did:plc:") {
+        id
     } else {
         anyhow::bail!("Only did:plc: DIDs are supported");
     };
@@ -1480,17 +1478,16 @@ pub fn cmd_index_debug(dir: PathBuf, shard: Option<u8>, did: Option<String>, jso
 
     if json {
         // Add raw data to JSON output if a specific shard is requested
-        if let Some(shard_num) = shard {
-            if let Some(detail) = shard_details.first_mut() {
+        if let Some(shard_num) = shard
+            && let Some(detail) = shard_details.first_mut() {
                 let base_exists = detail
                     .get("base_exists")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
                 
-                if base_exists {
-                    if let Ok(raw_data) = get_raw_shard_data_json(&dir, shard_num) {
+                if base_exists
+                    && let Ok(raw_data) = get_raw_shard_data_json(&dir, shard_num) {
                         detail.insert("raw_data".to_string(), raw_data);
-                    }
                 }
                 
                 // Add raw data for delta segments
@@ -1498,14 +1495,12 @@ pub fn cmd_index_debug(dir: PathBuf, shard: Option<u8>, did: Option<String>, jso
                     for seg in segments {
                         let file_name = seg.get("file_name").and_then(|v| v.as_str()).unwrap_or("");
                         let exists = seg.get("exists").and_then(|v| v.as_bool()).unwrap_or(false);
-                        if exists && !file_name.is_empty() {
-                            if let Ok(raw_data) = get_raw_segment_data_json(&dir, shard_num, file_name) {
+                        if exists && !file_name.is_empty()
+                            && let Ok(raw_data) = get_raw_segment_data_json(&dir, shard_num, file_name) {
                                 seg.as_object_mut().unwrap().insert("raw_data".to_string(), raw_data);
-                            }
                         }
                     }
                 }
-            }
         }
         
         let json_str = serde_json::to_string_pretty(&shard_details)?;
@@ -1562,8 +1557,8 @@ pub fn cmd_index_debug(dir: PathBuf, shard: Option<u8>, did: Option<String>, jso
             println!("  Total size:        {}", utils::format_bytes(total_size));
             println!("  Next segment ID:   {}", next_segment_id);
 
-            if let Some(segments) = detail.get("segments").and_then(|v| v.as_array()) {
-                if !segments.is_empty() {
+            if let Some(segments) = detail.get("segments").and_then(|v| v.as_array())
+                && !segments.is_empty() {
                     println!("\n  Delta Segments:");
                     println!("  ───────────────────────────────────────");
                     for (idx, seg) in segments.iter().enumerate() {
@@ -1596,7 +1591,6 @@ pub fn cmd_index_debug(dir: PathBuf, shard: Option<u8>, did: Option<String>, jso
                                 .unwrap_or(0)
                         );
                     }
-                }
             }
 
             // Show raw shard data

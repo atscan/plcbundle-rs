@@ -122,7 +122,7 @@ pub struct CleanPreviewFile {
 }
 
 /// Options for configuring BundleManager initialization
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ManagerOptions {
     /// Optional handle resolver URL for resolving @handle.did identifiers
     pub handle_resolver_url: Option<String>,
@@ -130,16 +130,6 @@ pub struct ManagerOptions {
     pub preload_mempool: bool,
     /// Whether to enable verbose logging
     pub verbose: bool,
-}
-
-impl Default for ManagerOptions {
-    fn default() -> Self {
-        Self {
-            handle_resolver_url: None,
-            preload_mempool: false,
-            verbose: false,
-        }
-    }
 }
 
 /// Trait to allow passing ManagerOptions or using defaults
@@ -226,15 +216,13 @@ impl BundleManager {
             } else {
                 let mempool_preload_time = mempool_preload_start.elapsed();
                 let mempool_preload_ms = mempool_preload_time.as_secs_f64() * 1000.0;
-                if let Ok(stats) = manager.get_mempool_stats() {
-                    if stats.count > 0 {
-                        log::debug!(
-                            "[BundleManager] Pre-loaded mempool: {} operations for bundle {} ({:.3}ms)",
-                            stats.count,
-                            stats.target_bundle,
-                            mempool_preload_ms
-                        );
-                    }
+                if let Ok(stats) = manager.get_mempool_stats() && stats.count > 0 {
+                    log::debug!(
+                        "[BundleManager] Pre-loaded mempool: {} operations for bundle {} ({:.3}ms)",
+                        stats.count,
+                        stats.target_bundle,
+                        mempool_preload_ms
+                    );
                 }
             }
         }
@@ -301,14 +289,15 @@ impl BundleManager {
 
         // Try frame-based access first (new format)
         match self.get_operation_raw_with_frames(&bundle_path, position) {
-            Ok(json) => return Ok(json),
+            Ok(json) => Ok(json),
             Err(e) => {
                 // Fall back to legacy sequential scan
                 // This happens for old bundles without frame index
                 if let Ok(json) = self.get_operation_raw_legacy(&bundle_path, position) {
-                    return Ok(json);
+                    Ok(json)
+                } else {
+                    Err(e)
                 }
-                return Err(e);
             }
         }
     }
@@ -632,7 +621,7 @@ impl BundleManager {
             log::debug!("[Resolve] Found latest non-nullified operation in mempool, skipping bundle lookup");
 
             // Build document from latest mempool operation
-            let document = crate::resolver::resolve_did_document(did, &[operation.clone()])?;
+            let document = crate::resolver::resolve_did_document(did, std::slice::from_ref(&operation))?;
             let load_time = load_start.elapsed();
 
             return Ok(ResolveResult {
@@ -668,15 +657,13 @@ impl BundleManager {
         let mut latest_time = DateTime::parse_from_rfc3339("1970-01-01T00:00:00Z").unwrap();
         
         for loc in &locations {
-            if !loc.nullified() {
-                if let Ok(op) = self.get_operation(loc.bundle() as u32, loc.position() as usize) {
-                    if let Ok(op_time) = DateTime::parse_from_rfc3339(&op.created_at) {
-                        if op_time > latest_time {
-                            latest_time = op_time;
-                            latest_operation = Some((op, loc.bundle() as u32, loc.position() as usize));
-                        }
-                    }
-                }
+            if !loc.nullified()
+                && let Ok(op) = self.get_operation(loc.bundle() as u32, loc.position() as usize)
+                && let Ok(op_time) = DateTime::parse_from_rfc3339(&op.created_at)
+                && op_time > latest_time
+            {
+                latest_time = op_time;
+                latest_operation = Some((op, loc.bundle() as u32, loc.position() as usize));
             }
         }
         let load_time = load_start.elapsed();
@@ -685,7 +672,7 @@ impl BundleManager {
             .ok_or_else(|| anyhow::anyhow!("DID not found: {} (checked bundles and mempool)", did))?;
 
         // Build document from latest bundle operation
-        let document = crate::resolver::resolve_did_document(did, &[operation.clone()])?;
+        let document = crate::resolver::resolve_did_document(did, std::slice::from_ref(&operation))?;
 
         Ok(ResolveResult {
             document,
@@ -1261,11 +1248,10 @@ impl BundleManager {
         // Also delete all mempool files to prevent stale data from previous bundles
         if let Ok(entries) = std::fs::read_dir(&self.directory) {
             for entry in entries.flatten() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if name.starts_with(constants::MEMPOOL_FILE_PREFIX) && name.ends_with(".jsonl")
-                    {
-                        let _ = std::fs::remove_file(entry.path());
-                    }
+                if let Some(name) = entry.file_name().to_str()
+                    && name.starts_with(constants::MEMPOOL_FILE_PREFIX) && name.ends_with(".jsonl")
+                {
+                    let _ = std::fs::remove_file(entry.path());
                 }
             }
         }
@@ -1321,25 +1307,22 @@ impl BundleManager {
         let mut found_stale_files = false;
         if let Ok(entries) = std::fs::read_dir(&self.directory) {
             for entry in entries.flatten() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if name.starts_with(constants::MEMPOOL_FILE_PREFIX) && name.ends_with(".jsonl")
-                    {
-                        // Extract bundle number from filename: plc_mempool_NNNNNN.jsonl
-                        if let Some(num_str) = name
-                            .strip_prefix(constants::MEMPOOL_FILE_PREFIX)
-                            .and_then(|s| s.strip_suffix(".jsonl"))
-                        {
-                            if let Ok(bundle_num) = num_str.parse::<u32>() {
-                                // Delete mempool files for completed bundles or way future bundles
-                                if bundle_num <= last_bundle || bundle_num > next_bundle_num {
-                                    log::warn!(
-                                        "Removing stale mempool file for bundle {:06}",
-                                        bundle_num
-                                    );
-                                    let _ = std::fs::remove_file(entry.path());
-                                    found_stale_files = true;
-                                }
-                            }
+                if let Some(name) = entry.file_name().to_str()
+                    && name.starts_with(constants::MEMPOOL_FILE_PREFIX) && name.ends_with(".jsonl")
+                {
+                    // Extract bundle number from filename: plc_mempool_NNNNNN.jsonl
+                    if let Some(num_str) = name
+                        .strip_prefix(constants::MEMPOOL_FILE_PREFIX)
+                        .and_then(|s| s.strip_suffix(".jsonl"))
+                        && let Ok(bundle_num) = num_str.parse::<u32>() {
+                        // Delete mempool files for completed bundles or way future bundles
+                        if bundle_num <= last_bundle || bundle_num > next_bundle_num {
+                            log::warn!(
+                                "Removing stale mempool file for bundle {:06}",
+                                bundle_num
+                            );
+                            let _ = std::fs::remove_file(entry.path());
+                            found_stale_files = true;
                         }
                     }
                 }
@@ -1363,19 +1346,16 @@ impl BundleManager {
         }
 
         // Get the last operation from the previous bundle
-        let last_bundle_time = if next_bundle_num > 1 {
-            let last_bundle_result =
-                self.load_bundle(next_bundle_num - 1, LoadOptions::default())?;
-            if let Some(last_op) = last_bundle_result.operations.last() {
-                chrono::DateTime::parse_from_rfc3339(&last_op.created_at)
-                    .ok()
-                    .map(|dt| dt.with_timezone(&chrono::Utc))
+            let last_bundle_time = if next_bundle_num > 1
+                && let Ok(last_bundle_result) = self.load_bundle(next_bundle_num - 1, LoadOptions::default()) {
+                last_bundle_result.operations.last().and_then(|last_op| {
+                    chrono::DateTime::parse_from_rfc3339(&last_op.created_at)
+                        .ok()
+                        .map(|dt| dt.with_timezone(&chrono::Utc))
+                })
             } else {
                 None
-            }
-        } else {
-            None
-        };
+            };
 
         // Special case: When creating the first bundle (next_bundle_num == 1, meaning
         // last_bundle == 0, i.e., empty repository), any existing mempool is likely stale
@@ -1397,8 +1377,8 @@ impl BundleManager {
         }
 
         // Check if mempool operations are chronologically valid relative to last bundle
-        if let Some(last_time) = last_bundle_time {
-            if let Some(first_mempool_time) = mempool_stats.first_time {
+        if let Some(last_time) = last_bundle_time
+            && let Some(first_mempool_time) = mempool_stats.first_time {
                 // Case 1: Mempool operations are BEFORE the last bundle (definitely stale)
                 if first_mempool_time < last_time {
                     log::warn!("Detected stale mempool data (operations before last bundle)");
@@ -1456,16 +1436,13 @@ impl BundleManager {
                             "This likely indicates a previous failed sync attempt. Clearing mempool..."
                         );
                         self.clear_mempool()?;
-                    } else {
-                        if *self.verbose.lock().unwrap() {
-                            log::debug!(
-                                "Mempool appears recent, allowing resume despite close timestamp"
-                            );
-                        }
+                    } else if *self.verbose.lock().unwrap() {
+                        log::debug!(
+                            "Mempool appears recent, allowing resume despite close timestamp"
+                        );
                     }
                     return Ok(());
                 }
-            }
         }
 
         // Check if mempool has way too many operations (likely from failed previous attempt)
@@ -1621,24 +1598,22 @@ impl BundleManager {
         // If mempool has operations, update cursor AND boundaries from mempool
         // (mempool operations already had boundary dedup applied when they were added)
         let mempool_stats = self.get_mempool_stats()?;
-        if mempool_stats.count > 0 {
-            if let Some(last_time) = mempool_stats.last_time {
-                if *self.verbose.lock().unwrap() {
-                    log::debug!(
-                        "Mempool has {} ops, resuming from {}",
-                        mempool_stats.count,
-                        last_time.format("%Y-%m-%dT%H:%M:%S")
-                    );
-                }
-                after_time = last_time.to_rfc3339();
+        if mempool_stats.count > 0 && let Some(last_time) = mempool_stats.last_time {
+            if *self.verbose.lock().unwrap() {
+                log::debug!(
+                    "Mempool has {} ops, resuming from {}",
+                    mempool_stats.count,
+                    last_time.format("%Y-%m-%dT%H:%M:%S")
+                );
+            }
+            after_time = last_time.to_rfc3339();
 
-                // Calculate boundaries from MEMPOOL for next fetch
-                let mempool_ops = self.get_mempool_operations()?;
-                if !mempool_ops.is_empty() {
-                    prev_boundary = get_boundary_cids(&mempool_ops);
-                    if *self.verbose.lock().unwrap() {
-                        log::info!("Using {} boundary CIDs from mempool", prev_boundary.len());
-                    }
+            // Calculate boundaries from MEMPOOL for next fetch
+            let mempool_ops = self.get_mempool_operations()?;
+            if !mempool_ops.is_empty() {
+                prev_boundary = get_boundary_cids(&mempool_ops);
+                if *self.verbose.lock().unwrap() {
+                    log::info!("Using {} boundary CIDs from mempool", prev_boundary.len());
                 }
             }
         }
@@ -1989,10 +1964,8 @@ impl BundleManager {
                     synced += 1;
 
                     // Check if we've reached the limit
-                    if let Some(max) = max_bundles {
-                        if synced >= max {
-                            break;
-                        }
+                    if let Some(max) = max_bundles && synced >= max {
+                        break;
                     }
                 }
                 Ok(SyncResult::CaughtUp { .. }) => {
@@ -2041,32 +2014,22 @@ impl BundleManager {
         let did_count = unique_dids.len() as u32;
 
         // Use multi-frame compression for better performance on large bundles
-        let serialize_time;
-        let compress_time;
-        let uncompressed_size;
-        let compressed_size;
-        let frame_count;
-        let frame_offsets;
-        let compressed_frames;
-        let content_hash;
 
         // Compress operations to frames using parallel compression
-        let compress_result = {
-            let result = crate::bundle_format::compress_operations_to_frames_parallel(&operations)?;
-            serialize_time = std::time::Duration::from_secs_f64(result.serialize_time_ms / 1000.0);
-            compress_time = std::time::Duration::from_secs_f64(result.compress_time_ms / 1000.0);
-            result
-        };
+        let compress_result = crate::bundle_format::compress_operations_to_frames_parallel(&operations)?;
 
-        uncompressed_size = compress_result.uncompressed_size;
-        compressed_size = compress_result.compressed_size;
-        frame_count = compress_result.compressed_frames.len();
-        frame_offsets = compress_result.frame_offsets;
-        compressed_frames = compress_result.compressed_frames;
+        let serialize_time = std::time::Duration::from_secs_f64(compress_result.serialize_time_ms / 1000.0);
+        let compress_time = std::time::Duration::from_secs_f64(compress_result.compress_time_ms / 1000.0);
+
+        let uncompressed_size = compress_result.uncompressed_size;
+        let compressed_size = compress_result.compressed_size;
+        let frame_count = compress_result.compressed_frames.len();
+        let frame_offsets = compress_result.frame_offsets;
+        let compressed_frames = compress_result.compressed_frames;
 
         // Calculate content hash from uncompressed data
         let hash_start = Instant::now();
-        content_hash = {
+        let content_hash = {
             use sha2::{Digest, Sha256};
             let mut hasher = Sha256::new();
             let mut missing_raw_json = 0;
@@ -2833,18 +2796,16 @@ impl BundleManager {
                     continue;
                 }
 
-                if let Some(ext) = path.extension() {
-                    if ext == "tmp" {
-                        let file_size = match fs::metadata(&path) {
-                            Ok(meta) => meta.len(),
-                            Err(_) => 0,
-                        };
-                        total_size += file_size;
-                        files.push(CleanPreviewFile {
-                            path,
-                            size: file_size,
-                        });
-                    }
+                if path.extension().is_some_and(|ext| ext == "tmp") {
+                    let file_size = match fs::metadata(&path) {
+                        Ok(meta) => meta.len(),
+                        Err(_) => 0,
+                    };
+                    total_size += file_size;
+                    files.push(CleanPreviewFile {
+                        path,
+                        size: file_size,
+                    });
                 }
             }
         }
@@ -2868,32 +2829,28 @@ impl BundleManager {
 
             // Scan shards directory (.plcbundle/shards/)
             let shards_dir = did_index_dir.join(constants::DID_INDEX_SHARDS);
-            if shards_dir.exists() {
-                if let Ok(entries) = fs::read_dir(&shards_dir) {
-                    for entry in entries {
-                        let entry = match entry {
-                            Ok(e) => e,
-                            Err(_) => continue,
+            if shards_dir.exists() && let Ok(entries) = fs::read_dir(&shards_dir) {
+                for entry in entries {
+                    let entry = match entry {
+                        Ok(e) => e,
+                        Err(_) => continue,
+                    };
+
+                    let path = entry.path();
+                    if !path.is_file() {
+                        continue;
+                    }
+
+                    if path.extension().is_some_and(|ext| ext == "tmp") {
+                        let file_size = match fs::metadata(&path) {
+                            Ok(meta) => meta.len(),
+                            Err(_) => 0,
                         };
-
-                        let path = entry.path();
-                        if !path.is_file() {
-                            continue;
-                        }
-
-                        if let Some(ext) = path.extension() {
-                            if ext == "tmp" {
-                                let file_size = match fs::metadata(&path) {
-                                    Ok(meta) => meta.len(),
-                                    Err(_) => 0,
-                                };
-                                total_size += file_size;
-                                files.push(CleanPreviewFile {
-                                    path,
-                                    size: file_size,
-                                });
-                            }
-                        }
+                        total_size += file_size;
+                        files.push(CleanPreviewFile {
+                            path,
+                            size: file_size,
+                        });
                     }
                 }
             }
@@ -2945,32 +2902,30 @@ impl BundleManager {
                     continue;
                 }
 
-                if let Some(ext) = path.extension() {
-                    if ext == "tmp" {
-                        let file_size = match fs::metadata(&path) {
-                            Ok(meta) => {
-                                let size = meta.len();
-                                bytes_freed += size;
-                                size
-                            }
-                            Err(_) => 0
-                        };
+                if path.extension().is_some_and(|ext| ext == "tmp") {
+                    let file_size = match fs::metadata(&path) {
+                        Ok(meta) => {
+                            let size = meta.len();
+                            bytes_freed += size;
+                            size
+                        }
+                        Err(_) => 0
+                    };
 
-                        match fs::remove_file(&path) {
-                            Ok(_) => {
-                                files_removed += 1;
-                                if verbose {
-                                    log::info!("  ✓ Removed: {} ({})", 
-                                        path.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
-                                        crate::format::format_bytes(file_size));
-                                }
+                    match fs::remove_file(&path) {
+                        Ok(_) => {
+                            files_removed += 1;
+                            if verbose {
+                                log::info!("  ✓ Removed: {} ({})", 
+                                    path.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+                                    crate::format::format_bytes(file_size));
                             }
-                            Err(e) => {
-                                let error_msg = format!("Failed to remove {}: {}", path.display(), e);
-                                errors.push(error_msg.clone());
-                                if verbose {
-                                    log::warn!("  ✗ {}", error_msg);
-                                }
+                        }
+                        Err(e) => {
+                            let error_msg = format!("Failed to remove {}: {}", path.display(), e);
+                            errors.push(error_msg.clone());
+                            if verbose {
+                                log::warn!("  ✗ {}", error_msg);
                             }
                         }
                     }
@@ -3037,32 +2992,30 @@ impl BundleManager {
                             continue;
                         }
 
-                        if let Some(ext) = path.extension() {
-                            if ext == "tmp" {
-                                let file_size = match fs::metadata(&path) {
-                                    Ok(meta) => {
-                                        let size = meta.len();
-                                        bytes_freed += size;
-                                        size
-                                    }
-                                    Err(_) => 0
-                                };
+                        if path.extension().is_some_and(|ext| ext == "tmp") {
+                            let file_size = match fs::metadata(&path) {
+                                Ok(meta) => {
+                                    let size = meta.len();
+                                    bytes_freed += size;
+                                    size
+                                }
+                                Err(_) => 0
+                            };
 
-                                match fs::remove_file(&path) {
-                                    Ok(_) => {
-                                        files_removed += 1;
-                                        if verbose {
-                                            log::info!("  ✓ Removed: {} ({})", 
-                                                path.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
-                                                crate::format::format_bytes(file_size));
-                                        }
+                            match fs::remove_file(&path) {
+                                Ok(_) => {
+                                    files_removed += 1;
+                                    if verbose {
+                                        log::info!("  ✓ Removed: {} ({})", 
+                                            path.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+                                            crate::format::format_bytes(file_size));
                                     }
-                                    Err(e) => {
-                                        let error_msg = format!("Failed to remove {}: {}", path.display(), e);
-                                        errors.push(error_msg.clone());
-                                        if verbose {
-                                            log::warn!("  ✗ {}", error_msg);
-                                        }
+                                }
+                                Err(e) => {
+                                    let error_msg = format!("Failed to remove {}: {}", path.display(), e);
+                                    errors.push(error_msg.clone());
+                                    if verbose {
+                                        log::warn!("  ✗ {}", error_msg);
                                     }
                                 }
                             }
@@ -3333,16 +3286,14 @@ impl BundleManager {
     }
 
     fn matches_filter(&self, op: &Operation, filter: &OperationFilter) -> bool {
-        if let Some(ref did) = filter.did {
-            if &op.did != did {
-                return false;
-            }
+        if let Some(ref did) = filter.did
+            && &op.did != did {
+            return false;
         }
 
-        if let Some(ref op_type) = filter.operation_type {
-            if &op.operation != op_type {
-                return false;
-            }
+        if let Some(ref op_type) = filter.operation_type
+            && &op.operation != op_type {
+            return false;
         }
 
         if !filter.include_nullified && op.nullified {

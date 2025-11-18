@@ -55,12 +55,7 @@ pub fn is_valid_did_or_handle(input: &str) -> bool {
 
     // Must not have invalid characters
     for c in input.chars() {
-        if !((c >= 'a' && c <= 'z')
-            || (c >= 'A' && c <= 'Z')
-            || (c >= '0' && c <= '9')
-            || c == '.'
-            || c == '-')
-        {
+        if !(c.is_ascii_lowercase() || c.is_ascii_uppercase() || c.is_ascii_digit() || c == '.' || c == '-') {
             return false;
         }
     }
@@ -121,28 +116,21 @@ pub fn parse_operation_pointer(pointer: &str) -> anyhow::Result<(u32, usize)> {
 
 /// Extract base URL from request headers and URI
 pub fn extract_base_url(headers: &HeaderMap, uri: &Uri) -> String {
-    if let Some(host) = headers.get("host") {
-        if let Ok(host_str) = host.to_str() {
+    if let Some(host_str) = headers.get("host").and_then(|h| h.to_str().ok()) {
             // Check if request is HTTPS (from X-Forwarded-Proto or X-Forwarded-Ssl)
-            let scheme = if headers
+            let is_https = headers
                 .get("x-forwarded-proto")
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s == "https")
                 .unwrap_or(false)
-            {
-                "https"
-            } else if headers
-                .get("x-forwarded-ssl")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s == "on")
-                .unwrap_or(false)
-            {
-                "https"
-            } else {
-                "http"
-            };
+                || headers
+                    .get("x-forwarded-ssl")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s == "on")
+                    .unwrap_or(false);
+
+            let scheme = if is_https { "https" } else { "http" };
             return format!("{}://{}", scheme, host_str);
-        }
     }
     
     if let Some(authority) = uri.authority() {
@@ -170,20 +158,14 @@ pub fn parse_duration(s: &str) -> anyhow::Result<tokio::time::Duration> {
     
     // Simple parser: "60s", "5m", "1h"
     let s = s.trim();
-    if s.ends_with('s') {
-        let secs: u64 = s[..s.len() - 1]
-            .parse()
-            .context("Invalid duration format")?;
+    if let Some(stripped) = s.strip_suffix('s') {
+        let secs: u64 = stripped.parse().context("Invalid duration format")?;
         Ok(Duration::from_secs(secs))
-    } else if s.ends_with('m') {
-        let mins: u64 = s[..s.len() - 1]
-            .parse()
-            .context("Invalid duration format")?;
+    } else if let Some(stripped) = s.strip_suffix('m') {
+        let mins: u64 = stripped.parse().context("Invalid duration format")?;
         Ok(Duration::from_secs(mins * 60))
-    } else if s.ends_with('h') {
-        let hours: u64 = s[..s.len() - 1]
-            .parse()
-            .context("Invalid duration format")?;
+    } else if let Some(stripped) = s.strip_suffix('h') {
+        let hours: u64 = stripped.parse().context("Invalid duration format")?;
         Ok(Duration::from_secs(hours * 3600))
     } else {
         // Try parsing as seconds

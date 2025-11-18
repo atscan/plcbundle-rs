@@ -328,7 +328,7 @@ fn collect_timeline_stats(
         .max()
         .cloned();
 
-    let time_span_days = if let (Some(ref earliest), Some(ref latest)) = (earliest_time.as_ref(), latest_time.as_ref()) {
+    let time_span_days = if let (Some(earliest), Some(latest)) = (earliest_time.as_ref(), latest_time.as_ref()) {
         if let (Ok(e), Ok(l)) = (
             chrono::DateTime::parse_from_rfc3339(earliest),
             chrono::DateTime::parse_from_rfc3339(latest),

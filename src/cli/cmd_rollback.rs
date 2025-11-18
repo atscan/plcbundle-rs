@@ -3,7 +3,7 @@ use anyhow::{Result, bail};
 use clap::Args;
 use plcbundle::BundleManager;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Args)]
 #[command(
@@ -106,7 +106,7 @@ fn calculate_rollback_plan(manager: &BundleManager, cmd: &RollbackCommand) -> Re
         bail!("cannot use both --to and --last together");
     }
 
-    if super::utils::is_repository_empty(&manager) {
+    if super::utils::is_repository_empty(manager) {
         bail!("no bundles to rollback");
     }
 
@@ -194,7 +194,7 @@ fn calculate_rollback_plan(manager: &BundleManager, cmd: &RollbackCommand) -> Re
     })
 }
 
-fn display_rollback_plan(dir: &PathBuf, plan: &RollbackPlan) -> Result<()> {
+fn display_rollback_plan(dir: &Path, plan: &RollbackPlan) -> Result<()> {
     println!("╔════════════════════════════════════════════════════════════════╗");
     println!("║                      ROLLBACK PLAN                             ║");
     println!("╚════════════════════════════════════════════════════════════════╝\n");

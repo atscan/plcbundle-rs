@@ -406,7 +406,7 @@ pub fn cmd_op_find(dir: PathBuf, cid: String, quiet: bool) -> Result<()> {
         };
 
         for (i, op) in result.operations.iter().enumerate() {
-            let cid_matches = op.cid.as_ref().map_or(false, |c| c == &cid);
+            let cid_matches = op.cid.as_ref() == Some(&cid);
 
             if cid_matches {
                 let global_pos =

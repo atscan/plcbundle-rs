@@ -93,7 +93,7 @@ pub fn read_skippable_frame<R: Read>(reader: &mut R) -> Result<(u32, Vec<u8>)> {
     let magic = u32::from_le_bytes(magic_buf);
 
     // Verify it's a skippable frame (0x184D2A50 - 0x184D2A5F)
-    if magic < 0x184D2A50 || magic > 0x184D2A5F {
+    if !(0x184D2A50..=0x184D2A5F).contains(&magic) {
         anyhow::bail!("Not a skippable frame: magic=0x{:08X}", magic);
     }
 
@@ -223,7 +223,7 @@ pub fn compress_operations_to_frames_parallel(
     use rayon::prelude::*;
     use std::time::Instant;
 
-    let num_frames = (operations.len() + constants::FRAME_SIZE - 1) / constants::FRAME_SIZE;
+    let num_frames = operations.len().div_ceil(constants::FRAME_SIZE);
 
     // Process all frames in parallel
     let frame_results: Vec<_> = (0..num_frames)
@@ -327,7 +327,7 @@ pub fn compress_operations_to_frames(
     let mut total_compress_time = std::time::Duration::ZERO;
 
     // Process operations in frames of FRAME_SIZE
-    let num_frames = (operations.len() + constants::FRAME_SIZE - 1) / constants::FRAME_SIZE;
+    let num_frames = operations.len().div_ceil(constants::FRAME_SIZE);
 
     for frame_idx in 0..num_frames {
         let frame_start = frame_idx * constants::FRAME_SIZE;
@@ -462,7 +462,7 @@ pub fn load_bundle_as_json_strings(path: &std::path::Path) -> Result<Vec<String>
     reader.read_exact(&mut magic_buf)?;
     let magic = u32::from_le_bytes(magic_buf);
 
-    if magic >= 0x184D2A50 && magic <= 0x184D2A5F {
+    if (0x184D2A50..=0x184D2A5F).contains(&magic) {
         // Skip metadata frame
         let mut size_buf = [0u8; 4];
         reader.read_exact(&mut size_buf)?;
@@ -486,6 +486,7 @@ pub fn load_bundle_as_json_strings(path: &std::path::Path) -> Result<Vec<String>
 }
 
 /// Create bundle metadata structure
+#[allow(clippy::too_many_arguments)]
 pub fn create_bundle_metadata(
     bundle_number: u32,
     origin: &str,

@@ -589,8 +589,8 @@ fn display_server_info(manager: &BundleManager, addr: &str, config: &StartupConf
     use crate::server::get_ascii_art_banner;
     
     // Print ASCII art banner
-    eprint!(
-        "{}\n",
+    eprintln!(
+        "{}",
         get_ascii_art_banner(env!("CARGO_PKG_VERSION"))
     );
     eprintln!("{} HTTP server started", constants::BINARY_NAME);

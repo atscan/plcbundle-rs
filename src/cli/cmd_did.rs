@@ -294,7 +294,7 @@ pub fn cmd_did_resolve(
                 let origin = &local_index.origin;
                 
                 // If origin is "local" or empty, use default PLC directory
-                let url = if origin == "local" || origin.is_empty() {
+                if origin == "local" || origin.is_empty() {
                     if verbose {
                         log::info!("Origin is '{}', using default PLC directory: {}", origin, constants::DEFAULT_PLC_DIRECTORY_URL);
                     }
@@ -304,8 +304,7 @@ pub fn cmd_did_resolve(
                         log::info!("Using repository origin as PLC directory: {}", origin);
                     }
                     origin.clone()
-                };
-                url
+                }
             }
         };
 
@@ -345,8 +344,7 @@ pub fn cmd_did_resolve(
     }
 
     // Get DID index for shard calculation (only for PLC DIDs)
-    if did.starts_with("did:plc:") {
-        let identifier = &did[8..]; // Strip "did:plc:" prefix
+    if let Some(identifier) = did.strip_prefix("did:plc:") {
         let shard_num = calculate_shard_for_display(identifier);
         log::debug!(
             "DID {} -> identifier '{}' -> shard {:02x}",
@@ -732,6 +730,7 @@ pub fn cmd_did_handle(
 
 // DID LOOKUP - Find all operations for a DID
 
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_did_lookup(
     dir: PathBuf,
     input: String,
@@ -771,8 +770,7 @@ pub fn cmd_did_lookup(
     }
 
     // Get DID index for shard calculation (only for PLC DIDs)
-    if did.starts_with("did:plc:") {
-        let identifier = &did[8..]; // Strip "did:plc:" prefix
+    if let Some(identifier) = did.strip_prefix("did:plc:") {
         let shard_num = calculate_shard_for_display(identifier);
         log::debug!(
             "DID {} -> identifier '{}' -> shard {:02x}",
@@ -997,6 +995,7 @@ fn output_lookup_json(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn display_lookup_results(
     did: &str,
     bundled_ops: &[plcbundle::OperationWithLocation],
@@ -1095,13 +1094,10 @@ fn display_lookup_results(
             }
             if let Some(handle) = op_val.get("handle").and_then(|v| v.as_str()) {
                 eprintln!("      handle: {}", handle);
-            } else {
-                if let Some(aka) = op_val.get("alsoKnownAs").and_then(|v| v.as_array()) {
-                    if let Some(aka_str) = aka.first().and_then(|v| v.as_str()) {
-                        let handle = aka_str.strip_prefix("at://").unwrap_or(aka_str);
-                        eprintln!("      handle: {}", handle);
-                    }
-                }
+            } else if let Some(aka) = op_val.get("alsoKnownAs").and_then(|v| v.as_array())
+                && let Some(aka_str) = aka.first().and_then(|v| v.as_str()) {
+                    let handle = aka_str.strip_prefix("at://").unwrap_or(aka_str);
+                    eprintln!("      handle: {}", handle);
             }
         }
     }
@@ -1176,9 +1172,8 @@ fn get_lookup_field_value(
             }
         }
         "cid" => {
-            owl.operation.cid.as_ref()
-                .map(|c| c.clone())
-                .unwrap_or_else(|| "".to_string())
+            owl.operation.cid.clone()
+                .unwrap_or_default()
         }
         "created_at" | "created" | "date" | "time" => owl.operation.created_at.clone(),
         "nullified" => {
@@ -1213,9 +1208,8 @@ fn get_lookup_field_value_mempool(op: &plcbundle::Operation, field: &str) -> Str
         "global" | "global_pos" => "".to_string(),
         "status" => "✓".to_string(),
         "cid" => {
-            op.cid.as_ref()
-                .map(|c| c.clone())
-                .unwrap_or_else(|| "".to_string())
+            op.cid.clone()
+                .unwrap_or_default()
         }
         "created_at" | "created" | "date" | "time" => op.created_at.clone(),
         "nullified" => "false".to_string(),
@@ -1650,8 +1644,8 @@ pub fn cmd_did_validate(
         }
 
         // Update rotation keys if this operation changes them
-        if let Some(new_rotation_keys) = entry.operation.rotation_keys() {
-            if new_rotation_keys != &current_rotation_keys {
+        if let Some(new_rotation_keys) = entry.operation.rotation_keys()
+            && new_rotation_keys != current_rotation_keys {
                 if verbose {
                     println!("      🔄 Rotation keys updated by this operation");
                     println!("         Old keys: {}", current_rotation_keys.len());
@@ -1661,7 +1655,6 @@ pub fn cmd_did_validate(
                     }
                 }
                 current_rotation_keys = new_rotation_keys.to_vec();
-            }
         }
     }
 
@@ -1737,24 +1730,19 @@ fn build_canonical_chain_indices(audit_log: &[AuditLogEntry]) -> Vec<usize> {
     let mut current_cid = genesis.cid.clone();
 
     // Follow the chain, preferring non-nullified operations
-    loop {
-        if let Some(indices) = prev_to_indices.get(&current_cid) {
-            // Find the first non-nullified operation
-            if let Some(&next_idx) = indices.iter().find(|&&idx| !audit_log[idx].nullified) {
+    while let Some(indices) = prev_to_indices.get(&current_cid) {
+        // Find the first non-nullified operation
+        if let Some(&next_idx) = indices.iter().find(|&&idx| !audit_log[idx].nullified) {
+            canonical.push(next_idx);
+            current_cid = audit_log[next_idx].cid.clone();
+        } else {
+            // All operations at this point are nullified - try to find any operation
+            if let Some(&next_idx) = indices.first() {
                 canonical.push(next_idx);
                 current_cid = audit_log[next_idx].cid.clone();
             } else {
-                // All operations at this point are nullified - try to find any operation
-                if let Some(&next_idx) = indices.first() {
-                    canonical.push(next_idx);
-                    current_cid = audit_log[next_idx].cid.clone();
-                } else {
-                    break;
-                }
+                break;
             }
-        } else {
-            // No more operations
-            break;
         }
     }
 
@@ -2017,10 +2005,9 @@ fn resolve_fork(fork_ops: &mut [ForkOperation]) -> String {
 /// Find which rotation key signed an operation
 fn find_signing_key(operation: &Operation, rotation_keys: &[String]) -> (Option<usize>, Option<String>) {
     for (index, key_did) in rotation_keys.iter().enumerate() {
-        if let Ok(verifying_key) = VerifyingKey::from_did_key(key_did) {
-            if operation.verify(&[verifying_key]).is_ok() {
+        if let Ok(verifying_key) = VerifyingKey::from_did_key(key_did)
+            && operation.verify(&[verifying_key]).is_ok() {
                 return (Some(index), Some(key_did.clone()));
-            }
         }
     }
     (None, None)
@@ -2074,8 +2061,8 @@ fn visualize_tree(audit_log: &[AuditLogEntry], forks: &[ForkPoint], verbose: boo
         let prev = entry.operation.prev();
 
         // Check if this operation is part of a fork
-        if let Some(_prev_cid) = prev {
-            if let Some(fork) = fork_map.get(&entry.cid) {
+        if let Some(_prev_cid) = prev
+            && let Some(fork) = fork_map.get(&entry.cid) {
                 // This is a fork point
                 if !processed_forks.contains(&fork.prev_cid) {
                     processed_forks.insert(fork.prev_cid.clone());
@@ -2101,10 +2088,9 @@ fn visualize_tree(audit_log: &[AuditLogEntry], forks: &[ForkPoint], verbose: boo
 
                         if let Some(key_idx) = fork_op.signing_key_index {
                             println!("     │  Signed by: rotation_key[{}]", key_idx);
-                            if verbose {
-                                if let Some(key) = &fork_op.signing_key {
+                            if verbose
+                                && let Some(key) = &fork_op.signing_key {
                                     println!("     │  Key: {}", truncate_cid(key));
-                                }
                             }
                         }
 
@@ -2128,7 +2114,6 @@ fn visualize_tree(audit_log: &[AuditLogEntry], forks: &[ForkPoint], verbose: boo
                     println!();
                 }
                 continue;
-            }
         }
 
         // Regular operation (not part of a fork)
@@ -2136,10 +2121,9 @@ fn visualize_tree(audit_log: &[AuditLogEntry], forks: &[ForkPoint], verbose: boo
             println!("🌱 Genesis");
             println!("   CID: {}", truncate_cid(&entry.cid));
             println!("   Timestamp: {}", entry.created_at);
-            if verbose {
-                if let Operation::PlcOperation { rotation_keys, .. } = &entry.operation {
+            if verbose
+                && let Operation::PlcOperation { rotation_keys, .. } = &entry.operation {
                     println!("   Rotation keys: {}", rotation_keys.len());
-                }
             }
             println!();
         }

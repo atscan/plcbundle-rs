@@ -4,7 +4,7 @@ use clap::{Args, ValueHint};
 use plcbundle::{BundleManager, constants, remote};
 use sonic_rs::JsonValueTrait;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::runtime::Runtime;
 
 use super::utils::colors;
@@ -96,7 +96,7 @@ pub fn run(cmd: CompareCommand, dir: PathBuf, global_verbose: bool) -> Result<()
 
 async fn diff_indexes(
     manager: &BundleManager,
-    dir: &PathBuf,
+    dir: &Path,
     target: &str,
     verbose: bool,
     binary_name: &str,
@@ -322,6 +322,7 @@ struct IndexComparison {
     target_total_size: u64,
     local_updated: String,
     target_updated: String,
+    #[allow(dead_code)]
     origins_match: bool,
 }
 
@@ -352,8 +353,10 @@ fn compare_indexes(
     target: &plcbundle::index::Index,
     origins_match: bool,
 ) -> IndexComparison {
-    let mut comparison = IndexComparison::default();
-    comparison.origins_match = origins_match;
+    let mut comparison = IndexComparison {
+        origins_match,
+        ..Default::default()
+    };
 
     let local_map: HashMap<u32, &plcbundle::index::BundleMetadata> =
         local.bundles.iter().map(|b| (b.bundle_number, b)).collect();
@@ -594,25 +597,23 @@ fn display_comparison(c: &IndexComparison, verbose: bool, origins_match: bool) {
     eprintln!();
     if !c.has_differences() {
         eprintln!("✅ Indexes are identical");
+    } else if !origins_match {
+        // Different origins - all differences are expected
+        eprintln!("ℹ️  Indexes differ (EXPECTED - comparing different origins)");
+        eprintln!("   All differences shown above are normal when comparing");
+        eprintln!("   repositories from different PLC directory sources.");
     } else {
-        if !origins_match {
-            // Different origins - all differences are expected
-            eprintln!("ℹ️  Indexes differ (EXPECTED - comparing different origins)");
-            eprintln!("   All differences shown above are normal when comparing");
-            eprintln!("   repositories from different PLC directory sources.");
+        // Same origins - differences may be critical
+        if !c.hash_mismatches.is_empty() {
+            eprintln!("❌ Indexes differ (CRITICAL: hash mismatches detected)");
+            eprintln!("\n⚠️  WARNING: Chain hash mismatches indicate different bundle content");
+            eprintln!("   or chain integrity issues. This requires investigation.");
         } else {
-            // Same origins - differences may be critical
-            if !c.hash_mismatches.is_empty() {
-                eprintln!("❌ Indexes differ (CRITICAL: hash mismatches detected)");
-                eprintln!("\n⚠️  WARNING: Chain hash mismatches indicate different bundle content");
-                eprintln!("   or chain integrity issues. This requires investigation.");
-            } else {
-                // Just missing/extra bundles - not critical
-                eprintln!("ℹ️  Indexes differ (missing or extra bundles, but hashes match)");
-                eprintln!(
-                    "   This is normal when comparing repositories at different sync states."
-                );
-            }
+            // Just missing/extra bundles - not critical
+            eprintln!("ℹ️  Indexes differ (missing or extra bundles, but hashes match)");
+            eprintln!(
+                "   This is normal when comparing repositories at different sync states."
+            );
         }
     }
 }
@@ -632,8 +633,7 @@ fn show_hash_mismatches(mismatches: &[HashMismatch], verbose: bool, origins_matc
         mismatches.len()
     };
 
-    for i in 0..display_count {
-        let m = &mismatches[i];
+    for m in mismatches.iter().take(display_count) {
         eprintln!("  Bundle {}:", m.bundle_number);
         eprintln!("    Chain Hash:");
         eprintln!("      Local:  {}", m.local_hash);
@@ -677,7 +677,7 @@ fn analyze_chain_break(
     let first_break = mismatches[0].bundle_number;
 
     // Determine last good bundle (one before first break)
-    let last_good = if first_break > 1 { first_break - 1 } else { 0 };
+    let last_good = first_break.saturating_sub(1);
 
     eprintln!("  Chain Status:");
     if last_good > 0 {
@@ -692,8 +692,8 @@ fn analyze_chain_break(
 
     // Count consecutive breaks
     let mut consecutive_breaks = 1;
-    for i in 1..mismatches.len() {
-        if mismatches[i].bundle_number == first_break + consecutive_breaks {
+    for window in mismatches.windows(2) {
+        if window[1].bundle_number == first_break + consecutive_breaks {
             consecutive_breaks += 1;
         } else {
             break;
@@ -765,8 +765,7 @@ fn show_cursor_mismatches(mismatches: &[HashMismatch], verbose: bool) {
         mismatches.len()
     };
 
-    for i in 0..display_count {
-        let m = &mismatches[i];
+    for m in mismatches.iter().take(display_count) {
         let local = if m.local_cursor.is_empty() {
             "(empty)"
         } else {
@@ -797,8 +796,8 @@ fn show_missing_bundles(bundles: &[u32], verbose: bool) {
             bundles.len()
         };
 
-        for i in 0..display_count {
-            eprintln!("  {}", bundles[i]);
+        for bundle in bundles.iter().take(display_count) {
+            eprintln!("  {}", bundle);
         }
 
         if bundles.len() > display_count {
@@ -823,8 +822,8 @@ fn show_extra_bundles(bundles: &[u32], verbose: bool) {
             bundles.len()
         };
 
-        for i in 0..display_count {
-            eprintln!("  {}", bundles[i]);
+        for bundle in bundles.iter().take(display_count) {
+            eprintln!("  {}", bundle);
         }
 
         if bundles.len() > display_count {
@@ -847,21 +846,20 @@ fn display_bundle_ranges(bundles: &[u32], total_count: Option<usize>) {
     let mut range_end = bundles[0];
     let mut ranges = Vec::new();
 
-    for i in 1..bundles.len() {
-        if bundles[i] == range_end + 1 {
-            range_end = bundles[i];
+    for window in bundles.windows(2) {
+        if window[1] == range_end + 1 {
+            range_end = window[1];
         } else {
             ranges.push((range_start, range_end));
-            range_start = bundles[i];
-            range_end = bundles[i];
+            range_start = window[1];
+            range_end = window[1];
         }
     }
 
     ranges.push((range_start, range_end));
 
     // Display all ranges except the last one
-    for i in 0..ranges.len().saturating_sub(1) {
-        let (start, end) = ranges[i];
+    for (start, end) in ranges.iter().take(ranges.len().saturating_sub(1)) {
         if start == end {
             eprintln!("  {}", start);
         } else {
@@ -882,18 +880,16 @@ fn display_bundle_ranges(bundles: &[u32], total_count: Option<usize>) {
             } else {
                 eprintln!("  {}", start);
             }
+        } else if let Some(count) = total_count {
+            eprintln!(
+                "  {} - {} ({} bundle{})",
+                start,
+                end,
+                count,
+                if count == 1 { "" } else { "s" }
+            );
         } else {
-            if let Some(count) = total_count {
-                eprintln!(
-                    "  {} - {} ({} bundle{})",
-                    start,
-                    end,
-                    count,
-                    if count == 1 { "" } else { "s" }
-                );
-            } else {
-                eprintln!("  {} - {}", start, end);
-            }
+            eprintln!("  {} - {}", start, end);
         }
     }
 }
@@ -1093,8 +1089,7 @@ fn display_operation_comparison(
             missing_in_local.len()
         );
         let display_count = sample_size.min(missing_in_local.len());
-        for i in 0..display_count {
-            let (cid, pos) = &missing_in_local[i];
+        for (cid, pos) in missing_in_local.iter().take(display_count) {
             // Find the operation in remote_ops to get details
             if let Some(remote_op) = remote_ops.get(*pos) {
                 eprintln!("    - [{:04}] {}", pos, cid);
@@ -1116,10 +1111,10 @@ fn display_operation_comparison(
         }
 
         // Add hints for exploring missing operations
-        if let Some((first_cid, first_pos)) = missing_in_local.first() {
-            if target.starts_with("http") {
-                let base_url = if target.ends_with('/') {
-                    &target[..target.len() - 1]
+        if let Some((first_cid, first_pos)) = missing_in_local.first()
+            && target.starts_with("http") {
+                let base_url = if let Some(stripped) = target.strip_suffix('/') {
+                    stripped
                 } else {
                     target
                 };
@@ -1133,7 +1128,6 @@ fn display_operation_comparison(
                     "     • View in remote: curl '{}/op/{}' | grep '{}' | jq .",
                     base_url, global_pos, first_cid
                 );
-            }
         }
         eprintln!();
     }
@@ -1144,8 +1138,7 @@ fn display_operation_comparison(
             missing_in_remote.len()
         );
         let display_count = sample_size.min(missing_in_remote.len());
-        for i in 0..display_count {
-            let (cid, pos) = &missing_in_remote[i];
+        for (cid, pos) in missing_in_remote.iter().take(display_count) {
             // Find the operation in local_ops to get details
             if let Some(local_op) = local_ops.get(*pos) {
                 eprintln!("    + [{:04}] {}", pos, cid);
@@ -1191,8 +1184,7 @@ fn display_operation_comparison(
             position_mismatches.len()
         );
         let display_count = sample_size.min(position_mismatches.len());
-        for i in 0..display_count {
-            let (cid, local_pos, remote_pos) = &position_mismatches[i];
+        for (cid, local_pos, remote_pos) in position_mismatches.iter().take(display_count) {
             eprintln!("    ~ {}", cid);
             eprintln!("      Local:  position {:04}", local_pos);
             eprintln!("      Remote: position {:04}", remote_pos);
@@ -1218,8 +1210,7 @@ fn display_operation_comparison(
             sample_size.min(local_ops.len())
         );
         eprintln!("────────────────────────────────");
-        for i in 0..sample_size.min(local_ops.len()) {
-            let op = &local_ops[i];
+        for (i, op) in local_ops.iter().enumerate().take(sample_size.min(local_ops.len())) {
             let remote_match = if let Some(ref cid) = op.cid {
                 if let Some(&remote_pos) = remote_cids.get(cid) {
                     if remote_pos == i {
@@ -1266,12 +1257,10 @@ fn display_hash_analysis_full(
         "  Content Hash:       {}",
         if content_match {
             "✅"
+        } else if origins_match {
+            "❌"
         } else {
-            if origins_match {
-                "❌"
-            } else {
-                "ℹ️  (expected)"
-            }
+            "ℹ️  (expected)"
         }
     );
     eprintln!("    Local:  {}", local_meta.content_hash);
@@ -1291,12 +1280,10 @@ fn display_hash_analysis_full(
         "  Compressed Hash:    {}",
         if comp_match {
             "✅"
+        } else if origins_match {
+            "❌"
         } else {
-            if origins_match {
-                "❌"
-            } else {
-                "ℹ️  (expected)"
-            }
+            "ℹ️  (expected)"
         }
     );
     eprintln!("    Local:  {}", local_meta.compressed_hash);
@@ -1314,12 +1301,10 @@ fn display_hash_analysis_full(
         "  Chain Hash:         {}",
         if chain_match {
             "✅"
+        } else if origins_match {
+            "❌"
         } else {
-            if origins_match {
-                "❌"
-            } else {
-                "ℹ️  (expected)"
-            }
+            "ℹ️  (expected)"
         }
     );
     eprintln!("    Local:  {}", local_meta.hash);
@@ -1332,12 +1317,10 @@ fn display_hash_analysis_full(
             "    Parent:  {}",
             if parent_match {
                 "✅"
+            } else if origins_match {
+                "❌"
             } else {
-                if origins_match {
-                    "❌"
-                } else {
-                    "ℹ️  (expected)"
-                }
+                "ℹ️  (expected)"
             }
         );
         eprintln!("      Local:  {}", local_meta.parent);

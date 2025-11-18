@@ -342,7 +342,7 @@ fn bench_bundle_decompress(
     };
 
     let mut processed = 0;
-    for (_i, &bundle_num) in bundles.iter().enumerate() {
+    for &bundle_num in bundles.iter() {
         let size = match bundle_compressed_size(manager, bundle_num)? {
             Some(size) => size,
             None => continue,
@@ -402,11 +402,10 @@ fn bench_operation_read(
     // Load bundles to get operation counts
     let mut bundle_op_counts = Vec::with_capacity(bundles.len());
     for &bundle_num in &bundles {
-        if let Ok(bundle) = manager.load_bundle(bundle_num, LoadOptions::default()) {
-            if !bundle.operations.is_empty() {
+        if let Ok(bundle) = manager.load_bundle(bundle_num, LoadOptions::default())
+            && !bundle.operations.is_empty() {
                 bundle_op_counts.push((bundle_num, bundle.operations.len()));
             }
-        }
     }
 
     if bundle_op_counts.is_empty() {

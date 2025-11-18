@@ -81,14 +81,13 @@ pub fn run(cmd: CleanCommand, dir: PathBuf, global_verbose: bool) -> Result<()> 
     }
 
     // Show errors if any
-    if let Some(errors) = &result.errors {
-        if !errors.is_empty() {
+    if let Some(errors) = &result.errors
+        && !errors.is_empty() {
             eprintln!("\n⚠ Warning: Some errors occurred during cleanup:");
             for error in errors {
-                eprintln!("  • {}", error);
+                eprintln!("  - {}", error);
             }
         }
-    }
 
     Ok(())
 }

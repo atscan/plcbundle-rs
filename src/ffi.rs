@@ -113,6 +113,12 @@ pub struct CExportStats {
 // BundleManager lifecycle
 // ============================================================================
 
+/// # Safety
+///
+/// The caller must ensure `bundle_dir` is a valid, NUL-terminated C string
+/// pointer. The returned pointer is owned by the caller and must be freed
+/// with `bundle_manager_free` when no longer needed. Passing a null or
+/// invalid pointer is undefined behavior.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bundle_manager_new(bundle_dir: *const c_char) -> *mut CBundleManager {
     let bundle_dir = unsafe {
@@ -133,6 +139,11 @@ pub unsafe extern "C" fn bundle_manager_new(bundle_dir: *const c_char) -> *mut C
     }
 }
 
+/// # Safety
+///
+/// The caller must ensure `manager` is a pointer previously returned by
+/// `bundle_manager_new` and not already freed. Passing invalid or dangling
+/// pointers is undefined behavior.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bundle_manager_free(manager: *mut CBundleManager) {
     if !manager.is_null() {
@@ -146,6 +157,12 @@ pub unsafe extern "C" fn bundle_manager_free(manager: *mut CBundleManager) {
 // Smart Loading
 // ============================================================================
 
+/// # Safety
+///
+/// The `manager` pointer must be valid. `options` may be NULL to use defaults.
+/// `out_result` must be a valid writable pointer to a `CLoadResult` struct.
+/// Strings passed to this API must be NUL-terminated. Violating these
+/// requirements is undefined behavior.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bundle_manager_load_bundle(
     manager: *const CBundleManager,
@@ -198,6 +215,12 @@ pub unsafe extern "C" fn bundle_manager_load_bundle(
 // Batch Operations
 // ============================================================================
 
+/// # Safety
+///
+/// The `manager` pointer must be valid. `requests` must point to `count`
+/// valid `COperationRequest` items. `out_operations` and `out_count` must
+/// be valid writable pointers. Returned `COperation` arrays must be freed
+/// by the caller using `bundle_manager_free_operations` if applicable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bundle_manager_get_operations_batch(
     manager: *const CBundleManager,
@@ -244,6 +267,12 @@ pub unsafe extern "C" fn bundle_manager_get_operations_batch(
 // DID Operations
 // ============================================================================
 
+/// # Safety
+///
+/// The `manager` pointer must be valid. `did` must be a valid NUL-terminated
+/// C string. `out_operations` and `out_count` must be valid writable pointers
+/// to receive results. Returned memory ownership rules are documented in the
+/// API and must be followed by the caller.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bundle_manager_get_did_operations(
     manager: *const CBundleManager,
@@ -281,6 +310,12 @@ pub unsafe extern "C" fn bundle_manager_get_did_operations(
     }
 }
 
+/// # Safety
+///
+/// `manager` must be valid. `dids` must point to `did_count` valid
+/// NUL-terminated C string pointers. `callback` will be called from this
+/// function and must be a valid function pointer. The caller must ensure the
+/// callback and its environment remain valid for the duration of the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bundle_manager_batch_resolve_dids(
     manager: *const CBundleManager,
@@ -328,6 +363,12 @@ pub unsafe extern "C" fn bundle_manager_batch_resolve_dids(
 // Query
 // ============================================================================
 
+/// # Safety
+///
+/// `manager` must be valid. `query_str` must be a valid NUL-terminated C
+/// string. `out_operations` and `out_count` must be valid writable pointers.
+/// The caller is responsible for freeing any returned memory according to the
+/// API's ownership rules.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bundle_manager_query(
     manager: *const CBundleManager,
@@ -388,6 +429,11 @@ pub unsafe extern "C" fn bundle_manager_query(
 // Verification
 // ============================================================================
 
+/// # Safety
+///
+/// `manager` must be a valid pointer. `out_result` must be a valid writable
+/// pointer to `CVerifyResult`. Passing invalid or null pointers is undefined
+/// behavior.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bundle_manager_verify_bundle(
     manager: *const CBundleManager,
@@ -432,6 +478,10 @@ pub unsafe extern "C" fn bundle_manager_verify_bundle(
     }
 }
 
+/// # Safety
+///
+/// `manager` must be a valid pointer. Calling this function with invalid
+/// pointers is undefined behavior.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bundle_manager_verify_chain(
     manager: *const CBundleManager,
@@ -466,6 +516,11 @@ pub unsafe extern "C" fn bundle_manager_verify_chain(
 // Info
 // ============================================================================
 
+/// # Safety
+///
+/// `manager` must be valid. `out_info` must be a valid writable pointer to
+/// `CBundleInfo`. Any returned string pointers must be freed by the caller as
+/// documented by the API.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bundle_manager_get_bundle_info(
     manager: *const CBundleManager,
@@ -507,6 +562,10 @@ pub unsafe extern "C" fn bundle_manager_get_bundle_info(
 // Cache Management
 // ============================================================================
 
+/// # Safety
+///
+/// `manager` must be valid. `bundle_nums` must point to `count` valid u32
+/// values. Passing invalid pointers is undefined behavior.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bundle_manager_prefetch_bundles(
     manager: *const CBundleManager,
@@ -526,6 +585,9 @@ pub unsafe extern "C" fn bundle_manager_prefetch_bundles(
     }
 }
 
+/// # Safety
+///
+/// `manager` must be valid. Passing invalid pointers is undefined behavior.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bundle_manager_warm_up(
     manager: *const CBundleManager,
@@ -556,6 +618,10 @@ pub unsafe extern "C" fn bundle_manager_warm_up(
     }
 }
 
+/// # Safety
+///
+/// `manager` must be a valid pointer previously returned by
+/// `bundle_manager_new`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bundle_manager_clear_caches(manager: *const CBundleManager) -> i32 {
     if manager.is_null() {
@@ -571,6 +637,11 @@ pub unsafe extern "C" fn bundle_manager_clear_caches(manager: *const CBundleMana
 // DID Index
 // ============================================================================
 
+/// # Safety
+///
+/// `manager` must be valid. `out_stats` must be a valid writable pointer if
+/// provided. The caller must ensure `progress_callback` is a valid function
+/// pointer if passed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bundle_manager_rebuild_did_index(
     manager: *const CBundleManager,
@@ -606,6 +677,9 @@ pub unsafe extern "C" fn bundle_manager_rebuild_did_index(
     }
 }
 
+/// # Safety
+///
+/// `manager` must be valid. `out_stats` must be a valid writable pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bundle_manager_get_did_index_stats(
     manager: *const CBundleManager,
@@ -636,6 +710,9 @@ pub unsafe extern "C" fn bundle_manager_get_did_index_stats(
 // Observability
 // ============================================================================
 
+/// # Safety
+///
+/// `manager` must be valid. `out_stats` must be a valid writable pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bundle_manager_get_stats(
     manager: *const CBundleManager,
@@ -703,6 +780,10 @@ fn free_c_operation(op: COperation) {
     }
 }
 
+/// # Safety
+///
+/// `s` must be a pointer previously returned by this API that is safe to
+/// free. Passing invalid pointers is undefined behavior.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bundle_manager_free_string(s: *mut c_char) {
     if !s.is_null() {
@@ -712,6 +793,9 @@ pub unsafe extern "C" fn bundle_manager_free_string(s: *mut c_char) {
     }
 }
 
+/// # Safety
+///
+/// `op` must be a pointer previously returned by this API and safe to free.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bundle_manager_free_operation(op: *mut COperation) {
     if !op.is_null() {
@@ -722,6 +806,10 @@ pub unsafe extern "C" fn bundle_manager_free_operation(op: *mut COperation) {
     }
 }
 
+/// # Safety
+///
+/// `ops` must point to an array of `count` `COperation` previously returned
+/// by this API and safe to free.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bundle_manager_free_operations(ops: *mut COperation, count: usize) {
     if !ops.is_null() {
@@ -744,6 +832,11 @@ pub unsafe extern "C" fn bundle_manager_free_operations(ops: *mut COperation, co
 pub type ExportCallback =
     extern "C" fn(data: *const c_char, len: usize, user_data: *mut std::ffi::c_void) -> i32;
 
+/// # Safety
+///
+/// `manager` must be valid. `spec` must point to a valid `CExportSpec` and
+/// `callback` must be a valid function pointer. `out_stats` must be a valid
+/// writable pointer if provided.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bundle_manager_export(
     manager: *const CBundleManager,
@@ -790,16 +883,9 @@ pub unsafe extern "C" fn bundle_manager_export(
         };
         bundle_numbers
             .into_iter()
-            .filter_map(|num| {
-                if let Some(meta) = index.get_bundle(num) {
-                    if meta.end_time >= after_ts {
-                        Some(num)
-                    } else {
-                        None
-                    }
-                } else {
-                    Some(num)
-                }
+            .filter(|num| match index.get_bundle(*num) {
+                Some(meta) => meta.end_time >= after_ts,
+                None => true,
             })
             .collect()
     } else {

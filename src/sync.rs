@@ -1,3 +1,4 @@
+
 // Sync module - PLC directory synchronization
 use crate::constants;
 use crate::operations::Operation;
@@ -19,14 +20,16 @@ pub struct PLCOperation {
     nullified: Option<Value>,
     #[serde(rename = "createdAt")]
     created_at: String,
+
+
     #[serde(skip)]
     pub raw_json: Option<String>,
 }
 
 impl From<PLCOperation> for Operation {
     fn from(plc: PLCOperation) -> Self {
-        let is_nullified = plc.nullified.as_ref().map_or(false, |v| {
-            v.as_bool().unwrap_or(false) || v.as_str().map_or(false, |s| !s.is_empty())
+        let is_nullified = plc.nullified.as_ref().is_some_and(|v| {
+            v.as_bool().unwrap_or(false) || v.as_str().is_some_and(|s| !s.is_empty())
         });
 
         Self {
@@ -72,7 +75,7 @@ pub fn strip_boundary_duplicates(
     operations.retain(|op| {
         op.cid
             .as_ref()
-            .map_or(true, |cid| !prev_boundary.contains(cid))
+            .is_none_or(|cid| !prev_boundary.contains(cid))
     });
 
     operations
@@ -94,6 +97,7 @@ pub enum SyncEvent {
         total_duration_ms: u64,
         fetch_requests: usize,
         did_index_compacted: bool,
+
         unique_dids: u32,
         size_bytes: u64,
     },
@@ -156,6 +160,7 @@ pub struct SyncStats {
 pub trait SyncLogger: Send + Sync {
     fn on_sync_start(&self, interval: Duration);
 
+    #[allow(clippy::too_many_arguments)]
     fn on_bundle_created(
         &self,
         bundle_num: u32,
@@ -170,6 +175,10 @@ pub trait SyncLogger: Send + Sync {
         unique_dids: u32,
         size_bytes: u64,
     );
+
+    // Allow the sync logger to accept multiple arguments for detailed bundle info
+    // (Removed workaround method; use allow attribute on trait method instead)
+
 
     fn on_caught_up(
         &self,
@@ -238,7 +247,6 @@ impl SyncLoggerImpl {
     }
 }
 
-
 impl SyncLogger for SyncLoggerImpl {
     fn as_any(&self) -> &dyn Any {
         self
@@ -246,13 +254,12 @@ impl SyncLogger for SyncLoggerImpl {
 
     fn on_sync_start(&self, interval: Duration) {
         eprintln!("[Sync] Starting initial sync...");
-        if let Some(verbose) = &self.verbose {
-            if *verbose.lock().unwrap() {
-                eprintln!("[Sync] Sync loop interval: {:?}", interval);
-            }
+        if let Some(verbose) = &self.verbose && *verbose.lock().unwrap() {
+            eprintln!("[Sync] Sync loop interval: {:?}", interval);
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn on_bundle_created(
         &self,
         bundle_num: u32,
@@ -345,6 +352,7 @@ pub struct SyncManager {
     client: PLCClient,
     config: SyncConfig,
     logger: Option<Box<dyn SyncLogger>>,
+    #[allow(clippy::type_complexity)]
     event_callback: Option<Box<dyn Fn(&SyncEvent) + Send + Sync>>,
 }
 
@@ -471,11 +479,10 @@ impl SyncManager {
 
         loop {
             // Check for shutdown if configured
-            if let Some(ref shutdown_rx) = self.config.shutdown_rx {
-                if *shutdown_rx.borrow() {
+            if let Some(ref shutdown_rx) = self.config.shutdown_rx
+                && *shutdown_rx.borrow() {
                     break;
                 }
-            }
 
             // Get stats before sync to track compaction
             let stats_before = self.manager.get_did_index_stats();
@@ -519,10 +526,8 @@ impl SyncManager {
                     self.show_compaction_if_needed(did_index_compacted, delta_segments_before, index_ms);
 
                     // Check if we've reached the limit
-                    if let Some(max) = max_bundles {
-                        if synced >= max {
-                            break;
-                        }
+                    if let Some(max) = max_bundles && synced >= max {
+                        break;
                     }
                 }
                 Ok(crate::manager::SyncResult::CaughtUp {
@@ -586,13 +591,11 @@ impl SyncManager {
 
         loop {
             // Check for shutdown before starting sync
-            if let Some(ref shutdown_rx) = self.config.shutdown_rx {
-                if *shutdown_rx.borrow() {
-                    if self.config.verbose {
-                        eprintln!("[Sync] Shutdown requested, stopping...");
-                    }
-                    break;
+            if let Some(ref shutdown_rx) = self.config.shutdown_rx && *shutdown_rx.borrow() {
+                if self.config.verbose {
+                    eprintln!("[Sync] Shutdown requested, stopping...");
                 }
+                break;
             }
 
             // Update DID index on every bundle (now fast with delta segments)
@@ -658,13 +661,11 @@ impl SyncManager {
                     }
 
                     // Check for shutdown before sleeping
-                    if let Some(ref shutdown_rx) = self.config.shutdown_rx {
-                        if *shutdown_rx.borrow() {
-                            if self.config.verbose {
-                                eprintln!("[Sync] Shutdown requested, stopping...");
-                            }
-                            break;
+                    if let Some(ref shutdown_rx) = self.config.shutdown_rx && *shutdown_rx.borrow() {
+                        if self.config.verbose {
+                            eprintln!("[Sync] Shutdown requested, stopping...");
                         }
+                        break;
                     }
 
                     // During initial sync, sleep briefly (500ms) to avoid hammering the API
@@ -697,13 +698,11 @@ impl SyncManager {
                     fetch_duration_ms,
                 }) => {
                     // Check for shutdown
-                    if let Some(ref shutdown_rx) = self.config.shutdown_rx {
-                        if *shutdown_rx.borrow() {
-                            if self.config.verbose {
-                                eprintln!("[Sync] Shutdown requested, stopping...");
-                            }
-                            break;
+                    if let Some(ref shutdown_rx) = self.config.shutdown_rx && *shutdown_rx.borrow() {
+                        if self.config.verbose {
+                            eprintln!("[Sync] Shutdown requested, stopping...");
                         }
+                        break;
                     }
 
                     // Caught up to the end of the chain

@@ -154,10 +154,10 @@ fn apply_operation_to_state(state: &mut DIDState, op_data: &Value) {
     }
 
     // Handle legacy handle format
-    if let Some(handle) = op_data.get("handle").and_then(|v| v.as_str()) {
-        if state.also_known_as.is_empty() {
-            state.also_known_as = vec![format!("at://{}", handle)];
-        }
+    if let Some(handle) = op_data.get("handle").and_then(|v| v.as_str())
+        && state.also_known_as.is_empty()
+    {
+        state.also_known_as = vec![format!("at://{}", handle)];
     }
 
     // Update services

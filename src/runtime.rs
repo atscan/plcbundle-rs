@@ -97,15 +97,11 @@ impl BundleRuntime {
         self.trigger_shutdown();
 
         // Always abort resolver tasks immediately - they're just keep-alive pings
-        if let Some(resolver_tasks) = resolver_tasks {
-            if !resolver_tasks.is_empty() {
-                resolver_tasks.abort_all();
-                while let Some(result) = resolver_tasks.join_next().await {
-                    if let Err(e) = result {
-                        if !e.is_cancelled() {
-                            eprintln!("Resolver task error: {}", e);
-                        }
-                    }
+        if let Some(resolver_tasks) = resolver_tasks && !resolver_tasks.is_empty() {
+            resolver_tasks.abort_all();
+            while let Some(result) = resolver_tasks.join_next().await {
+                if let Err(e) = result && !e.is_cancelled() {
+                    eprintln!("Resolver task error: {}", e);
                 }
             }
         }
@@ -118,10 +114,8 @@ impl BundleRuntime {
                 background_tasks.abort_all();
                 // Wait briefly for aborted tasks to finish
                 while let Some(result) = background_tasks.join_next().await {
-                    if let Err(e) = result {
-                        if !e.is_cancelled() {
-                            eprintln!("Background task error: {}", e);
-                        }
+                    if let Err(e) = result && !e.is_cancelled() {
+                        eprintln!("Background task error: {}", e);
                     }
                 }
             } else {

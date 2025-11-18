@@ -101,10 +101,9 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Result<()
 
     for meta in bundles {
         // Filter by bundle range if specified
-        if let Some(ref target_set) = target_bundles {
-            if !target_set.contains(&meta.bundle_number) {
+        if let Some(ref target_set) = target_bundles
+            && !target_set.contains(&meta.bundle_number) {
                 continue;
-            }
         }
 
         let embedded_meta = manager.get_embedded_metadata(meta.bundle_number)?;
@@ -239,7 +238,7 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Result<()
                         let total_bytes = bytes_atomic.fetch_add(info.old_size, Ordering::Relaxed) + info.old_size;
 
                         // Only update progress bar periodically to reduce lock contention
-                        if current_count % update_interval == 0 || current_count == 1 {
+                        if current_count.is_multiple_of(update_interval) || current_count == 1 {
                             let prog = progress_arc.lock().unwrap();
                             prog.set_with_bytes(current_count, total_bytes);
                         }
@@ -372,11 +371,14 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Result<()
                 size_change,
                 size_diff as f64 / total_old_size as f64 * 100.0
             );
+            let old_ratio_str = format!("{:.3}x", old_ratio);
+            let new_ratio_str = format!("{:.3}x", new_ratio);
+            let ratio_diff_str = format!("{:+.3}x", ratio_diff);
             eprintln!(
                 "Ratio         {:<13} {:<13} {}",
-                format!("{:.3}x", old_ratio),
-                format!("{:.3}x", new_ratio),
-                format!("{:+.3}x", ratio_diff)
+                old_ratio_str,
+                new_ratio_str,
+                ratio_diff_str
             );
             let avg_change = size_diff / success as i64;
             let avg_change_str = if avg_change >= 0 {
@@ -482,7 +484,7 @@ fn measure_metadata_size(manager: &BundleManager, bundle_num: u32) -> Result<u64
 
     // Check if it's a skippable frame
     let magic = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
-    if magic < 0x184D2A50 || magic > 0x184D2A5F {
+    if !(0x184D2A50..=0x184D2A5F).contains(&magic) {
         return Ok(0); // No metadata frame
     }
 

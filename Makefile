@@ -38,7 +38,7 @@ fmt: ## Format code
 	cargo fmt
 
 lint: ## Run clippy linter
-	cargo clippy -- -D warnings
+	cargo clippy --all-features -- -D warnings
 
 check: ## Check without building
 	cargo check

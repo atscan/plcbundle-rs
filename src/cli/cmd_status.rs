@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use plcbundle::*;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::utils;
 
@@ -63,7 +63,7 @@ pub fn run(cmd: StatusCommand, dir: PathBuf) -> Result<()> {
 fn print_human_status(
     manager: &BundleManager,
     index: &Index,
-    dir: &PathBuf,
+    dir: &Path,
     detailed: bool
 ) -> Result<()> {
     let dir_display = utils::display_path(dir);
@@ -187,10 +187,9 @@ fn print_human_status(
             suggestions.push("Build DID index for fast lookups: plcbundle index build");
         }
 
-        if let Ok(mempool_stats) = manager.get_mempool_stats() {
-            if mempool_stats.count >= constants::BUNDLE_SIZE {
+        if let Ok(mempool_stats) = manager.get_mempool_stats()
+            && mempool_stats.count >= constants::BUNDLE_SIZE {
                 suggestions.push("Mempool ready to create new bundle: plcbundle sync");
-            }
         }
 
         // Add general hints
@@ -231,7 +230,7 @@ fn print_human_status(
 fn print_json_status(
     manager: &BundleManager,
     index: &Index,
-    dir: &PathBuf,
+    dir: &Path,
 ) -> Result<()> {
     use serde_json::json;
 
@@ -290,10 +289,9 @@ fn print_json_status(
     if !is_empty && !did_index_exists {
         health.push("did_index_not_built");
     }
-    if let Ok(mempool_stats) = manager.get_mempool_stats() {
-        if mempool_stats.count >= constants::BUNDLE_SIZE {
+    if let Ok(mempool_stats) = manager.get_mempool_stats()
+        && mempool_stats.count >= constants::BUNDLE_SIZE {
             health.push("mempool_ready_to_bundle");
-        }
     }
     status["health"] = json!(health);
 
@@ -302,7 +300,7 @@ fn print_json_status(
     Ok(())
 }
 
-fn check_did_index_exists(dir: &PathBuf) -> bool {
+fn check_did_index_exists(dir: &Path) -> bool {
     let did_index_dir = dir.join(constants::DID_INDEX_DIR).join(constants::DID_INDEX_SHARDS);
     did_index_dir.exists() && did_index_dir.is_dir()
 }

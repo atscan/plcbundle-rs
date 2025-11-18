@@ -220,10 +220,9 @@ impl Index {
                 .unwrap_or("");
 
             // Match pattern: NNNNNN.jsonl.zst (16 chars: 6 digits + 10 chars for .jsonl.zst)
-            if filename.ends_with(".jsonl.zst") && filename.len() == 16 {
-                if let Ok(bundle_num) = filename[0..6].parse::<u32>() {
-                    bundle_files.push((bundle_num, path));
-                }
+            if filename.ends_with(".jsonl.zst") && filename.len() == 16
+                && let Ok(bundle_num) = filename[0..6].parse::<u32>() {
+                bundle_files.push((bundle_num, path));
             }
         }
 
@@ -244,14 +243,13 @@ impl Index {
         }
 
         // Validate no gaps in bundle sequence
-        for i in 0..bundle_files.len() {
+        for (i, (actual, _)) in bundle_files.iter().enumerate() {
             let expected = (i + 1) as u32;
-            let actual = bundle_files[i].0;
-            if actual != expected {
+            if *actual != expected {
                 anyhow::bail!(
                     "Gap detected in bundle files: expected {:06}.jsonl.zst, found {:06}.jsonl.zst",
                     expected,
-                    actual
+                    *actual
                 );
             }
         }
@@ -288,12 +286,10 @@ impl Index {
                 let current_count = count_atomic.fetch_add(1, Ordering::Relaxed) + 1;
 
                 // Update progress periodically
-                if current_count % update_interval == 0 || current_count == 1 || current_count == bundle_count {
-                    if let Ok(cb_guard) = progress_cb_arc.lock() {
-                        if let Some(ref cb) = *cb_guard {
-                            cb(current_count, bundle_count, bytes_processed, total_bytes);
-                        }
-                    }
+                if (current_count.is_multiple_of(update_interval) || current_count == 1 || current_count == bundle_count)
+                    && let Ok(cb_guard) = progress_cb_arc.lock()
+                    && let Some(ref cb) = *cb_guard {
+                    cb(current_count, bundle_count, bytes_processed, total_bytes);
                 }
 
                 // Extract embedded metadata from bundle file
@@ -311,15 +307,14 @@ impl Index {
                 // Verify origin matches
                 {
                     let origin_guard = detected_origin.lock().unwrap();
-                    if let Some(ref expected_origin) = *origin_guard {
-                        if embedded.origin != *expected_origin {
-                            anyhow::bail!(
-                                "Bundle {:06}: origin mismatch (expected '{}', got '{}')",
-                                bundle_num,
-                                expected_origin,
-                                embedded.origin
-                            );
-                        }
+                    if let Some(ref expected_origin) = *origin_guard
+                        && embedded.origin != *expected_origin {
+                        anyhow::bail!(
+                            "Bundle {:06}: origin mismatch (expected '{}', got '{}')",
+                            bundle_num,
+                            expected_origin,
+                            embedded.origin
+                        );
                     }
                 }
 

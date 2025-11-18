@@ -206,7 +206,7 @@ pub fn get_free_disk_space(path: &Path) -> Option<u64> {
         let mut stat: libc::statvfs = std::mem::zeroed();
         if libc::statvfs(c_path.as_ptr(), &mut stat) == 0 {
             // Calculate free space: available blocks * block size
-            let free_bytes = stat.f_bavail as u64 * stat.f_frsize as u64;
+            let free_bytes = stat.f_bavail as u64 * stat.f_frsize;
             Some(free_bytes)
         } else {
             None

@@ -178,10 +178,9 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
     // Process bundles through BundleManager API (follows RULES.md)
     for bundle_num in bundle_numbers {
         // Check count limit
-        if let Some(limit) = count {
-            if exported_count >= limit {
+        if let Some(limit) = count
+            && exported_count >= limit {
                 break;
-            }
         }
 
         // Use BundleManager API to get decompressed stream
@@ -226,10 +225,9 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
             }
 
             // Check count limit
-            if let Some(limit) = count {
-                if exported_count >= limit {
+            if let Some(limit) = count
+                && exported_count >= limit {
                     break;
-                }
             }
 
             output_buffer.push_str(&line);
@@ -247,14 +245,13 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
             }
 
             // Progress update (operations count in message, but bundles in progress bar)
-            if let Some(ref pb) = pb {
-                if exported_count % BATCH_SIZE == 0 || exported_count == 1 {
+            if let Some(ref pb) = pb
+                && (exported_count % BATCH_SIZE == 0 || exported_count == 1) {
                     let bytes = bytes_written.lock().unwrap();
                     let total_bytes = *bytes + output_buffer.len() as u64;
                     drop(bytes);
                     pb.set_with_bytes(bundles_processed, total_bytes);
                     pb.set_message(format!("{} ops", utils::format_number(exported_count as u64)));
-                }
             }
         }
         

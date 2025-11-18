@@ -23,7 +23,7 @@ pub async fn handle_root(
     let mut response = String::new();
 
     // ASCII art banner
-    response.push_str("\n");
+    response.push('\n');
     response.push_str(&crate::server::get_ascii_art_banner(&state.config.version));
     response.push_str(&format!("  {} server\n\n", constants::BINARY_NAME));
     response.push_str("*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*\n");
@@ -34,7 +34,7 @@ pub async fn handle_root(
     response.push_str("| any time. Do not use this for production systems.              |\n");
     response.push_str("| Please wait for the 1.0 release.                               |\n");
     response.push_str("|________________________________________________________________|\n");
-    response.push_str("\n");
+    response.push('\n');
     response.push_str("What is PLC Bundle?\n");
     response.push_str("━━━━━━━━━━━━━━━━━━━━\n");
     response.push_str("plcbundle archives AT Protocol's DID PLC Directory operations into\n");
@@ -82,8 +82,7 @@ pub async fn handle_root(
         }
     }
 
-    if state.config.sync_mode {
-        if let Ok(mempool_stats) = state.manager.get_mempool_stats() {
+    if state.config.sync_mode && let Ok(mempool_stats) = state.manager.get_mempool_stats() {
             response.push_str("\nMempool\n");
             response.push_str("━━━━━━━\n");
             response.push_str(&format!(
@@ -123,7 +122,6 @@ pub async fn handle_root(
             } else {
                 response.push_str("  (empty)\n");
             }
-        }
     }
 
     if state.config.enable_resolver {
@@ -164,7 +162,7 @@ pub async fn handle_root(
                 ));
             }
         }
-        response.push_str("\n");
+                response.push('\n');
     }
 
     response.push_str("Server Stats\n");

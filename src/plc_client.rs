@@ -257,22 +257,22 @@ impl PLCClient {
 fn parse_retry_after(response: &reqwest::Response) -> Duration {
     const MAX_RETRY_SECONDS: u64 = 60;
 
-    if let Some(retry_after_header) = response.headers().get("retry-after") {
-        if let Ok(retry_after_str) = retry_after_header.to_str() {
-            // Try parsing as seconds (integer) - most common format
-            if let Ok(seconds) = retry_after_str.parse::<u64>() {
-                // Cap at maximum wait time
-                return Duration::from_secs(seconds.min(MAX_RETRY_SECONDS));
-            }
+    if let Some(retry_after_header) = response.headers().get("retry-after")
+        && let Ok(retry_after_str) = retry_after_header.to_str()
+    {
+        // Try parsing as seconds (integer) - most common format
+        if let Ok(seconds) = retry_after_str.parse::<u64>() {
+            // Cap at maximum wait time
+            return Duration::from_secs(seconds.min(MAX_RETRY_SECONDS));
+        }
 
-            // Try parsing as HTTP date (RFC 7231)
-            // httpdate::parse_http_date returns a SystemTime
-            if let Ok(http_time) = httpdate::parse_http_date(retry_after_str) {
-                if let Ok(duration) = http_time.duration_since(std::time::SystemTime::now()) {
-                    // Cap at maximum wait time
-                    return duration.min(Duration::from_secs(MAX_RETRY_SECONDS));
-                }
-            }
+        // Try parsing as HTTP date (RFC 7231)
+        // httpdate::parse_http_date returns a SystemTime
+        if let Ok(http_time) = httpdate::parse_http_date(retry_after_str)
+            && let Ok(duration) = http_time.duration_since(std::time::SystemTime::now())
+        {
+            // Cap at maximum wait time
+            return duration.min(Duration::from_secs(MAX_RETRY_SECONDS));
         }
     }
 
@@ -280,24 +280,6 @@ fn parse_retry_after(response: &reqwest::Response) -> Duration {
     Duration::from_secs(MAX_RETRY_SECONDS)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_plc_client_new() {
-        let client = PLCClient::new("https://plc.directory").unwrap();
-        // Verify client was created successfully
-        assert!(client.base_url.contains("plc.directory"));
-    }
-
-    #[tokio::test]
-    async fn test_plc_client_new_with_trailing_slash() {
-        let client = PLCClient::new("https://plc.directory/").unwrap();
-        // URL should be stored as-is (no normalization in PLCClient)
-        assert!(client.base_url.contains("plc.directory"));
-    }
-}
 
 /// Simple token bucket rate limiter
 /// Prevents burst requests by starting with 0 permits and refilling at steady rate
@@ -343,6 +325,25 @@ impl RateLimiter {
         // Wait for a permit to become available
         // This will block until a permit is available (from refill task)
         let _ = self.semaphore.acquire().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_plc_client_new() {
+        let client = PLCClient::new("https://plc.directory").unwrap();
+        // Verify client was created successfully
+        assert!(client.base_url.contains("plc.directory"));
+    }
+
+    #[tokio::test]
+    async fn test_plc_client_new_with_trailing_slash() {
+        let client = PLCClient::new("https://plc.directory/").unwrap();
+        // URL should be stored as-is (no normalization in PLCClient)
+        assert!(client.base_url.contains("plc.directory"));
     }
 }
 

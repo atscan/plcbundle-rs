@@ -22,10 +22,8 @@ impl BundleCache {
 
     pub fn insert(&self, bundle: u32, ops: Vec<Operation>) {
         let mut cache = self.cache.write().unwrap();
-        if cache.len() >= self.capacity {
-            if let Some(&key) = cache.keys().next() {
-                cache.remove(&key);
-            }
+        if cache.len() >= self.capacity && let Some(&key) = cache.keys().next() {
+            cache.remove(&key);
         }
         cache.insert(bundle, ops);
     }

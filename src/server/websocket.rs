@@ -83,8 +83,8 @@ async fn stream_live_operations(
         let start_bundle_idx = (start_bundle_num - 1) as usize;
 
         if start_bundle_idx < bundles.len() {
-            for i in start_bundle_idx..bundles.len() {
-                let bundle_num = bundles[i].bundle_number;
+            for (i, bundle) in bundles.iter().enumerate().skip(start_bundle_idx) {
+                let bundle_num = bundle.bundle_number;
                 let skip_until = if i == start_bundle_idx {
                     start_position
                 } else {
@@ -197,10 +197,8 @@ async fn stream_bundle(
         streamed += 1;
 
         // Send ping every 1000 operations
-        if streamed % 1000 == 0 {
-            if sender.send(Message::Ping(Bytes::new())).await.is_err() {
-                break;
-            }
+        if streamed % 1000 == 0 && sender.send(Message::Ping(Bytes::new())).await.is_err() {
+            break;
         }
     }
 
@@ -227,14 +225,14 @@ async fn stream_mempool(
         return Ok(());
     }
 
-    for i in *last_seen_count..mempool_ops.len() {
+    for (i, op) in mempool_ops.iter().enumerate().skip(*last_seen_count) {
         let record_num = bundle_record_base + i as u64;
         if record_num < start_cursor {
             continue;
         }
 
         // Send operation as JSON
-        let json = match sonic_rs::to_string(&mempool_ops[i]) {
+        let json = match sonic_rs::to_string(op) {
             Ok(j) => j,
             Err(_) => continue, // Skip invalid operations
         };

@@ -157,10 +157,8 @@ impl Iterator for ExportIterator {
 
     fn next(&mut self) -> Option<Self::Item> {
         // Check count limit
-        if let Some(ref mut remaining) = self.count_remaining {
-            if *remaining == 0 {
-                return None;
-            }
+        if self.count_remaining == Some(0) {
+            return None;
         }
 
         loop {

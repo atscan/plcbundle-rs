@@ -177,11 +177,7 @@ pub fn run(cmd: QueryCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resul
     
     // Track bundle count separately since callback gives increment, not total
     let bundle_count = Arc::new(Mutex::new(0usize));
-    let pb_arc = if let Some(ref pb) = pb {
-        Some(Arc::new(Mutex::new(pb)))
-    } else {
-        None
-    };
+    let pb_arc = pb.as_ref().map(|pb| Arc::new(Mutex::new(pb)));
 
     let stats = processor.process(
         &bundle_numbers,

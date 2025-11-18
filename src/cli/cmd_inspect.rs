@@ -379,8 +379,8 @@ fn analyze_operations(operations: &[Operation], cmd: &InspectCommand) -> Result<
             // Handle analysis
             if let Some(aka) = op_val.get("alsoKnownAs").and_then(|v| v.as_array()) {
                 for item in aka.iter() {
-                    if let Some(aka_str) = item.as_str() {
-                        if aka_str.starts_with("at://") {
+                    if let Some(aka_str) = item.as_str()
+                        && aka_str.starts_with("at://") {
                             total_handles += 1;
 
                             // Extract domain
@@ -402,7 +402,6 @@ fn analyze_operations(operations: &[Operation], cmd: &InspectCommand) -> Result<
                             if handle.contains('_') {
                                 invalid_handles += 1;
                             }
-                        }
                     }
                 }
             }
@@ -412,18 +411,16 @@ fn analyze_operations(operations: &[Operation], cmd: &InspectCommand) -> Result<
                 total_services += services.len();
 
                 // Extract PDS endpoints
-                if let Some(pds_val) = op_val.get("services").and_then(|v| v.get("atproto_pds")) {
-                    if let Some(_pds) = pds_val.as_object() {
-                        if let Some(endpoint) = pds_val.get("endpoint").and_then(|v| v.as_str()) {
-                            // Normalize endpoint
-                            let endpoint = endpoint
-                                .strip_prefix("https://")
-                                .or_else(|| endpoint.strip_prefix("http://"))
-                                .unwrap_or(endpoint);
-                            let endpoint = endpoint.split('/').next().unwrap_or(endpoint);
-                            *endpoint_counts.entry(endpoint.to_string()).or_insert(0) += 1;
-                        }
-                    }
+                if let Some(pds_val) = op_val.get("services").and_then(|v| v.get("atproto_pds"))
+                    && let Some(_pds) = pds_val.as_object()
+                    && let Some(endpoint) = pds_val.get("endpoint").and_then(|v| v.as_str()) {
+                        // Normalize endpoint
+                        let endpoint = endpoint
+                            .strip_prefix("https://")
+                            .or_else(|| endpoint.strip_prefix("http://"))
+                            .unwrap_or(endpoint);
+                        let endpoint = endpoint.split('/').next().unwrap_or(endpoint);
+                        *endpoint_counts.entry(endpoint.to_string()).or_insert(0) += 1;
                 }
             }
         }
@@ -666,8 +663,8 @@ fn display_human(
     println!();
 
     // Embedded metadata (if available and not skipped)
-    if !cmd.skip_metadata && result.has_metadata_frame {
-        if let Some(ref meta) = result.embedded_metadata {
+    if !cmd.skip_metadata && result.has_metadata_frame
+        && let Some(ref meta) = result.embedded_metadata {
             println!("📋 Embedded Metadata (Skippable Frame)");
             println!("───────────────────────────────────────");
             println!("  Format:              {}", meta.format);
@@ -710,10 +707,9 @@ fn display_human(
 
             println!("\n  Integrity:");
             println!("    Content hash:      {}", meta.content_hash);
-            if let Some(ref parent) = meta.parent_hash {
-                if !parent.is_empty() {
+            if let Some(ref parent) = meta.parent_hash
+                && !parent.is_empty() {
                     println!("    Parent hash:       {}", parent);
-                }
             }
 
             // Index metadata for chain info
@@ -750,7 +746,6 @@ fn display_human(
 
             println!();
         }
-    }
 
     // Operations breakdown
     println!("📊 Operations Analysis");
@@ -816,14 +811,13 @@ fn display_human(
         println!("🏷️  Handle Statistics");
         println!("────────────────────");
         println!("  Total handles:       {}", format_number(total_handles));
-        if let Some(invalid) = result.invalid_handles {
-            if invalid > 0 {
+        if let Some(invalid) = result.invalid_handles
+            && invalid > 0 {
                 println!(
                     "  Invalid patterns:    {} ({:.1}%)",
                     format_number(invalid),
                     (invalid as f64 / total_handles as f64 * 100.0)
                 );
-            }
         }
 
         if !result.top_domains.is_empty() {

@@ -247,10 +247,9 @@ impl TwoStageProgressCallback {
                 // Don't set message - progress bar template will show pos/len without extra message
                 
                 // Finish progress bar when stage 2 completes (256/256)
-                if current == 256 {
-                    if let Some(pb) = stage2_pb_guard.take() {
+                if current == 256
+                    && let Some(pb) = stage2_pb_guard.take() {
                         pb.finish();
-                    }
                 }
             }
         } else {

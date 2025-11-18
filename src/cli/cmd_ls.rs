@@ -246,23 +246,23 @@ fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str, human_r
 
         "size" | "compressed" => {
             if human_readable {
-                format_bytes_compact(meta.compressed_size as u64)
+                format_bytes_compact(meta.compressed_size)
             } else {
                 format!("{}", meta.compressed_size)
             }
         },
         "size_mb" => format!("{:.2}", meta.compressed_size as f64 / (1024.0 * 1024.0)),
-        "size_h" | "size_human" => format_bytes_compact(meta.compressed_size as u64),
+        "size_h" | "size_human" => format_bytes_compact(meta.compressed_size),
 
         "uncompressed" => {
             if human_readable {
-                format_bytes_compact(meta.uncompressed_size as u64)
+                format_bytes_compact(meta.uncompressed_size)
             } else {
                 format!("{}", meta.uncompressed_size)
             }
         },
         "uncompressed_mb" => format!("{:.2}", meta.uncompressed_size as f64 / (1024.0 * 1024.0)),
-        "uncompressed_h" | "uncompressed_human" => format_bytes_compact(meta.uncompressed_size as u64),
+        "uncompressed_h" | "uncompressed_human" => format_bytes_compact(meta.uncompressed_size),
 
         "ratio" => {
             if meta.compressed_size > 0 {

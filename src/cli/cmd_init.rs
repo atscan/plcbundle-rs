@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Args, ValueHint};
 use plcbundle::{constants, BundleManager};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Args)]
 #[command(
@@ -119,7 +119,7 @@ pub fn run(cmd: InitCommand) -> Result<()> {
 }
 
 /// Create an error for when repository is already initialized
-fn already_initialized_error(dir: &PathBuf) -> anyhow::Error {
+fn already_initialized_error(dir: &Path) -> anyhow::Error {
     anyhow::anyhow!(
         "Repository already initialized at: {}\n\nUse --force to reinitialize",
         dir.display()

@@ -155,7 +155,7 @@ fn run_server(cmd: ServerCommand, dir: PathBuf, global_verbose: bool) -> Result<
             let callback = Box::new(move |current: u32, _total: u32, bytes_processed: u64, _total_bytes: u64| {
                 let pb = progress_clone.lock().unwrap();
                 pb.set_with_bytes(current as usize, bytes_processed);
-                if verbose && current % 100 == 0 {
+                if verbose && current.is_multiple_of(100) {
                     log::debug!("[DIDResolver] Index progress: {}/{} bundles", current, _total);
                 }
             }) as Box<dyn Fn(u32, u32, u64, u64) + Send + Sync>;

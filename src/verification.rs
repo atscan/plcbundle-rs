@@ -224,7 +224,7 @@ pub fn verify_bundle(
 
         let count = reader
             .lines()
-            .filter_map(|l| l.ok())
+            .map_while(Result::ok)
             .filter(|l| !l.is_empty())
             .count();
 

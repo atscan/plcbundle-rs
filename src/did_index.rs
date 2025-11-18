@@ -20,6 +20,10 @@ const DID_IDENTIFIER_LEN: usize = 24;
 const DIDINDEX_MAGIC: &[u8; 4] = b"PLCD";
 const DIDINDEX_VERSION: u32 = 4;
 
+// Type aliases to simplify complex signatures for Clippy
+type ShardEntries = HashMap<u8, Vec<(String, OpLocation)>>;
+type ShardProcessResult = Result<(ShardEntries, u64, u64)>;
+
 // ============================================================================
 // OpLocation - Packed 32-bit global position with nullified flag
 // 
@@ -253,13 +257,13 @@ impl ShardBuilder {
     fn add(&mut self, identifier: String, loc: OpLocation) {
         self.entries
             .entry(identifier)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(loc);
     }
 
     fn merge(&mut self, other: HashMap<String, Vec<OpLocation>>) {
         for (id, locs) in other {
-            self.entries.entry(id).or_insert_with(Vec::new).extend(locs);
+            self.entries.entry(id).or_default().extend(locs);
         }
     }
 
@@ -513,7 +517,7 @@ impl Manager {
             anyhow::bail!("DID index has zero entries.");
         }
 
-        let seed = seed.unwrap_or_else(|| unix_timestamp());
+        let seed = seed.unwrap_or_else(unix_timestamp);
         let mut attempts = 0usize;
         let mut results = Vec::with_capacity(count);
 
@@ -716,7 +720,7 @@ impl Manager {
     fn process_bundle_for_index(
         bundle_dir: &PathBuf,
         bundle_num: u32,
-    ) -> Result<(HashMap<u8, Vec<(String, OpLocation)>>, u64, u64)> {
+    ) -> ShardProcessResult {
         use std::fs::File;
         use std::io::BufReader;
 
@@ -744,7 +748,7 @@ impl Manager {
     fn process_bundle_lines<R: std::io::BufRead>(
         bundle_num: u32,
         reader: R,
-    ) -> Result<(HashMap<u8, Vec<(String, OpLocation)>>, u64, u64)> {
+    ) -> ShardProcessResult {
         use sonic_rs::JsonValueTrait;
 
         let mut shard_entries: HashMap<u8, Vec<(String, OpLocation)>> = HashMap::new();
@@ -766,11 +770,11 @@ impl Manager {
             total_operations += 1;
 
             // Parse only the fields we need (did and nullified)
-            if let Ok(value) = sonic_rs::from_str::<sonic_rs::Value>(&line) {
-                if let Some(did) = value.get("did").and_then(|v| v.as_str()) {
-                    let nullified = value.get("nullified")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
+            if let Ok(value) = sonic_rs::from_str::<sonic_rs::Value>(&line)
+                && let Some(did) = value.get("did").and_then(|v| v.as_str()) {
+                let nullified = value.get("nullified")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
 
                     // Calculate shard directly from DID bytes (no String allocation)
                     if let Some(shard_num) = calculate_shard_from_did(did) {
@@ -778,16 +782,15 @@ impl Manager {
                         let identifier = &did[DID_PREFIX.len()..DID_PREFIX.len() + DID_IDENTIFIER_LEN];
                         let identifier = identifier.to_string();
                         
-                        let global_pos = crate::constants::bundle_position_to_global(bundle_num as u32, position as usize) as u32;
+                        let global_pos = crate::constants::bundle_position_to_global(bundle_num, position as usize) as u32;
                         let loc = OpLocation::new(global_pos, nullified);
 
                         shard_entries
                             .entry(shard_num)
-                            .or_insert_with(Vec::new)
+                            .or_default()
                             .push((identifier, loc));
                     }
                 }
-            }
 
             position += 1;
             if position >= constants::BUNDLE_SIZE as u16 {
@@ -858,11 +861,9 @@ impl Manager {
                 for entry in fs::read_dir(shard_dir)? {
                     let entry = entry?;
                     let path = entry.path();
-                    if let Some(ext) = path.extension() {
-                        if ext == "tmp" {
-                            fs::remove_file(&path)?;
-                            cleaned += 1;
-                        }
+                    if path.extension().is_some_and(|ext| ext == "tmp") {
+                        fs::remove_file(&path)?;
+                        cleaned += 1;
                     }
                 }
                 if cleaned > 0 {
@@ -933,7 +934,7 @@ impl Manager {
         let mut total_flush_time = std::time::Duration::ZERO;
         
         // Metrics tracking (aggregated every N bundles)
-        let metrics_interval = 100; // Log metrics every 100 bundles
+        let metrics_interval = 100u32; // Log metrics every 100 bundles
         let mut metrics_start = Instant::now();
         let mut metrics_ops = 0u64;
         let mut metrics_bytes = 0u64;
@@ -947,7 +948,7 @@ impl Manager {
             let batch_end = (batch_start + batch_size).min(bundle_numbers.len());
             let batch: Vec<u32> = bundle_numbers[batch_start..batch_end].to_vec();
             
-            let batch_results: Vec<Result<(HashMap<u8, Vec<(String, OpLocation)>>, u64, u64)>> = if use_parallel {
+            let batch_results: Vec<ShardProcessResult> = if use_parallel {
                 // Process batch in parallel
                 batch.par_iter()
                     .map(|&bundle_num| Self::process_bundle_for_index(bundle_dir, bundle_num))
@@ -996,7 +997,7 @@ impl Manager {
                 // Merge batch entries into main shard_entries
                 for (shard_num, mut entries) in batch_entries.drain() {
                     shard_entries.entry(shard_num)
-                        .or_insert_with(Vec::new)
+                        .or_default()
                         .append(&mut entries);
                 }
                 
@@ -1050,7 +1051,7 @@ impl Manager {
                     
                     log::info!(
                         "[DID Index] Metrics (bundles {}..{}): {} ops, {:.1} MB | {:.1} ops/sec, {:.1} MB/sec",
-                        last_bundle_in_batch.saturating_sub(metrics_interval as u32 - 1).max(1),
+                        last_bundle_in_batch.saturating_sub(metrics_interval - 1).max(1),
                         last_bundle_in_batch,
                         metrics_ops,
                         metrics_bytes as f64 / 1_000_000.0,
@@ -1271,14 +1272,14 @@ impl Manager {
 
             valid_dids += 1;
             let shard_num = self.calculate_shard(&identifier);
-            let global_pos = crate::constants::bundle_position_to_global(bundle_num as u32, position as usize) as u32;
+            let global_pos = crate::constants::bundle_position_to_global(bundle_num, position) as u32;
             let loc = OpLocation::new(global_pos, *nullified);
 
             shard_ops
                 .entry(shard_num)
-                .or_insert_with(HashMap::new)
+                .or_default()
                 .entry(identifier)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(loc);
         }
 
@@ -2049,10 +2050,8 @@ impl Manager {
         
         impl Drop for TempFileGuard {
             fn drop(&mut self) {
-                if self.path.exists() {
-                    if let Err(e) = fs::remove_file(&self.path) {
-                        log::warn!("[DID Index] Failed to remove temp file {}: {}", self.path.display(), e);
-                    }
+                if self.path.exists() && let Err(e) = fs::remove_file(&self.path) {
+                    log::warn!("[DID Index] Failed to remove temp file {}: {}", self.path.display(), e);
                 }
             }
         }
@@ -2456,14 +2455,12 @@ impl Manager {
         let start = Instant::now();
 
         // Ensure shard directory exists
-        if let Some(parent) = target.parent() {
-            if !parent.exists() {
-                fs::create_dir_all(parent)?;
-            }
+        if let Some(parent) = target.parent() && !parent.exists() {
+            fs::create_dir_all(parent)?;
         }
 
         if builder.entries.is_empty() {
-            fs::write(target, &[])?;
+            fs::write(target, [])?;
             return Ok(());
         }
 
@@ -2740,11 +2737,9 @@ impl Manager {
         for entry in fs::read_dir(&self.shard_dir)? {
             let entry = entry?;
             let path = entry.path();
-            if let Some(ext) = path.extension() {
-                if ext == "tmp" {
-                    fs::remove_file(&path)?;
-                    cleaned += 1;
-                }
+            if let Some(ext) = path.extension() && ext == "tmp" {
+                fs::remove_file(&path)?;
+                cleaned += 1;
             }
         }
         if cleaned > 0 {
@@ -2890,23 +2885,18 @@ impl Manager {
                     let exists = seg.get("exists").and_then(|v| v.as_bool()).unwrap_or(false);
                     if !exists {
                         missing_delta_segments += 1;
-                        if let Some(start) = seg.get("bundle_start").and_then(|v| v.as_u64()).map(|v| v as u32) {
-                            if let Some(end) = seg.get("bundle_end").and_then(|v| v.as_u64()).map(|v| v as u32) {
+                        if let Some(start) = seg.get("bundle_start").and_then(|v| v.as_u64()).map(|v| v as u32)
+                            && let Some(end) = seg.get("bundle_end").and_then(|v| v.as_u64()).map(|v| v as u32) {
                                 for bundle_num in start..=end {
                                     missing_segment_bundles.insert(bundle_num);
                                 }
                             }
-                        }
                     }
                 }
             }
         }
         
-        let missing_bundles = if index_last_bundle < last_bundle_in_repo {
-            last_bundle_in_repo - index_last_bundle
-        } else {
-            0
-        };
+        let missing_bundles = last_bundle_in_repo.saturating_sub(index_last_bundle);
         
         let needs_rebuild = index_last_bundle < last_bundle_in_repo 
             || missing_base_shards > 0 
@@ -3350,19 +3340,19 @@ mod tests {
         // Test creating OpLocation with nullified = false
         let loc = OpLocation::new(0, false);
         assert_eq!(loc.global_position(), 0);
-        assert_eq!(loc.nullified(), false);
+        assert!(!loc.nullified());
         assert_eq!(loc.bundle(), 1);
         assert_eq!(loc.position(), 0);
 
         // Test creating OpLocation with nullified = true
         let loc = OpLocation::new(0, true);
         assert_eq!(loc.global_position(), 0);
-        assert_eq!(loc.nullified(), true);
+        assert!(loc.nullified());
 
         // Test with various global positions
         let loc = OpLocation::new(42, false);
         assert_eq!(loc.global_position(), 42);
-        assert_eq!(loc.nullified(), false);
+        assert!(!loc.nullified());
 
         let loc = OpLocation::new(10000, false);
         assert_eq!(loc.global_position(), 10000);
@@ -3371,7 +3361,7 @@ mod tests {
 
         let loc = OpLocation::new(10500, true);
         assert_eq!(loc.global_position(), 10500);
-        assert_eq!(loc.nullified(), true);
+        assert!(loc.nullified());
         assert_eq!(loc.bundle(), 2);
         assert_eq!(loc.position(), 500);
     }
@@ -3412,8 +3402,8 @@ mod tests {
 
         assert_eq!(loc1.global_position(), loc2.global_position());
         assert_ne!(loc1.nullified(), loc2.nullified());
-        assert_eq!(loc1.nullified(), false);
-        assert_eq!(loc2.nullified(), true);
+        assert!(!loc1.nullified());
+        assert!(loc2.nullified());
     }
 
     #[test]
@@ -3431,7 +3421,7 @@ mod tests {
         let loc2 = OpLocation::from_u32(u32_val);
         assert_eq!(loc1.global_position(), loc2.global_position());
         assert_eq!(loc1.nullified(), loc2.nullified());
-        assert_eq!(loc2.nullified(), true);
+        assert!(loc2.nullified());
     }
 
     #[test]
@@ -3460,11 +3450,11 @@ mod tests {
         // Test maximum u32 value (will overflow bundle/position but should not panic)
         let loc = OpLocation::new(u32::MAX >> 1, false);
         assert_eq!(loc.global_position(), u32::MAX >> 1);
-        assert_eq!(loc.nullified(), false);
+        assert!(!loc.nullified());
 
         // Test with nullified flag set on max value
         let loc = OpLocation::new(u32::MAX >> 1, true);
-        assert_eq!(loc.nullified(), true);
+        assert!(loc.nullified());
     }
 
     #[test]

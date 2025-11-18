@@ -4,6 +4,7 @@ use super::utils::HasGlobalFlags;
 use anyhow::Result;
 use clap::{Args, Subcommand, ValueHint};
 use plcbundle::format::format_number;
+use std::path::Path;
 use plcbundle::{BundleManager, constants};
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -94,7 +95,7 @@ pub fn run(cmd: MempoolCommand, dir: PathBuf, global_verbose: bool) -> Result<()
     }
 }
 
-fn show_status(manager: &BundleManager, dir: &PathBuf, verbose: bool) -> Result<()> {
+fn show_status(manager: &BundleManager, dir: &Path, verbose: bool) -> Result<()> {
     manager.load_mempool()?;
     let stats: plcbundle::MempoolStats = manager.get_mempool_stats()?;
 
@@ -205,7 +206,7 @@ fn show_status(manager: &BundleManager, dir: &PathBuf, verbose: bool) -> Result<
     Ok(())
 }
 
-fn clear(manager: &BundleManager, dir: &PathBuf, force: bool) -> Result<()> {
+fn clear(manager: &BundleManager, dir: &Path, force: bool) -> Result<()> {
     manager.load_mempool()?;
     let stats = manager.get_mempool_stats()?;
     let count = stats.count;

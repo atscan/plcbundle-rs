@@ -152,7 +152,7 @@ impl Mempool {
         // Update DID index for new operations
         for (offset, op) in self.operations[start_idx..].iter().enumerate() {
             let idx = start_idx + offset;
-            self.did_index.entry(op.did.clone()).or_insert_with(Vec::new).push(idx);
+            self.did_index.entry(op.did.clone()).or_default().push(idx);
         }
         
         self.validated = true;
@@ -451,7 +451,7 @@ impl Mempool {
             
             // Update DID index
             let did = self.operations[idx].did.clone();
-            self.did_index.entry(did).or_insert_with(Vec::new).push(idx);
+            self.did_index.entry(did).or_default().push(idx);
         }
 
         // Validate loaded data
@@ -572,7 +572,7 @@ impl Mempool {
     fn rebuild_did_index(&mut self) {
         self.did_index.clear();
         for (idx, op) in self.operations.iter().enumerate() {
-            self.did_index.entry(op.did.clone()).or_insert_with(Vec::new).push(idx);
+            self.did_index.entry(op.did.clone()).or_default().push(idx);
         }
     }
 
@@ -809,7 +809,7 @@ mod tests {
         
         let stats = mempool.stats();
         assert_eq!(stats.count, 0);
-        assert_eq!(stats.can_create_bundle, false);
+        assert!(!stats.can_create_bundle);
         assert_eq!(stats.target_bundle, 1);
     }
 
@@ -829,7 +829,7 @@ mod tests {
         
         let stats = mempool.stats();
         assert_eq!(stats.count, 2);
-        assert_eq!(stats.can_create_bundle, false); // Need BUNDLE_SIZE (10000) ops
+        assert!(!stats.can_create_bundle); // Need BUNDLE_SIZE (10000) ops
         assert_eq!(stats.target_bundle, 1);
         assert!(stats.first_time.is_some());
         assert!(stats.last_time.is_some());
