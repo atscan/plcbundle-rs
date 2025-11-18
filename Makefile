@@ -23,7 +23,7 @@ release: ## Build optimized release binary
 	@echo "Release binary: target/release/plcbundle"
 
 install: ## Install to ~/.cargo/bin (with all features)
-	cargo install --all-features --path .
+	cargo install --path .
 
 clean: ## Clean build artifacts
 	cargo clean

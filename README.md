@@ -30,11 +30,14 @@ A high-performance [plcbundle](https://tangled.org/atscan.net/plcbundle/) manage
 git clone https://tangled.org/atscan.net/plcbundle-rs
 cd plcbundle-rs
 
-# Build with default features (CLI)
+# Build with default features (CLI, Server)
 cargo build --release
 
-# Install the CLI tool
+# Install the binary
 cargo install --path .
+
+# or simply run
+./target/release/plcbundle --help
 ```
 
 ### As a Library

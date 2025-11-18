@@ -13,8 +13,7 @@ clone:
 
 dependencies:
   nixpkgs:
-    - rustc
-    - cargo
+    - rustup
     - gcc
     - git
     - zstd
