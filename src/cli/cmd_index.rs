@@ -150,16 +150,26 @@ pub enum IndexCommands {
 
 pub fn run(cmd: IndexCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
     match cmd.command {
-        IndexCommands::Build { force, threads, flush_interval } => {
+        IndexCommands::Build {
+            force,
+            threads,
+            flush_interval,
+        } => {
             cmd_index_build(dir, force, threads, flush_interval)?;
         }
-        IndexCommands::Repair { threads, flush_interval } => {
+        IndexCommands::Repair {
+            threads,
+            flush_interval,
+        } => {
             cmd_index_repair(dir, threads, flush_interval)?;
         }
         IndexCommands::Status { json } => {
             cmd_index_stats(dir, json)?;
         }
-        IndexCommands::Verify { flush_interval, full } => {
+        IndexCommands::Verify {
+            flush_interval,
+            full,
+        } => {
             cmd_index_verify(dir, global_verbose, flush_interval, full)?;
         }
         IndexCommands::Debug { shard, did, json } => {
@@ -184,15 +194,19 @@ pub fn run(cmd: IndexCommand, dir: PathBuf, global_verbose: bool) -> Result<()> 
 /// Parse shard number from string (supports hex 0xac or decimal)
 fn parse_shard(s: &str) -> Result<u8> {
     if s.starts_with("0x") || s.starts_with("0X") {
-        u8::from_str_radix(&s[2..], 16)
-            .map_err(|_| anyhow::anyhow!("Invalid shard number: {}", s))
+        u8::from_str_radix(&s[2..], 16).map_err(|_| anyhow::anyhow!("Invalid shard number: {}", s))
     } else {
         s.parse::<u8>()
             .map_err(|_| anyhow::anyhow!("Invalid shard number: {}", s))
     }
 }
 
-pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize, flush_interval: u32) -> Result<()> {
+pub fn cmd_index_build(
+    dir: PathBuf,
+    force: bool,
+    threads: usize,
+    flush_interval: u32,
+) -> Result<()> {
     // Set thread pool size
     let num_threads = super::utils::get_worker_threads(threads, 4);
     rayon::ThreadPoolBuilder::new()
@@ -212,7 +226,7 @@ pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize, flush_interval
         .get("exists")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    
+
     if index_exists && total_dids > 0 && !force {
         let last_bundle = manager.get_last_bundle();
         let index_last_bundle = did_index
@@ -223,13 +237,20 @@ pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize, flush_interval
             .get("shards_with_data")
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
-        
+
         eprintln!("\n✅ DID Index Already Built");
-        eprintln!("   Total DIDs:    {}", utils::format_number(total_dids as u64));
+        eprintln!(
+            "   Total DIDs:    {}",
+            utils::format_number(total_dids as u64)
+        );
         eprintln!("   Last bundle:   {} / {}", index_last_bundle, last_bundle);
         eprintln!("   Shards:        {} with data", shards_with_data);
-        eprintln!("   Location:      {}/{}/", utils::display_path(&dir).display(), constants::DID_INDEX_DIR);
-        
+        eprintln!(
+            "   Location:      {}/{}/",
+            utils::display_path(&dir).display(),
+            constants::DID_INDEX_DIR
+        );
+
         if index_last_bundle < last_bundle {
             let missing = last_bundle - index_last_bundle;
             eprintln!();
@@ -239,7 +260,7 @@ pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize, flush_interval
             eprintln!();
             eprintln!("   ✓ Index is up-to-date");
         }
-        
+
         eprintln!();
         eprintln!("   💡 Use --force to rebuild from scratch");
         return Ok(());
@@ -260,27 +281,28 @@ pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize, flush_interval
     use std::sync::Arc;
     let last_bundle = manager.get_last_bundle() as u32;
     let progress = TwoStageProgress::new(last_bundle, total_bytes);
-    
+
     // Set up cleanup guard to ensure temp files are deleted on CTRL+C or panic
     // Use Arc to share manager for cleanup
     let manager_arc = Arc::new(manager);
     let manager_for_cleanup = manager_arc.clone();
-    
+
     struct IndexBuildCleanup {
         manager: Arc<BundleManager>,
     }
-    
+
     impl Drop for IndexBuildCleanup {
         fn drop(&mut self) {
             // Cleanup temp files on drop (CTRL+C, panic, or normal exit)
             let did_index = self.manager.get_did_index();
             if let Some(idx) = did_index.read().unwrap().as_ref()
-                && let Err(e) = idx.cleanup_temp_files() {
-                    log::warn!("[Index Build] Failed to cleanup temp files: {}", e);
+                && let Err(e) = idx.cleanup_temp_files()
+            {
+                log::warn!("[Index Build] Failed to cleanup temp files: {}", e);
             }
         }
     }
-    
+
     let _cleanup_guard = IndexBuildCleanup {
         manager: manager_for_cleanup.clone(),
     };
@@ -290,7 +312,7 @@ pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize, flush_interval
         flush_interval,
         Some(progress.callback_for_build_did_index()),
         Some(num_threads),
-        Some(progress.interrupted())
+        Some(progress.interrupted()),
     );
 
     // Handle build result - ensure cleanup happens on error
@@ -302,8 +324,12 @@ pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize, flush_interval
             // Error occurred - explicitly cleanup temp files before returning
             let did_index = manager_arc.get_did_index();
             if let Some(idx) = did_index.read().unwrap().as_ref()
-                && let Err(cleanup_err) = idx.cleanup_temp_files() {
-                    log::warn!("[Index Build] Failed to cleanup temp files after error: {}", cleanup_err);
+                && let Err(cleanup_err) = idx.cleanup_temp_files()
+            {
+                log::warn!(
+                    "[Index Build] Failed to cleanup temp files after error: {}",
+                    cleanup_err
+                );
             }
             return Err(e);
         }
@@ -361,14 +387,16 @@ pub fn cmd_index_repair(dir: PathBuf, threads: usize, flush_interval: u32) -> Re
     // Check if repair is needed before setting up progress bar
     let did_index = manager.get_did_index();
     let idx = did_index.read().unwrap();
-    let idx_ref = idx.as_ref().ok_or_else(|| anyhow::anyhow!("DID index not initialized"))?;
+    let idx_ref = idx
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("DID index not initialized"))?;
     let repair_info = idx_ref.get_repair_info(last_bundle)?;
     let needs_work = repair_info.needs_rebuild || repair_info.needs_compact;
     drop(idx);
-    
+
     // Use BundleManager API for repair
     let start = Instant::now();
-    
+
     // Set up progress callback only if work is needed
     use super::progress::TwoStageProgress;
     let progress = if needs_work {
@@ -379,13 +407,13 @@ pub fn cmd_index_repair(dir: PathBuf, threads: usize, flush_interval: u32) -> Re
     } else {
         None
     };
-    
+
     let repair_result = manager.repair_did_index(
         num_threads,
         flush_interval,
         progress.as_ref().map(|p| p.callback_for_build_did_index()),
     )?;
-    
+
     if let Some(progress) = progress {
         progress.finish();
     }
@@ -409,34 +437,52 @@ pub fn cmd_index_repair(dir: PathBuf, threads: usize, flush_interval: u32) -> Re
     use super::utils::colors;
     eprintln!();
     if repair_result.repaired || repair_result.compacted {
-        eprintln!("{}✓{} Index repair completed successfully in {:?}", colors::GREEN, colors::RESET, elapsed);
+        eprintln!(
+            "{}✓{} Index repair completed successfully in {:?}",
+            colors::GREEN,
+            colors::RESET,
+            elapsed
+        );
         eprintln!();
         eprintln!("📊 Index Statistics:");
-        eprintln!("  Total DIDs:        {}", utils::format_number(total_dids as u64));
+        eprintln!(
+            "  Total DIDs:        {}",
+            utils::format_number(total_dids as u64)
+        );
         eprintln!("  Last bundle:       {}", last_bundle);
         eprintln!("  Shards:            {}", shard_count);
         eprintln!("  Delta segments:    {}", final_delta_segments);
-        
+
         // Show what was fixed
         eprintln!();
         eprintln!("🔧 Repairs performed:");
         if repair_result.repaired {
             eprintln!("  • Processed {} bundles", repair_result.bundles_processed);
             if repair_result.segments_rebuilt > 0 {
-                eprintln!("  • Rebuilt {} delta segment(s)", repair_result.segments_rebuilt);
+                eprintln!(
+                    "  • Rebuilt {} delta segment(s)",
+                    repair_result.segments_rebuilt
+                );
             }
         }
         if repair_result.compacted {
             eprintln!("  • Compacted delta segments");
         }
-        
+
         // Show compaction recommendation if needed
         if (50..100).contains(&final_delta_segments) {
             eprintln!();
-            eprintln!("💡 Tip: Consider running '{} index compact' to optimize performance", constants::BINARY_NAME);
+            eprintln!(
+                "💡 Tip: Consider running '{} index compact' to optimize performance",
+                constants::BINARY_NAME
+            );
         }
     } else {
-        eprintln!("{}✓{} Index is up-to-date and optimized", colors::GREEN, colors::RESET);
+        eprintln!(
+            "{}✓{} Index is up-to-date and optimized",
+            colors::GREEN,
+            colors::RESET
+        );
         eprintln!("  Last bundle: {}", index_last_bundle);
         eprintln!("  Delta segments: {}", delta_segments);
     }
@@ -449,7 +495,7 @@ pub fn cmd_index_stats(dir: PathBuf, json: bool) -> Result<()> {
 
     // Get raw stats from did_index
     let stats_map = manager.get_did_index_stats();
-    
+
     // Check if index has been built
     let is_built = stats_map
         .get("exists")
@@ -596,8 +642,12 @@ pub fn cmd_index_stats(dir: PathBuf, json: bool) -> Result<()> {
     Ok(())
 }
 
-
-pub fn cmd_index_verify(dir: PathBuf, verbose: bool, flush_interval: u32, full: bool) -> Result<()> {
+pub fn cmd_index_verify(
+    dir: PathBuf,
+    verbose: bool,
+    flush_interval: u32,
+    full: bool,
+) -> Result<()> {
     let manager = super::utils::create_manager(dir.clone(), false, false, false)?;
 
     let stats_map = manager.get_did_index_stats();
@@ -631,7 +681,7 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool, flush_interval: u32, full: 
         let bundle_numbers: Vec<u32> = (1..=last_bundle).collect();
         let total_bytes = index.total_uncompressed_size_for_bundles(&bundle_numbers);
         let progress = TwoStageProgress::new(last_bundle, total_bytes);
-        
+
         // Print header info like build command
         eprintln!("\n📦 Building Temporary DID Index (for verification)");
         eprintln!("   Strategy: Streaming (memory-efficient)");
@@ -639,35 +689,36 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool, flush_interval: u32, full: 
         if flush_interval > 0 {
             if flush_interval == constants::DID_INDEX_FLUSH_INTERVAL {
                 // Default value - show with tuning hint
-                eprintln!("   Flush:    Every {} bundles (tune with --flush-interval)", flush_interval);
+                eprintln!(
+                    "   Flush:    Every {} bundles (tune with --flush-interval)",
+                    flush_interval
+                );
             } else {
                 // Non-default value - show with tuning hint
-                eprintln!("   Flush:    {} bundles (you can tune with --flush-interval)", flush_interval);
+                eprintln!(
+                    "   Flush:    {} bundles (you can tune with --flush-interval)",
+                    flush_interval
+                );
             }
         } else {
             eprintln!("   Flush:    Only at end (maximum memory usage)");
         }
         eprintln!();
         eprintln!("📊 Stage 1: Processing bundles...");
-        
+
         let result = manager.verify_did_index(
             verbose,
             flush_interval,
             full,
             Some(progress.callback_for_build_did_index()),
         )?;
-        
+
         progress.finish();
         eprintln!("\n");
         result
     } else {
         // Standard verification: no progress bar
-        manager.verify_did_index::<fn(u32, u32, u64, u64)>(
-            verbose,
-            flush_interval,
-            full,
-            None,
-        )?
+        manager.verify_did_index::<fn(u32, u32, u64, u64)>(verbose, flush_interval, full, None)?
     };
 
     let errors = verify_result.errors;
@@ -781,10 +832,14 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool, flush_interval: u32, full: 
     // Summary
     if errors > 0 {
         use super::utils::colors;
-        eprintln!("{}✗{} Index verification failed", colors::RED, colors::RESET);
+        eprintln!(
+            "{}✗{} Index verification failed",
+            colors::RED,
+            colors::RESET
+        );
         eprintln!("  Errors:   {}", errors);
         eprintln!("  Warnings: {}", warnings);
-        
+
         // Print error breakdown
         if missing_base_shards > 0 {
             eprintln!("  • Missing base shards: {}", missing_base_shards);
@@ -792,18 +847,21 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool, flush_interval: u32, full: 
         if missing_delta_segments > 0 {
             eprintln!("  • Missing delta segments: {}", missing_delta_segments);
         }
-        
+
         // Print other error categories
         for (category, count) in &error_categories {
             eprintln!("  • {}: {}", category, count);
         }
-        
+
         eprintln!("\n  Run: {} index repair", constants::BINARY_NAME);
         std::process::exit(1);
     } else if warnings > 0 {
         use super::utils::colors;
         use super::utils::format_number;
-        eprintln!("\x1b[33m⚠️{}  Index verification passed with warnings", colors::RESET);
+        eprintln!(
+            "\x1b[33m⚠️{}  Index verification passed with warnings",
+            colors::RESET
+        );
         eprintln!("  Warnings: {}", warnings);
         eprintln!("  Total DIDs:  {}", format_number(total_dids as u64));
         eprintln!("  Last bundle: {}", format_number(last_bundle as u64));
@@ -830,10 +888,10 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool, flush_interval: u32, full: 
 
 /// Get raw shard data as JSON
 fn get_raw_shard_data_json(dir: &Path, shard_num: u8) -> Result<serde_json::Value> {
-    use std::fs;
     use plcbundle::constants;
     use plcbundle::did_index::OpLocation;
     use serde_json::json;
+    use std::fs;
 
     const DID_IDENTIFIER_LEN: usize = 24;
 
@@ -859,7 +917,7 @@ fn get_raw_shard_data_json(dir: &Path, shard_num: u8) -> Result<serde_json::Valu
     let offset_table_start = 1056;
 
     let shard_filename = format!("{:02x}.idx", shard_num);
-    
+
     // Parse entries
     let max_entries_to_show = 10;
     let entries_to_show = entry_count.min(max_entries_to_show);
@@ -891,7 +949,8 @@ fn get_raw_shard_data_json(dir: &Path, shard_num: u8) -> Result<serde_json::Valu
         current_offset += DID_IDENTIFIER_LEN;
 
         // Read location count
-        let loc_count = u16::from_le_bytes([data[current_offset], data[current_offset + 1]]) as usize;
+        let loc_count =
+            u16::from_le_bytes([data[current_offset], data[current_offset + 1]]) as usize;
         current_offset += 2;
 
         // Read locations
@@ -934,11 +993,15 @@ fn get_raw_shard_data_json(dir: &Path, shard_num: u8) -> Result<serde_json::Valu
 }
 
 /// Get raw delta segment data as JSON
-fn get_raw_segment_data_json(dir: &Path, shard_num: u8, file_name: &str) -> Result<serde_json::Value> {
-    use std::fs;
+fn get_raw_segment_data_json(
+    dir: &Path,
+    shard_num: u8,
+    file_name: &str,
+) -> Result<serde_json::Value> {
     use plcbundle::constants;
     use plcbundle::did_index::OpLocation;
     use serde_json::json;
+    use std::fs;
 
     const DID_IDENTIFIER_LEN: usize = 24;
 
@@ -995,7 +1058,8 @@ fn get_raw_segment_data_json(dir: &Path, shard_num: u8, file_name: &str) -> Resu
         current_offset += DID_IDENTIFIER_LEN;
 
         // Read location count
-        let loc_count = u16::from_le_bytes([data[current_offset], data[current_offset + 1]]) as usize;
+        let loc_count =
+            u16::from_le_bytes([data[current_offset], data[current_offset + 1]]) as usize;
         current_offset += 2;
 
         // Read locations
@@ -1039,9 +1103,9 @@ fn get_raw_segment_data_json(dir: &Path, shard_num: u8, file_name: &str) -> Resu
 
 /// Display raw shard data in a readable format
 fn display_raw_shard_data(dir: &Path, shard_num: u8) -> Result<()> {
-    use std::fs;
     use plcbundle::constants;
     use plcbundle::did_index::OpLocation;
+    use std::fs;
 
     const DID_IDENTIFIER_LEN: usize = 24;
 
@@ -1104,7 +1168,8 @@ fn display_raw_shard_data(dir: &Path, shard_num: u8) -> Result<()> {
             current_offset += DID_IDENTIFIER_LEN;
 
             // Read location count
-            let loc_count = u16::from_le_bytes([data[current_offset], data[current_offset + 1]]) as usize;
+            let loc_count =
+                u16::from_le_bytes([data[current_offset], data[current_offset + 1]]) as usize;
             current_offset += 2;
 
             // Read locations
@@ -1124,11 +1189,14 @@ fn display_raw_shard_data(dir: &Path, shard_num: u8) -> Result<()> {
             }
 
             println!("      Entry {}:", i);
-            
+
             let identifier_clean = identifier.trim_end_matches('\0');
             let full_did = format!("did:plc:{}", identifier_clean);
-            println!("        Identifier: {} [did={}]", identifier_clean, full_did);
-            
+            println!(
+                "        Identifier: {} [did={}]",
+                identifier_clean, full_did
+            );
+
             print!("        Locations ({}): [ ", loc_count);
             for (idx, loc) in locations.iter().enumerate() {
                 if idx > 0 {
@@ -1143,7 +1211,10 @@ fn display_raw_shard_data(dir: &Path, shard_num: u8) -> Result<()> {
         }
 
         if entry_count > max_entries_to_show {
-            println!("\n    ... ({} more entries)", entry_count - max_entries_to_show);
+            println!(
+                "\n    ... ({} more entries)",
+                entry_count - max_entries_to_show
+            );
         }
     } else {
         println!("    No entries in shard");
@@ -1154,9 +1225,9 @@ fn display_raw_shard_data(dir: &Path, shard_num: u8) -> Result<()> {
 
 /// Display raw delta segment data in a readable format
 fn display_raw_segment_data(dir: &Path, shard_num: u8, file_name: &str) -> Result<()> {
-    use std::fs;
-    use plcbundle::constants;
     use crate::did_index::OpLocation;
+    use plcbundle::constants;
+    use std::fs;
 
     const DID_IDENTIFIER_LEN: usize = 24;
 
@@ -1218,7 +1289,8 @@ fn display_raw_segment_data(dir: &Path, shard_num: u8, file_name: &str) -> Resul
             current_offset += DID_IDENTIFIER_LEN;
 
             // Read location count
-            let loc_count = u16::from_le_bytes([data[current_offset], data[current_offset + 1]]) as usize;
+            let loc_count =
+                u16::from_le_bytes([data[current_offset], data[current_offset + 1]]) as usize;
             current_offset += 2;
 
             // Read locations
@@ -1238,11 +1310,14 @@ fn display_raw_segment_data(dir: &Path, shard_num: u8, file_name: &str) -> Resul
             }
 
             println!("      Entry {}:", i);
-            
+
             let identifier_clean = identifier.trim_end_matches('\0');
             let full_did = format!("did:plc:{}", identifier_clean);
-            println!("        Identifier: {} [did={}]", identifier_clean, full_did);
-            
+            println!(
+                "        Identifier: {} [did={}]",
+                identifier_clean, full_did
+            );
+
             print!("        Locations ({}): [ ", loc_count);
             for (idx, loc) in locations.iter().enumerate() {
                 if idx > 0 {
@@ -1257,7 +1332,10 @@ fn display_raw_segment_data(dir: &Path, shard_num: u8, file_name: &str) -> Resul
         }
 
         if entry_count > max_entries_to_show {
-            println!("\n    ... ({} more entries)", entry_count - max_entries_to_show);
+            println!(
+                "\n    ... ({} more entries)",
+                entry_count - max_entries_to_show
+            );
         }
     } else {
         println!("    No entries in segment");
@@ -1284,7 +1362,7 @@ fn cmd_index_debug_did_lookup(dir: PathBuf, input: String, json: bool) -> Result
 
     // Resolve handle to DID if needed
     let (did, handle_resolve_time) = manager.resolve_handle_or_did(&input)?;
-    
+
     let is_handle = did != input;
     if is_handle {
         log::info!("Resolved handle: {} → {}", input, did);
@@ -1297,12 +1375,15 @@ fn cmd_index_debug_did_lookup(dir: PathBuf, input: String, json: bool) -> Result
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
     {
-        anyhow::bail!("DID index does not exist. Run: {} index build", constants::BINARY_NAME);
+        anyhow::bail!(
+            "DID index does not exist. Run: {} index build",
+            constants::BINARY_NAME
+        );
     }
 
     // Ensure the index is loaded
     manager.ensure_did_index()?;
-    
+
     // Get DID index and lookup DID with stats
     let did_index = manager.get_did_index();
     let lookup_start = Instant::now();
@@ -1392,7 +1473,7 @@ fn cmd_index_debug_did_lookup(dir: PathBuf, input: String, json: bool) -> Result
 
     println!("  Locations ({}):", locations.len());
     println!("  ───────────────────────────────────────");
-    
+
     // Group locations for more compact display
     let mut current_line = String::new();
     for (idx, loc) in locations.iter().enumerate() {
@@ -1400,18 +1481,18 @@ fn cmd_index_debug_did_lookup(dir: PathBuf, input: String, json: bool) -> Result
             println!("    {}", current_line);
             current_line.clear();
         }
-        
+
         if !current_line.is_empty() {
             current_line.push_str(", ");
         }
-        
+
         let mut loc_str = format!("{}", loc.global_position());
         if loc.nullified() {
             loc_str.push_str(" (nullified)");
         }
         current_line.push_str(&loc_str);
     }
-    
+
     if !current_line.is_empty() {
         println!("    {}", current_line);
     }
@@ -1419,41 +1500,93 @@ fn cmd_index_debug_did_lookup(dir: PathBuf, input: String, json: bool) -> Result
 
     println!("  Lookup Statistics:");
     println!("  ───────────────────────────────────────");
-    println!("    Shard size:              {} bytes", utils::format_bytes(shard_stats.shard_size as u64));
-    println!("    Total entries:          {}", utils::format_number(shard_stats.total_entries as u64));
-    println!("    Binary search attempts: {}", shard_stats.binary_search_attempts);
-    println!("    Prefix narrowed to:     {}", shard_stats.prefix_narrowed_to);
-    println!("    Locations found:        {}", shard_stats.locations_found);
+    println!(
+        "    Shard size:              {} bytes",
+        utils::format_bytes(shard_stats.shard_size as u64)
+    );
+    println!(
+        "    Total entries:          {}",
+        utils::format_number(shard_stats.total_entries as u64)
+    );
+    println!(
+        "    Binary search attempts: {}",
+        shard_stats.binary_search_attempts
+    );
+    println!(
+        "    Prefix narrowed to:     {}",
+        shard_stats.prefix_narrowed_to
+    );
+    println!(
+        "    Locations found:        {}",
+        shard_stats.locations_found
+    );
     println!();
 
     println!("  Timing:");
     println!("  ───────────────────────────────────────");
-    println!("    Extract identifier:     {:.3}ms", lookup_timings.extract_identifier.as_secs_f64() * 1000.0);
-    println!("    Calculate shard:        {:.3}ms", lookup_timings.calculate_shard.as_secs_f64() * 1000.0);
-    println!("    Load shard:             {:.3}ms ({})", 
+    println!(
+        "    Extract identifier:     {:.3}ms",
+        lookup_timings.extract_identifier.as_secs_f64() * 1000.0
+    );
+    println!(
+        "    Calculate shard:        {:.3}ms",
+        lookup_timings.calculate_shard.as_secs_f64() * 1000.0
+    );
+    println!(
+        "    Load shard:             {:.3}ms ({})",
         lookup_timings.load_shard.as_secs_f64() * 1000.0,
-        if lookup_timings.cache_hit { "cache hit" } else { "cache miss" });
-    println!("    Search:                 {:.3}ms", lookup_timings.search.as_secs_f64() * 1000.0);
+        if lookup_timings.cache_hit {
+            "cache hit"
+        } else {
+            "cache miss"
+        }
+    );
+    println!(
+        "    Search:                 {:.3}ms",
+        lookup_timings.search.as_secs_f64() * 1000.0
+    );
     if let Some(base_time) = lookup_timings.base_search_time {
-        println!("    Base search:            {:.3}ms", base_time.as_secs_f64() * 1000.0);
+        println!(
+            "    Base search:            {:.3}ms",
+            base_time.as_secs_f64() * 1000.0
+        );
     }
     if !lookup_timings.delta_segment_times.is_empty() {
-        println!("    Delta segments:         {} segments", lookup_timings.delta_segment_times.len());
+        println!(
+            "    Delta segments:         {} segments",
+            lookup_timings.delta_segment_times.len()
+        );
         for (idx, (name, time)) in lookup_timings.delta_segment_times.iter().enumerate() {
-            println!("      Segment {} ({:20}): {:.3}ms", idx + 1, name, time.as_secs_f64() * 1000.0);
+            println!(
+                "      Segment {} ({:20}): {:.3}ms",
+                idx + 1,
+                name,
+                time.as_secs_f64() * 1000.0
+            );
         }
     }
-    println!("    Merge:                  {:.3}ms", lookup_timings.merge_time.as_secs_f64() * 1000.0);
+    println!(
+        "    Merge:                  {:.3}ms",
+        lookup_timings.merge_time.as_secs_f64() * 1000.0
+    );
     if handle_resolve_time > 0 {
         println!("    Handle resolve:          {}ms", handle_resolve_time);
     }
-    println!("    Total:                  {:.3}ms", lookup_elapsed.as_secs_f64() * 1000.0);
+    println!(
+        "    Total:                  {:.3}ms",
+        lookup_elapsed.as_secs_f64() * 1000.0
+    );
     println!();
 
     Ok(())
 }
 
-pub fn cmd_index_debug(dir: PathBuf, shard: Option<u8>, did: Option<String>, json: bool) -> Result<()> {
+pub fn cmd_index_debug(
+    dir: PathBuf,
+    shard: Option<u8>,
+    did: Option<String>,
+    json: bool,
+) -> Result<()> {
     let manager = super::utils::create_manager(dir.clone(), false, false, false)?;
 
     let stats_map = manager.get_did_index_stats();
@@ -1474,35 +1607,44 @@ pub fn cmd_index_debug(dir: PathBuf, shard: Option<u8>, did: Option<String>, jso
     }
 
     let did_index = manager.get_did_index();
-    let mut shard_details = did_index.read().unwrap().as_ref().unwrap().get_shard_details(shard)?;
+    let mut shard_details = did_index
+        .read()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .get_shard_details(shard)?;
 
     if json {
         // Add raw data to JSON output if a specific shard is requested
         if let Some(shard_num) = shard
-            && let Some(detail) = shard_details.first_mut() {
-                let base_exists = detail
-                    .get("base_exists")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                
-                if base_exists
-                    && let Ok(raw_data) = get_raw_shard_data_json(&dir, shard_num) {
-                        detail.insert("raw_data".to_string(), raw_data);
-                }
-                
-                // Add raw data for delta segments
-                if let Some(segments) = detail.get_mut("segments").and_then(|v| v.as_array_mut()) {
-                    for seg in segments {
-                        let file_name = seg.get("file_name").and_then(|v| v.as_str()).unwrap_or("");
-                        let exists = seg.get("exists").and_then(|v| v.as_bool()).unwrap_or(false);
-                        if exists && !file_name.is_empty()
-                            && let Ok(raw_data) = get_raw_segment_data_json(&dir, shard_num, file_name) {
-                                seg.as_object_mut().unwrap().insert("raw_data".to_string(), raw_data);
-                        }
+            && let Some(detail) = shard_details.first_mut()
+        {
+            let base_exists = detail
+                .get("base_exists")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            if base_exists && let Ok(raw_data) = get_raw_shard_data_json(&dir, shard_num) {
+                detail.insert("raw_data".to_string(), raw_data);
+            }
+
+            // Add raw data for delta segments
+            if let Some(segments) = detail.get_mut("segments").and_then(|v| v.as_array_mut()) {
+                for seg in segments {
+                    let file_name = seg.get("file_name").and_then(|v| v.as_str()).unwrap_or("");
+                    let exists = seg.get("exists").and_then(|v| v.as_bool()).unwrap_or(false);
+                    if exists
+                        && !file_name.is_empty()
+                        && let Ok(raw_data) = get_raw_segment_data_json(&dir, shard_num, file_name)
+                    {
+                        seg.as_object_mut()
+                            .unwrap()
+                            .insert("raw_data".to_string(), raw_data);
                     }
                 }
+            }
         }
-        
+
         let json_str = serde_json::to_string_pretty(&shard_details)?;
         println!("{}", json_str);
         return Ok(());
@@ -1558,39 +1700,38 @@ pub fn cmd_index_debug(dir: PathBuf, shard: Option<u8>, did: Option<String>, jso
             println!("  Next segment ID:   {}", next_segment_id);
 
             if let Some(segments) = detail.get("segments").and_then(|v| v.as_array())
-                && !segments.is_empty() {
-                    println!("\n  Delta Segments:");
-                    println!("  ───────────────────────────────────────");
-                    for (idx, seg) in segments.iter().enumerate() {
-                        let file_name =
-                            seg.get("file_name").and_then(|v| v.as_str()).unwrap_or("?");
-                        let exists = seg.get("exists").and_then(|v| v.as_bool()).unwrap_or(false);
-                        let size = seg.get("size_bytes").and_then(|v| v.as_u64()).unwrap_or(0);
-                        let did_count = seg.get("did_count").and_then(|v| v.as_u64()).unwrap_or(0);
-                        let bundle_start = seg
-                            .get("bundle_start")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0);
-                        let bundle_end =
-                            seg.get("bundle_end").and_then(|v| v.as_u64()).unwrap_or(0);
+                && !segments.is_empty()
+            {
+                println!("\n  Delta Segments:");
+                println!("  ───────────────────────────────────────");
+                for (idx, seg) in segments.iter().enumerate() {
+                    let file_name = seg.get("file_name").and_then(|v| v.as_str()).unwrap_or("?");
+                    let exists = seg.get("exists").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let size = seg.get("size_bytes").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let did_count = seg.get("did_count").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let bundle_start = seg
+                        .get("bundle_start")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let bundle_end = seg.get("bundle_end").and_then(|v| v.as_u64()).unwrap_or(0);
 
-                        println!(
-                            "    [{:2}] {} {} ({})",
-                            idx + 1,
-                            if exists { "✓" } else { "✗" },
-                            file_name,
-                            utils::format_bytes(size)
-                        );
-                        println!(
-                            "         Bundles: {}-{}, DIDs: {}, Locations: {}",
-                            bundle_start,
-                            bundle_end,
-                            utils::format_number(did_count),
-                            seg.get("location_count")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0)
-                        );
-                    }
+                    println!(
+                        "    [{:2}] {} {} ({})",
+                        idx + 1,
+                        if exists { "✓" } else { "✗" },
+                        file_name,
+                        utils::format_bytes(size)
+                    );
+                    println!(
+                        "         Bundles: {}-{}, DIDs: {}, Locations: {}",
+                        bundle_start,
+                        bundle_end,
+                        utils::format_number(did_count),
+                        seg.get("location_count")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0)
+                    );
+                }
             }
 
             // Show raw shard data

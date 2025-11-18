@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Args, ValueHint};
-use plcbundle::{constants, remote::RemoteClient, BundleManager};
+use plcbundle::{BundleManager, constants, remote::RemoteClient};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -51,9 +51,7 @@ pub struct CloneCommand {
 
 pub fn run(cmd: CloneCommand) -> Result<()> {
     // Create tokio runtime for async operations
-    tokio::runtime::Runtime::new()?.block_on(async {
-        run_async(cmd).await
-    })
+    tokio::runtime::Runtime::new()?.block_on(async { run_async(cmd).await })
 }
 
 async fn run_async(cmd: CloneCommand) -> Result<()> {
@@ -115,8 +113,7 @@ async fn run_async(cmd: CloneCommand) -> Result<()> {
 
     // Create target directory if it doesn't exist
     if !target_dir.exists() {
-        std::fs::create_dir_all(&target_dir)
-            .context("Failed to create target directory")?;
+        std::fs::create_dir_all(&target_dir).context("Failed to create target directory")?;
     }
 
     // Check if target directory is empty or if resuming
@@ -181,19 +178,19 @@ async fn run_async(cmd: CloneCommand) -> Result<()> {
     if let Some(free_space) = super::utils::get_free_disk_space(&target_dir) {
         // Add 10% buffer for safety (filesystem overhead, temporary files, etc.)
         let required_space = total_bytes + (total_bytes / 10);
-        
+
         if free_space < required_space {
             let free_display = plcbundle::format::format_bytes(free_space);
             let required_display = plcbundle::format::format_bytes(required_space);
             let shortfall = required_space - free_space;
             let shortfall_display = plcbundle::format::format_bytes(shortfall);
-            
+
             eprintln!("⚠️  Warning: Insufficient disk space");
             eprintln!("   Required:  {}", required_display);
             eprintln!("   Available: {}", free_display);
             eprintln!("   Shortfall: {}", shortfall_display);
             eprintln!();
-            
+
             // Prompt user to continue
             use dialoguer::Confirm;
             let proceed = Confirm::new()
@@ -201,11 +198,11 @@ async fn run_async(cmd: CloneCommand) -> Result<()> {
                 .default(false)
                 .interact()
                 .context("Failed to read user input")?;
-            
+
             if !proceed {
                 anyhow::bail!("Clone cancelled by user");
             }
-            
+
             println!();
         }
     }
@@ -214,7 +211,10 @@ async fn run_async(cmd: CloneCommand) -> Result<()> {
     println!();
 
     // Create progress bar with byte tracking
-    let progress = Arc::new(super::progress::ProgressBar::with_bytes(bundles_count, total_bytes));
+    let progress = Arc::new(super::progress::ProgressBar::with_bytes(
+        bundles_count,
+        total_bytes,
+    ));
 
     // Clone using BundleManager API with progress callback
     let progress_clone = Arc::clone(&progress);
@@ -233,7 +233,10 @@ async fn run_async(cmd: CloneCommand) -> Result<()> {
     println!();
 
     if failed_count > 0 {
-        eprintln!("✗ Clone incomplete: {} succeeded, {} failed", downloaded_count, failed_count);
+        eprintln!(
+            "✗ Clone incomplete: {} succeeded, {} failed",
+            downloaded_count, failed_count
+        );
         eprintln!("  Use --resume to retry failed downloads");
         anyhow::bail!("Clone failed");
     }
@@ -244,8 +247,14 @@ async fn run_async(cmd: CloneCommand) -> Result<()> {
     println!();
     println!("Next steps:");
     println!("  cd {}", display_path(&target_dir).display());
-    println!("  {} status        # Check repository status", constants::BINARY_NAME);
-    println!("  {} sync          # Sync to latest", constants::BINARY_NAME);
+    println!(
+        "  {} status        # Check repository status",
+        constants::BINARY_NAME
+    );
+    println!(
+        "  {} sync          # Sync to latest",
+        constants::BINARY_NAME
+    );
     println!("  {} server --sync # Run server", constants::BINARY_NAME);
 
     Ok(())

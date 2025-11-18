@@ -210,10 +210,34 @@ pub fn run_did(cmd: DidCommand, dir: PathBuf, global_verbose: bool) -> Result<()
             raw,
             compare,
         } => {
-            cmd_did_resolve(dir, did, handle_resolver, global_verbose, query, raw, compare)?;
+            cmd_did_resolve(
+                dir,
+                did,
+                handle_resolver,
+                global_verbose,
+                query,
+                raw,
+                compare,
+            )?;
         }
-        DIDCommands::Log { did, json, format, no_header, separator, reverse } => {
-            cmd_did_lookup(dir, did, global_verbose, json, format, no_header, separator, reverse)?;
+        DIDCommands::Log {
+            did,
+            json,
+            format,
+            no_header,
+            separator,
+            reverse,
+        } => {
+            cmd_did_lookup(
+                dir,
+                did,
+                global_verbose,
+                json,
+                format,
+                no_header,
+                separator,
+                reverse,
+            )?;
         }
         DIDCommands::Batch {
             action,
@@ -285,9 +309,9 @@ pub fn cmd_did_resolve(
 
     // If compare is enabled, fetch remote document and compare
     if let Some(maybe_url) = compare {
-        use tokio::runtime::Runtime;
         use crate::plc_client::PLCClient;
         use std::time::Instant;
+        use tokio::runtime::Runtime;
 
         // Use provided URL, or use repository origin, or fall back to default
         let plc_url = match maybe_url {
@@ -296,16 +320,20 @@ pub fn cmd_did_resolve(
                     log::info!("Using provided PLC directory URL: {}", url);
                 }
                 url
-            },
+            }
             _ => {
                 // Get origin from local repository index
                 let local_index = manager.get_index();
                 let origin = &local_index.origin;
-                
+
                 // If origin is "local" or empty, use default PLC directory
                 if origin == "local" || origin.is_empty() {
                     if verbose {
-                        log::info!("Origin is '{}', using default PLC directory: {}", origin, constants::DEFAULT_PLC_DIRECTORY_URL);
+                        log::info!(
+                            "Origin is '{}', using default PLC directory: {}",
+                            origin,
+                            constants::DEFAULT_PLC_DIRECTORY_URL
+                        );
                     }
                     constants::DEFAULT_PLC_DIRECTORY_URL.to_string()
                 } else {
@@ -318,27 +346,27 @@ pub fn cmd_did_resolve(
         };
 
         eprintln!("🔍 Comparing with remote PLC directory...");
-        
+
         if verbose {
             log::info!("Target PLC directory: {}", plc_url);
             log::info!("DID to fetch: {}", did);
         }
-        
+
         let fetch_start = Instant::now();
         let rt = Runtime::new().context("Failed to create tokio runtime")?;
         use plcbundle::resolver::DIDDocument;
-        let (remote_doc, remote_json_raw): (DIDDocument, String) = rt.block_on(async {
-            let client = PLCClient::new(&plc_url)
-                .context("Failed to create PLC client")?;
-            if verbose {
-                log::info!("Created PLC client, fetching DID document...");
-            }
-            // Fetch both the parsed document and raw JSON for accurate comparison
-            let raw_json = client.fetch_did_document_raw(&did).await?;
-            let parsed_doc = client.fetch_did_document(&did).await?;
-            Ok::<(DIDDocument, String), anyhow::Error>((parsed_doc, raw_json))
-        })
-        .context("Failed to fetch DID document from remote PLC directory")?;
+        let (remote_doc, remote_json_raw): (DIDDocument, String) = rt
+            .block_on(async {
+                let client = PLCClient::new(&plc_url).context("Failed to create PLC client")?;
+                if verbose {
+                    log::info!("Created PLC client, fetching DID document...");
+                }
+                // Fetch both the parsed document and raw JSON for accurate comparison
+                let raw_json = client.fetch_did_document_raw(&did).await?;
+                let parsed_doc = client.fetch_did_document(&did).await?;
+                Ok::<(DIDDocument, String), anyhow::Error>((parsed_doc, raw_json))
+            })
+            .context("Failed to fetch DID document from remote PLC directory")?;
         let fetch_duration = fetch_start.elapsed();
 
         if verbose {
@@ -349,7 +377,14 @@ pub fn cmd_did_resolve(
         eprintln!();
 
         // Compare documents and return early (don't show full document)
-        compare_did_documents(&result.document, &remote_doc, &remote_json_raw, &did, &plc_url, fetch_duration)?;
+        compare_did_documents(
+            &result.document,
+            &remote_doc,
+            &remote_json_raw,
+            &did,
+            &plc_url,
+            fetch_duration,
+        )?;
         return Ok(());
     }
 
@@ -479,7 +514,10 @@ pub fn cmd_did_resolve(
         if result.bundle_number == 0 {
             // Operation from mempool
             let index = manager.get_index();
-            let global_pos = plcbundle::constants::mempool_position_to_global(index.last_bundle, result.position);
+            let global_pos = plcbundle::constants::mempool_position_to_global(
+                index.last_bundle,
+                result.position,
+            );
             log::info!(
                 "Source: mempool position {} (global: {})\n",
                 result.position,
@@ -487,7 +525,10 @@ pub fn cmd_did_resolve(
             );
         } else {
             // Operation from bundle
-            let global_pos = plcbundle::constants::bundle_position_to_global(result.bundle_number, result.position);
+            let global_pos = plcbundle::constants::bundle_position_to_global(
+                result.bundle_number,
+                result.position,
+            );
             log::info!(
                 "Source: bundle {}, position {} (global: {})\n",
                 result.bundle_number,
@@ -503,14 +544,16 @@ pub fn cmd_did_resolve(
     // If query is provided, apply JMESPath query
     let output_json = if let Some(query_expr) = query {
         // Compile JMESPath expression
-        let expr = jmespath::compile(&query_expr)
-            .map_err(|e| anyhow::anyhow!("Failed to compile JMESPath query '{}': {}", query_expr, e))?;
+        let expr = jmespath::compile(&query_expr).map_err(|e| {
+            anyhow::anyhow!("Failed to compile JMESPath query '{}': {}", query_expr, e)
+        })?;
 
         // Execute query
         let data = jmespath::Variable::from_json(&document_json)
             .map_err(|e| anyhow::anyhow!("Failed to parse DID document JSON: {}", e))?;
 
-        let result = expr.search(&data)
+        let result = expr
+            .search(&data)
             .map_err(|e| anyhow::anyhow!("JMESPath query failed: {}", e))?;
 
         if result.is_null() {
@@ -578,7 +621,7 @@ fn compare_did_documents(
 
     eprintln!("📊 Document Comparison");
     eprintln!("═══════════════════════");
-    
+
     // Construct the full URL that was fetched
     let full_url = format!("{}/{}", remote_url.trim_end_matches('/'), _did);
     eprintln!("   Remote URL: {}", full_url);
@@ -655,7 +698,13 @@ fn compare_did_documents(
 
         eprintln!();
         use super::utils::colors;
-        eprintln!("Legend: {}Local{} {}Remote{}", colors::RED, colors::RESET, colors::GREEN, colors::RESET);
+        eprintln!(
+            "Legend: {}Local{} {}Remote{}",
+            colors::RED,
+            colors::RESET,
+            colors::GREEN,
+            colors::RESET
+        );
         eprintln!();
     }
 
@@ -674,12 +723,12 @@ fn normalize_json_for_comparison(json: &str) -> Result<String> {
     // Parse JSON using sonic_rs (faster than serde_json)
     let value: sonic_rs::Value = sonic_rs::from_str(json)
         .map_err(|e| anyhow::anyhow!("Failed to parse JSON for normalization: {}", e))?;
-    
+
     // Re-serialize with consistent formatting (compact, no whitespace)
     // This normalizes key ordering and whitespace differences
     let normalized = sonic_rs::to_string(&value)
         .map_err(|e| anyhow::anyhow!("Failed to serialize normalized JSON: {}", e))?;
-    
+
     Ok(normalized)
 }
 
@@ -687,10 +736,10 @@ fn normalize_json_for_comparison(json: &str) -> Result<String> {
 fn json_to_pretty(json: &str) -> Result<String> {
     let value: sonic_rs::Value = sonic_rs::from_str(json)
         .map_err(|e| anyhow::anyhow!("Failed to parse JSON for pretty printing: {}", e))?;
-    
+
     let pretty = sonic_rs::to_string_pretty(&value)
         .map_err(|e| anyhow::anyhow!("Failed to serialize pretty JSON: {}", e))?;
-    
+
     Ok(pretty)
 }
 
@@ -1036,13 +1085,13 @@ fn display_lookup_results(
 
     // Calculate column widths for alignment
     let mut column_widths = vec![0; fields.len()];
-    
+
     // Check header widths
     for (i, field) in fields.iter().enumerate() {
         let header = get_lookup_field_header(field);
         column_widths[i] = column_widths[i].max(header.len());
     }
-    
+
     // Check data widths
     for owl in bundled_ops.iter() {
         for (i, field) in fields.iter().enumerate() {
@@ -1050,7 +1099,7 @@ fn display_lookup_results(
             column_widths[i] = column_widths[i].max(value.len());
         }
     }
-    
+
     for op in mempool_ops.iter() {
         for (i, field) in fields.iter().enumerate() {
             let value = get_lookup_field_value_mempool(op, field);
@@ -1060,7 +1109,8 @@ fn display_lookup_results(
 
     // Print column header (unless disabled)
     if !no_header {
-        let headers: Vec<String> = fields.iter()
+        let headers: Vec<String> = fields
+            .iter()
             .enumerate()
             .map(|(i, f)| {
                 let header = get_lookup_field_header(f);
@@ -1083,7 +1133,8 @@ fn display_lookup_results(
     };
 
     for owl in bundled_iter {
-        let values: Vec<String> = fields.iter()
+        let values: Vec<String> = fields
+            .iter()
             .enumerate()
             .map(|(i, f)| {
                 let value = get_lookup_field_value(owl, None, f);
@@ -1096,7 +1147,7 @@ fn display_lookup_results(
             })
             .collect();
         println!("{}", values.join(separator));
-        
+
         if verbose && !owl.nullified {
             let op_val = &owl.operation.operation;
             if let Some(op_type) = op_val.get("type").and_then(|v| v.as_str()) {
@@ -1105,9 +1156,10 @@ fn display_lookup_results(
             if let Some(handle) = op_val.get("handle").and_then(|v| v.as_str()) {
                 eprintln!("      handle: {}", handle);
             } else if let Some(aka) = op_val.get("alsoKnownAs").and_then(|v| v.as_array())
-                && let Some(aka_str) = aka.first().and_then(|v| v.as_str()) {
-                    let handle = aka_str.strip_prefix("at://").unwrap_or(aka_str);
-                    eprintln!("      handle: {}", handle);
+                && let Some(aka_str) = aka.first().and_then(|v| v.as_str())
+            {
+                let handle = aka_str.strip_prefix("at://").unwrap_or(aka_str);
+                eprintln!("      handle: {}", handle);
             }
         }
     }
@@ -1120,7 +1172,8 @@ fn display_lookup_results(
     };
 
     for op in mempool_iter {
-        let values: Vec<String> = fields.iter()
+        let values: Vec<String> = fields
+            .iter()
             .enumerate()
             .map(|(i, f)| {
                 let value = get_lookup_field_value_mempool(op, f);
@@ -1171,9 +1224,10 @@ fn get_lookup_field_value(
         "bundle" => format!("{}", owl.bundle),
         "position" | "pos" => format!("{:04}", owl.position),
         "global" | "global_pos" => {
-            let global_pos = plcbundle::constants::bundle_position_to_global(owl.bundle, owl.position);
+            let global_pos =
+                plcbundle::constants::bundle_position_to_global(owl.bundle, owl.position);
             format!("{}", global_pos)
-        },
+        }
         "status" => {
             if owl.nullified {
                 "✗".to_string()
@@ -1181,10 +1235,7 @@ fn get_lookup_field_value(
                 "✓".to_string()
             }
         }
-        "cid" => {
-            owl.operation.cid.clone()
-                .unwrap_or_default()
-        }
+        "cid" => owl.operation.cid.clone().unwrap_or_default(),
         "created_at" | "created" | "date" | "time" => owl.operation.created_at.clone(),
         "nullified" => {
             if owl.nullified {
@@ -1217,10 +1268,7 @@ fn get_lookup_field_value_mempool(op: &plcbundle::Operation, field: &str) -> Str
         "position" | "pos" => "".to_string(),
         "global" | "global_pos" => "".to_string(),
         "status" => "✓".to_string(),
-        "cid" => {
-            op.cid.clone()
-                .unwrap_or_default()
-        }
+        "cid" => op.cid.clone().unwrap_or_default(),
         "created_at" | "created" | "date" | "time" => op.created_at.clone(),
         "nullified" => "false".to_string(),
         "date_short" => {
@@ -1240,7 +1288,6 @@ fn get_lookup_field_value_mempool(op: &plcbundle::Operation, field: &str) -> Str
         _ => String::new(),
     }
 }
-
 
 // DID BATCH - Process multiple DIDs (TODO)
 
@@ -1394,11 +1441,12 @@ pub fn cmd_did_validate(
     if verbose {
         println!("📋 Operations:");
         for (i, entry) in audit_log.iter().enumerate() {
-            let status = if entry.nullified { "❌ NULLIFIED" } else { "✅" };
-            println!(
-                "   [{}] {} {} - {}",
-                i, status, entry.cid, entry.created_at
-            );
+            let status = if entry.nullified {
+                "❌ NULLIFIED"
+            } else {
+                "✅"
+            };
+            println!("   [{}] {} {} - {}", i, status, entry.cid, entry.created_at);
             if entry.operation.is_genesis() {
                 println!("       Type: Genesis (creates the DID)");
             } else {
@@ -1576,7 +1624,9 @@ pub fn cmd_did_validate(
                     for (j, key) in rotation_keys.iter().enumerate() {
                         println!("        [{}] {}", j, key);
                     }
-                    println!("      ⚠️  Genesis signature cannot be verified (bootstrapping trust)");
+                    println!(
+                        "      ⚠️  Genesis signature cannot be verified (bootstrapping trust)"
+                    );
                 }
             }
             continue;
@@ -1591,7 +1641,10 @@ pub fn cmd_did_validate(
         // Validate signature using current rotation keys
         if !current_rotation_keys.is_empty() {
             if verbose {
-                println!("      Available rotation keys: {}", current_rotation_keys.len());
+                println!(
+                    "      Available rotation keys: {}",
+                    current_rotation_keys.len()
+                );
                 for (j, key) in current_rotation_keys.iter().enumerate() {
                     println!("        [{}] {}", j, key);
                 }
@@ -1626,10 +1679,7 @@ pub fn cmd_did_validate(
                 // Final attempt with all keys (for comprehensive error)
                 if let Err(e) = entry.operation.verify(&verifying_keys) {
                     eprintln!();
-                    eprintln!(
-                        "❌ Validation failed: Invalid signature at operation {}",
-                        i
-                    );
+                    eprintln!("❌ Validation failed: Invalid signature at operation {}", i);
                     eprintln!("   Error: {}", e);
                     eprintln!("   CID: {}", entry.cid);
                     eprintln!(
@@ -1655,16 +1705,17 @@ pub fn cmd_did_validate(
 
         // Update rotation keys if this operation changes them
         if let Some(new_rotation_keys) = entry.operation.rotation_keys()
-            && new_rotation_keys != current_rotation_keys {
-                if verbose {
-                    println!("      🔄 Rotation keys updated by this operation");
-                    println!("         Old keys: {}", current_rotation_keys.len());
-                    println!("         New keys: {}", new_rotation_keys.len());
-                    for (j, key) in new_rotation_keys.iter().enumerate() {
-                        println!("           [{}] {}", j, key);
-                    }
+            && new_rotation_keys != current_rotation_keys
+        {
+            if verbose {
+                println!("      🔄 Rotation keys updated by this operation");
+                println!("         Old keys: {}", current_rotation_keys.len());
+                println!("         New keys: {}", new_rotation_keys.len());
+                for (j, key) in new_rotation_keys.iter().enumerate() {
+                    println!("           [{}] {}", j, key);
                 }
-                current_rotation_keys = new_rotation_keys.to_vec();
+            }
+            current_rotation_keys = new_rotation_keys.to_vec();
         }
     }
 
@@ -1720,10 +1771,7 @@ fn build_canonical_chain_indices(audit_log: &[AuditLogEntry]) -> Vec<usize> {
     let mut prev_to_indices: HashMap<String, Vec<usize>> = HashMap::new();
     for (i, entry) in audit_log.iter().enumerate() {
         if let Some(prev) = entry.operation.prev() {
-            prev_to_indices
-                .entry(prev.to_string())
-                .or_default()
-                .push(i);
+            prev_to_indices.entry(prev.to_string()).or_default().push(i);
         }
     }
 
@@ -1817,14 +1865,10 @@ fn convert_to_audit_log(
             .map_err(|e| anyhow::anyhow!("Failed to parse operation: {}", e))?;
 
         // Get CID from bundle operation (should always be present)
-        let cid = owl
-            .operation
-            .cid
-            .clone()
-            .unwrap_or_else(|| {
-                // Fallback: this shouldn't happen in real data, but provide a placeholder
-                format!("bundle_{}_pos_{}", owl.bundle, owl.position)
-            });
+        let cid = owl.operation.cid.clone().unwrap_or_else(|| {
+            // Fallback: this shouldn't happen in real data, but provide a placeholder
+            format!("bundle_{}_pos_{}", owl.bundle, owl.position)
+        });
 
         audit_log.push(AuditLogEntry {
             did: owl.operation.did.clone(),
@@ -1839,11 +1883,7 @@ fn convert_to_audit_log(
 }
 
 /// Visualize forks in the audit log
-fn visualize_forks(
-    audit_log: &[AuditLogEntry],
-    did_str: &str,
-    verbose: bool,
-) -> Result<()> {
+fn visualize_forks(audit_log: &[AuditLogEntry], did_str: &str, verbose: bool) -> Result<()> {
     println!("🔍 Analyzing forks in: {}", did_str);
     println!("   Source: local bundles");
     println!();
@@ -2013,11 +2053,15 @@ fn resolve_fork(fork_ops: &mut [ForkOperation]) -> String {
 }
 
 /// Find which rotation key signed an operation
-fn find_signing_key(operation: &Operation, rotation_keys: &[String]) -> (Option<usize>, Option<String>) {
+fn find_signing_key(
+    operation: &Operation,
+    rotation_keys: &[String],
+) -> (Option<usize>, Option<String>) {
     for (index, key_did) in rotation_keys.iter().enumerate() {
         if let Ok(verifying_key) = VerifyingKey::from_did_key(key_did)
-            && operation.verify(&[verifying_key]).is_ok() {
-                return (Some(index), Some(key_did.clone()));
+            && operation.verify(&[verifying_key]).is_ok()
+        {
+            return (Some(index), Some(key_did.clone()));
         }
     }
     (None, None)
@@ -2072,58 +2116,61 @@ fn visualize_tree(audit_log: &[AuditLogEntry], forks: &[ForkPoint], verbose: boo
 
         // Check if this operation is part of a fork
         if let Some(_prev_cid) = prev
-            && let Some(fork) = fork_map.get(&entry.cid) {
-                // This is a fork point
-                if !processed_forks.contains(&fork.prev_cid) {
-                    processed_forks.insert(fork.prev_cid.clone());
+            && let Some(fork) = fork_map.get(&entry.cid)
+        {
+            // This is a fork point
+            if !processed_forks.contains(&fork.prev_cid) {
+                processed_forks.insert(fork.prev_cid.clone());
 
-                    println!("Fork at operation referencing {}", truncate_cid(&fork.prev_cid));
+                println!(
+                    "Fork at operation referencing {}",
+                    truncate_cid(&fork.prev_cid)
+                );
 
-                    for (j, fork_op) in fork.operations.iter().enumerate() {
-                        let symbol = if fork_op.is_winner { "✓" } else { "✗" };
-                        let color = if fork_op.is_winner { "🟢" } else { "🔴" };
-                        let prefix = if j == fork.operations.len() - 1 {
-                            "└─"
-                        } else {
-                            "├─"
-                        };
+                for (j, fork_op) in fork.operations.iter().enumerate() {
+                    let symbol = if fork_op.is_winner { "✓" } else { "✗" };
+                    let color = if fork_op.is_winner { "🟢" } else { "🔴" };
+                    let prefix = if j == fork.operations.len() - 1 {
+                        "└─"
+                    } else {
+                        "├─"
+                    };
 
-                        println!(
-                            "  {} {} {} CID: {}",
-                            prefix,
-                            color,
-                            symbol,
-                            truncate_cid(&fork_op.cid)
-                        );
+                    println!(
+                        "  {} {} {} CID: {}",
+                        prefix,
+                        color,
+                        symbol,
+                        truncate_cid(&fork_op.cid)
+                    );
 
-                        if let Some(key_idx) = fork_op.signing_key_index {
-                            println!("     │  Signed by: rotation_key[{}]", key_idx);
-                            if verbose
-                                && let Some(key) = &fork_op.signing_key {
-                                    println!("     │  Key: {}", truncate_cid(key));
-                            }
-                        }
-
-                        println!(
-                            "     │  Timestamp: {}",
-                            fork_op.timestamp.format("%Y-%m-%d %H:%M:%S UTC")
-                        );
-
-                        if !fork_op.is_winner {
-                            if let Some(reason) = &fork_op.rejection_reason {
-                                println!("     │  Reason: {}", reason);
-                            }
-                        } else {
-                            println!("     │  Status: CANONICAL (winner)");
-                        }
-
-                        if j < fork.operations.len() - 1 {
-                            println!("     │");
+                    if let Some(key_idx) = fork_op.signing_key_index {
+                        println!("     │  Signed by: rotation_key[{}]", key_idx);
+                        if verbose && let Some(key) = &fork_op.signing_key {
+                            println!("     │  Key: {}", truncate_cid(key));
                         }
                     }
-                    println!();
+
+                    println!(
+                        "     │  Timestamp: {}",
+                        fork_op.timestamp.format("%Y-%m-%d %H:%M:%S UTC")
+                    );
+
+                    if !fork_op.is_winner {
+                        if let Some(reason) = &fork_op.rejection_reason {
+                            println!("     │  Reason: {}", reason);
+                        }
+                    } else {
+                        println!("     │  Status: CANONICAL (winner)");
+                    }
+
+                    if j < fork.operations.len() - 1 {
+                        println!("     │");
+                    }
                 }
-                continue;
+                println!();
+            }
+            continue;
         }
 
         // Regular operation (not part of a fork)
@@ -2131,9 +2178,8 @@ fn visualize_tree(audit_log: &[AuditLogEntry], forks: &[ForkPoint], verbose: boo
             println!("🌱 Genesis");
             println!("   CID: {}", truncate_cid(&entry.cid));
             println!("   Timestamp: {}", entry.created_at);
-            if verbose
-                && let Operation::PlcOperation { rotation_keys, .. } = &entry.operation {
-                    println!("   Rotation keys: {}", rotation_keys.len());
+            if verbose && let Operation::PlcOperation { rotation_keys, .. } = &entry.operation {
+                println!("   Rotation keys: {}", rotation_keys.len());
             }
             println!();
         }

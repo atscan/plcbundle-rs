@@ -228,10 +228,16 @@ mod tests {
     #[test]
     fn test_normalize_handle() {
         assert_eq!(normalize_handle("user.bsky.social"), "user.bsky.social");
-        assert_eq!(normalize_handle("at://user.bsky.social"), "user.bsky.social");
+        assert_eq!(
+            normalize_handle("at://user.bsky.social"),
+            "user.bsky.social"
+        );
         assert_eq!(normalize_handle("@user.bsky.social"), "user.bsky.social");
         // Note: trim_start_matches removes all matches, so "at://@user" becomes "user" (both prefixes removed)
-        assert_eq!(normalize_handle("at://@user.bsky.social"), "user.bsky.social");
+        assert_eq!(
+            normalize_handle("at://@user.bsky.social"),
+            "user.bsky.social"
+        );
         assert_eq!(normalize_handle("example.com"), "example.com");
     }
 

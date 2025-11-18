@@ -138,7 +138,12 @@ pub enum OpCommands {
 
 pub fn run(cmd: OpCommand, dir: PathBuf, quiet: bool) -> Result<()> {
     match cmd.command {
-        OpCommands::Get { bundle, position, query, raw } => {
+        OpCommands::Get {
+            bundle,
+            position,
+            query,
+            raw,
+        } => {
             cmd_op_get(dir, bundle, position, query, raw, quiet)?;
         }
         OpCommands::Show { bundle, position } => {
@@ -170,14 +175,22 @@ pub fn parse_op_position(bundle: u32, position: Option<usize>) -> (u32, usize) {
                 // op get 10000 → bundle 2, position 0
                 // op get 88410345 → bundle 8842, position 345
                 let global_pos = bundle as u64;
-                let (bundle_num, op_pos) = plcbundle::constants::global_to_bundle_position(global_pos);
+                let (bundle_num, op_pos) =
+                    plcbundle::constants::global_to_bundle_position(global_pos);
                 (bundle_num, op_pos)
             }
         }
     }
 }
 
-pub fn cmd_op_get(dir: PathBuf, bundle: u32, position: Option<usize>, query: Option<String>, raw: bool, quiet: bool) -> Result<()> {
+pub fn cmd_op_get(
+    dir: PathBuf,
+    bundle: u32,
+    position: Option<usize>,
+    query: Option<String>,
+    raw: bool,
+    quiet: bool,
+) -> Result<()> {
     let (bundle_num, op_index) = parse_op_position(bundle, position);
 
     let manager = super::utils::create_manager(dir, false, quiet, false)?;
@@ -187,8 +200,7 @@ pub fn cmd_op_get(dir: PathBuf, bundle: u32, position: Option<usize>, query: Opt
         manager.get_operation_raw(bundle_num, op_index)?
     } else {
         let result = manager.get_operation_with_stats(bundle_num, op_index)?;
-        let global_pos =
-            plcbundle::constants::bundle_position_to_global(bundle_num, op_index);
+        let global_pos = plcbundle::constants::bundle_position_to_global(bundle_num, op_index);
 
         log::info!(
             "[Load] Bundle {}:{:04} (pos={}) in {:?} | {} bytes",
@@ -205,14 +217,16 @@ pub fn cmd_op_get(dir: PathBuf, bundle: u32, position: Option<usize>, query: Opt
     // If query is provided, apply JMESPath query
     let output_json = if let Some(query_expr) = query {
         // Compile JMESPath expression
-        let expr = jmespath::compile(&query_expr)
-            .map_err(|e| anyhow::anyhow!("Failed to compile JMESPath query '{}': {}", query_expr, e))?;
+        let expr = jmespath::compile(&query_expr).map_err(|e| {
+            anyhow::anyhow!("Failed to compile JMESPath query '{}': {}", query_expr, e)
+        })?;
 
         // Execute query
         let data = jmespath::Variable::from_json(&json)
             .map_err(|e| anyhow::anyhow!("Failed to parse operation JSON: {}", e))?;
 
-        let result = expr.search(&data)
+        let result = expr
+            .search(&data)
             .map_err(|e| anyhow::anyhow!("JMESPath query failed: {}", e))?;
 
         if result.is_null() {
@@ -409,8 +423,7 @@ pub fn cmd_op_find(dir: PathBuf, cid: String, quiet: bool) -> Result<()> {
             let cid_matches = op.cid.as_ref() == Some(&cid);
 
             if cid_matches {
-                let global_pos =
-                    plcbundle::constants::bundle_position_to_global(bundle_num, i);
+                let global_pos = plcbundle::constants::bundle_position_to_global(bundle_num, i);
 
                 println!("Found: bundle {}, position {}", bundle_num, i);
                 println!("Global position: {}\n", global_pos);

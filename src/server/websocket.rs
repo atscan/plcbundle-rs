@@ -79,7 +79,8 @@ async fn stream_live_operations(
 
     // Stream existing bundles
     if !bundles.is_empty() {
-        let (start_bundle_num, start_position) = crate::constants::global_to_bundle_position(start_cursor);
+        let (start_bundle_num, start_position) =
+            crate::constants::global_to_bundle_position(start_cursor);
         let start_bundle_idx = (start_bundle_num - 1) as usize;
 
         if start_bundle_idx < bundles.len() {
@@ -125,7 +126,8 @@ async fn stream_live_operations(
 
         if bundles.len() > last_bundle_count {
             let new_bundle_count = bundles.len() - last_bundle_count;
-            current_record += crate::constants::total_operations_from_bundles(new_bundle_count as u32);
+            current_record +=
+                crate::constants::total_operations_from_bundles(new_bundle_count as u32);
             last_bundle_count = bundles.len();
             last_seen_mempool_count = 0;
         }

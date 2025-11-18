@@ -6,7 +6,7 @@ use sonic_rs::{self, Value};
 /// PLC Operation
 ///
 /// Represents a single operation from the PLC directory.
-/// 
+///
 /// **IMPORTANT**: This struct uses `sonic_rs` for JSON parsing (not serde).
 /// Serialization still uses serde for compatibility with JMESPath queries.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,42 +39,43 @@ pub struct Operation {
 
 impl Operation {
     /// Parse an Operation from JSON using sonic_rs (not serde)
-    /// 
+    ///
     /// This method manually extracts fields from the JSON to avoid issues with
     /// serde attributes like `#[serde(flatten)]` that sonic_rs may not fully support.
     pub fn from_json(json: &str) -> anyhow::Result<Self> {
         use anyhow::Context;
         use sonic_rs::JsonValueTrait;
-        
-        let value: Value = sonic_rs::from_str(json)
-            .context("Failed to parse JSON")?;
-        
+
+        let value: Value = sonic_rs::from_str(json).context("Failed to parse JSON")?;
+
         // Extract required fields
-        let did = value.get("did")
+        let did = value
+            .get("did")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("missing 'did' field"))?
             .to_string();
-        
-        let operation = value.get("operation")
-            .cloned()
-            .unwrap_or_else(Value::new);
-        
+
+        let operation = value.get("operation").cloned().unwrap_or_else(Value::new);
+
         // Extract optional fields with defaults
-        let cid = value.get("cid")
+        let cid = value
+            .get("cid")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
-        
-        let nullified = value.get("nullified")
+
+        let nullified = value
+            .get("nullified")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        
+
         // Handle both "createdAt" and "created_at" field names
-        let created_at = value.get("createdAt")
+        let created_at = value
+            .get("createdAt")
             .or_else(|| value.get("created_at"))
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("missing 'createdAt' or 'created_at' field"))?
             .to_string();
-        
+
         // Extract extra fields (everything except known fields)
         // Since sonic_rs::Value doesn't provide easy iteration, we'll parse the JSON
         // and manually extract extra fields by checking for unknown keys
@@ -82,7 +83,7 @@ impl Operation {
         // The extra field was used with #[serde(flatten)] but we can reconstruct it if needed
         // For performance, we'll just use an empty Value since most operations don't have extra fields
         let extra = Value::new();
-        
+
         Ok(Operation {
             did,
             operation,
@@ -155,8 +156,11 @@ mod tests {
         assert_eq!(op.did, "did:plc:abcdefghijklmnopqrstuvwx");
         assert!(op.nullified);
         assert_eq!(op.created_at, "2024-01-01T12:34:56Z");
-        assert_eq!(op.cid, Some("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi".to_string()));
-        
+        assert_eq!(
+            op.cid,
+            Some("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi".to_string())
+        );
+
         // Check operation field
         let op_type = op.operation.get("type").and_then(|v| v.as_str()).unwrap();
         assert_eq!(op_type, "create");
@@ -179,7 +183,7 @@ mod tests {
 
         let op1 = Operation::from_json(json1).unwrap();
         let op2 = Operation::from_json(json2).unwrap();
-        
+
         assert_eq!(op1.created_at, "2024-01-01T00:00:00Z");
         assert_eq!(op2.created_at, "2024-01-01T00:00:00Z");
     }
@@ -193,7 +197,12 @@ mod tests {
 
         let result = Operation::from_json(json);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("missing 'did' field"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("missing 'did' field")
+        );
     }
 
     #[test]
@@ -205,7 +214,12 @@ mod tests {
 
         let result = Operation::from_json(json);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("missing 'createdAt' or 'created_at' field"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("missing 'createdAt' or 'created_at' field")
+        );
     }
 
     #[test]
@@ -275,7 +289,10 @@ mod tests {
         assert_eq!(request.bundle, 1);
         assert_eq!(request.index, Some(5));
         assert!(request.filter.is_some());
-        assert_eq!(request.filter.as_ref().unwrap().did, Some("did:plc:test".to_string()));
+        assert_eq!(
+            request.filter.as_ref().unwrap().did,
+            Some("did:plc:test".to_string())
+        );
     }
 
     #[test]

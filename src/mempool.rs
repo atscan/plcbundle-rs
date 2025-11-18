@@ -1,11 +1,11 @@
 //! Persistent pre-bundle operation store with strict chronological validation, CID deduplication, incremental saving, and fast DID lookups
 // src/mempool.rs
 use crate::constants;
+use crate::format::format_std_duration_ms;
 use crate::operations::Operation;
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
 use log::{debug, info};
-use crate::format::format_std_duration_ms;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -104,7 +104,7 @@ impl Mempool {
                 None => {
                     skipped_no_cid += 1;
                     continue;
-                },
+                }
             };
 
             // Skip duplicates
@@ -149,13 +149,13 @@ impl Mempool {
         // Add new operations and update DID index
         let start_idx = self.operations.len();
         self.operations.extend(new_ops);
-        
+
         // Update DID index for new operations
         for (offset, op) in self.operations[start_idx..].iter().enumerate() {
             let idx = start_idx + offset;
             self.did_index.entry(op.did.clone()).or_default().push(idx);
         }
-        
+
         self.validated = true;
         self.dirty = true;
 
@@ -449,7 +449,7 @@ impl Mempool {
             let op = Operation::from_json(&line)?;
             let idx = self.operations.len();
             self.operations.push(op);
-            
+
             // Update DID index
             let did = self.operations[idx].did.clone();
             self.did_index.entry(did).or_default().push(idx);
@@ -562,13 +562,16 @@ impl Mempool {
     pub fn find_did_operations(&self, did: &str) -> Vec<Operation> {
         if let Some(indices) = self.did_index.get(did) {
             // Fast path: use index
-            indices.iter().map(|&idx| self.operations[idx].clone()).collect()
+            indices
+                .iter()
+                .map(|&idx| self.operations[idx].clone())
+                .collect()
         } else {
             // DID not in index (shouldn't happen if index is maintained correctly)
             Vec::new()
         }
     }
-    
+
     /// Rebuild DID index from operations (used after take/clear)
     fn rebuild_did_index(&mut self) {
         self.did_index.clear();
@@ -584,17 +587,14 @@ impl Mempool {
         if let Some(indices) = self.did_index.get(did) {
             // Operations are in chronological order, so highest index = latest
             // Find the highest index that's not nullified
-            indices
-                .iter()
-                .rev()
-                .find_map(|&idx| {
-                    let op = &self.operations[idx];
-                    if !op.nullified {
-                        Some((op.clone(), idx))
-                    } else {
-                        None
-                    }
-                })
+            indices.iter().rev().find_map(|&idx| {
+                let op = &self.operations[idx];
+                if !op.nullified {
+                    Some((op.clone(), idx))
+                } else {
+                    None
+                }
+            })
         } else {
             None
         }
@@ -650,9 +650,9 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let mut mempool = Mempool::new(tmp.path(), 1, min_time, false).unwrap();
-        
+
         assert_eq!(mempool.count(), 0);
-        
+
         let ops = vec![
             create_test_operation("did:plc:test1", "cid1", "2024-01-01T00:00:01Z"),
             create_test_operation("did:plc:test2", "cid2", "2024-01-01T00:00:02Z"),
@@ -688,12 +688,19 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let mut mempool = Mempool::new(tmp.path(), 1, min_time, false).unwrap();
-        
+
         assert_eq!(mempool.get_first_time(), None);
-        
-        let ops = vec![create_test_operation("did:plc:test1", "cid1", "2024-01-01T00:00:01Z")];
+
+        let ops = vec![create_test_operation(
+            "did:plc:test1",
+            "cid1",
+            "2024-01-01T00:00:01Z",
+        )];
         mempool.add(ops).unwrap();
-        assert_eq!(mempool.get_first_time(), Some("2024-01-01T00:00:01Z".to_string()));
+        assert_eq!(
+            mempool.get_first_time(),
+            Some("2024-01-01T00:00:01Z".to_string())
+        );
     }
 
     #[test]
@@ -703,15 +710,18 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let mut mempool = Mempool::new(tmp.path(), 1, min_time, false).unwrap();
-        
+
         assert_eq!(mempool.get_last_time(), None);
-        
+
         let ops = vec![
             create_test_operation("did:plc:test1", "cid1", "2024-01-01T00:00:01Z"),
             create_test_operation("did:plc:test2", "cid2", "2024-01-01T00:00:02Z"),
         ];
         mempool.add(ops).unwrap();
-        assert_eq!(mempool.get_last_time(), Some("2024-01-01T00:00:02Z".to_string()));
+        assert_eq!(
+            mempool.get_last_time(),
+            Some("2024-01-01T00:00:02Z".to_string())
+        );
     }
 
     #[test]
@@ -721,19 +731,19 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let mut mempool = Mempool::new(tmp.path(), 1, min_time, false).unwrap();
-        
+
         let ops = vec![
             create_test_operation("did:plc:test1", "cid1", "2024-01-01T00:00:01Z"),
             create_test_operation("did:plc:test2", "cid2", "2024-01-01T00:00:02Z"),
             create_test_operation("did:plc:test3", "cid3", "2024-01-01T00:00:03Z"),
         ];
         mempool.add(ops).unwrap();
-        
+
         let peeked = mempool.peek(2);
         assert_eq!(peeked.len(), 2);
         assert_eq!(peeked[0].cid, Some("cid1".to_string()));
         assert_eq!(peeked[1].cid, Some("cid2".to_string()));
-        
+
         // Peek should not remove operations
         assert_eq!(mempool.count(), 3);
     }
@@ -745,10 +755,14 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let mut mempool = Mempool::new(tmp.path(), 1, min_time, false).unwrap();
-        
-        let ops = vec![create_test_operation("did:plc:test1", "cid1", "2024-01-01T00:00:01Z")];
+
+        let ops = vec![create_test_operation(
+            "did:plc:test1",
+            "cid1",
+            "2024-01-01T00:00:01Z",
+        )];
         mempool.add(ops).unwrap();
-        
+
         let peeked = mempool.peek(10);
         assert_eq!(peeked.len(), 1);
     }
@@ -760,14 +774,14 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let mut mempool = Mempool::new(tmp.path(), 1, min_time, false).unwrap();
-        
+
         let ops = vec![
             create_test_operation("did:plc:test1", "cid1", "2024-01-01T00:00:01Z"),
             create_test_operation("did:plc:test2", "cid2", "2024-01-01T00:00:02Z"),
         ];
         mempool.add(ops).unwrap();
         assert_eq!(mempool.count(), 2);
-        
+
         mempool.clear();
         assert_eq!(mempool.count(), 0);
     }
@@ -779,23 +793,23 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let mut mempool = Mempool::new(tmp.path(), 1, min_time, false).unwrap();
-        
+
         let ops = vec![
             create_test_operation("did:plc:test1", "cid1", "2024-01-01T00:00:01Z"),
             create_test_operation("did:plc:test1", "cid2", "2024-01-01T00:00:02Z"),
             create_test_operation("did:plc:test2", "cid3", "2024-01-01T00:00:03Z"),
         ];
         mempool.add(ops).unwrap();
-        
+
         let found = mempool.find_did_operations("did:plc:test1");
         assert_eq!(found.len(), 2);
         assert_eq!(found[0].cid, Some("cid1".to_string()));
         assert_eq!(found[1].cid, Some("cid2".to_string()));
-        
+
         let found = mempool.find_did_operations("did:plc:test2");
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].cid, Some("cid3".to_string()));
-        
+
         let found = mempool.find_did_operations("did:plc:nonexistent");
         assert_eq!(found.len(), 0);
     }
@@ -807,7 +821,7 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let mempool = Mempool::new(tmp.path(), 1, min_time, false).unwrap();
-        
+
         let stats = mempool.stats();
         assert_eq!(stats.count, 0);
         assert!(!stats.can_create_bundle);
@@ -821,13 +835,13 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let mut mempool = Mempool::new(tmp.path(), 1, min_time, false).unwrap();
-        
+
         let ops = vec![
             create_test_operation("did:plc:test1", "cid1", "2024-01-01T00:00:01Z"),
             create_test_operation("did:plc:test2", "cid2", "2024-01-01T00:00:02Z"),
         ];
         mempool.add(ops).unwrap();
-        
+
         let stats = mempool.stats();
         assert_eq!(stats.count, 2);
         assert!(!stats.can_create_bundle); // Need BUNDLE_SIZE (10000) ops
@@ -844,7 +858,7 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let mempool = Mempool::new(tmp.path(), 42, min_time, false).unwrap();
-        
+
         let filename = mempool.get_filename();
         assert!(filename.contains("plc_mempool_"));
         assert!(filename.contains("000042"));

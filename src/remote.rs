@@ -29,7 +29,7 @@ impl RemoteClient {
     pub async fn fetch_index(&self) -> Result<Index> {
         // Try both common index file names
         let mut url = format!("{}/index.json", self.base_url);
-        
+
         let response = self
             .client
             .get(&url)
@@ -48,11 +48,11 @@ impl RemoteClient {
                 .send()
                 .await
                 .context("Failed to fetch index")?;
-            
+
             if !response2.status().is_success() {
                 anyhow::bail!("Unexpected status code: {}", response2.status());
             }
-            
+
             let data = response2.text().await?;
             let index: Index = sonic_rs::from_str(&data).context("Failed to parse index JSON")?;
             return Ok(index);
@@ -155,8 +155,8 @@ impl RemoteClient {
         }
 
         let data = response.text().await?;
-        let document: DIDDocument = sonic_rs::from_str(&data)
-            .context("Failed to parse DID document JSON")?;
+        let document: DIDDocument =
+            sonic_rs::from_str(&data).context("Failed to parse DID document JSON")?;
 
         Ok(document)
     }
@@ -227,22 +227,40 @@ mod tests {
     #[test]
     fn test_normalize_base_url() {
         // Test removing trailing slash
-        assert_eq!(normalize_base_url("https://example.com/".to_string()), "https://example.com");
-        
+        assert_eq!(
+            normalize_base_url("https://example.com/".to_string()),
+            "https://example.com"
+        );
+
         // Test removing index.json
-        assert_eq!(normalize_base_url("https://example.com/index.json".to_string()), "https://example.com");
-        
+        assert_eq!(
+            normalize_base_url("https://example.com/index.json".to_string()),
+            "https://example.com"
+        );
+
         // Test removing plc_bundles.json
-        assert_eq!(normalize_base_url("https://example.com/plc_bundles.json".to_string()), "https://example.com");
-        
+        assert_eq!(
+            normalize_base_url("https://example.com/plc_bundles.json".to_string()),
+            "https://example.com"
+        );
+
         // Test removing both trailing slash and index file
-        assert_eq!(normalize_base_url("https://example.com/index.json/".to_string()), "https://example.com");
-        
+        assert_eq!(
+            normalize_base_url("https://example.com/index.json/".to_string()),
+            "https://example.com"
+        );
+
         // Test already normalized URL
-        assert_eq!(normalize_base_url("https://example.com".to_string()), "https://example.com");
-        
+        assert_eq!(
+            normalize_base_url("https://example.com".to_string()),
+            "https://example.com"
+        );
+
         // Test with path
-        assert_eq!(normalize_base_url("https://example.com/api/".to_string()), "https://example.com/api");
+        assert_eq!(
+            normalize_base_url("https://example.com/api/".to_string()),
+            "https://example.com/api"
+        );
     }
 
     #[test]
@@ -256,7 +274,7 @@ mod tests {
     fn test_remote_client_new_normalizes_url() {
         let client = RemoteClient::new("https://example.com/").unwrap();
         assert!(!client.base_url.ends_with('/'));
-        
+
         let client2 = RemoteClient::new("https://example.com/index.json").unwrap();
         assert!(!client2.base_url.ends_with("index.json"));
     }

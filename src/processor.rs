@@ -273,27 +273,43 @@ fn resolve_bundle_keyword(keyword: &str, max_bundle: u32) -> Result<u32> {
 
     // Handle "head~N" syntax
     if let Some(rest) = keyword.strip_prefix("head~") {
-        let offset: u32 = rest.parse()
+        let offset: u32 = rest
+            .parse()
             .map_err(|_| anyhow::anyhow!("Invalid offset in 'head~{}': expected a number", rest))?;
         if offset >= max_bundle {
-            anyhow::bail!("Offset {} in 'head~{}' exceeds maximum bundle {}", offset, rest, max_bundle);
+            anyhow::bail!(
+                "Offset {} in 'head~{}' exceeds maximum bundle {}",
+                offset,
+                rest,
+                max_bundle
+            );
         }
         return Ok(max_bundle - offset);
     }
 
     // Handle "~N" shorthand syntax
     if let Some(rest) = keyword.strip_prefix('~') {
-        let offset: u32 = rest.parse()
+        let offset: u32 = rest
+            .parse()
             .map_err(|_| anyhow::anyhow!("Invalid offset in '~{}': expected a number", rest))?;
         if offset >= max_bundle {
-            anyhow::bail!("Offset {} in '~{}' exceeds maximum bundle {}", offset, rest, max_bundle);
+            anyhow::bail!(
+                "Offset {} in '~{}' exceeds maximum bundle {}",
+                offset,
+                rest,
+                max_bundle
+            );
         }
         return Ok(max_bundle - offset);
     }
 
     // Not a keyword, try parsing as number
-    let num: u32 = keyword.parse()
-        .map_err(|_| anyhow::anyhow!("Invalid bundle specifier: '{}' (expected number, 'root', 'head', 'head~N', or '~N')", keyword))?;
+    let num: u32 = keyword.parse().map_err(|_| {
+        anyhow::anyhow!(
+            "Invalid bundle specifier: '{}' (expected number, 'root', 'head', 'head~N', or '~N')",
+            keyword
+        )
+    })?;
     Ok(num)
 }
 
@@ -328,7 +344,12 @@ pub fn parse_bundle_range(spec: &str, max_bundle: u32) -> Result<Vec<u32>> {
                 anyhow::bail!("Invalid range: {} > {} (start must be <= end)", start, end);
             }
             if start > max_bundle || end > max_bundle {
-                anyhow::bail!("Invalid range: {}-{} (exceeds maximum bundle {})", start, end, max_bundle);
+                anyhow::bail!(
+                    "Invalid range: {}-{} (exceeds maximum bundle {})",
+                    start,
+                    end,
+                    max_bundle
+                );
             }
             bundles.extend(start..=end);
         } else {
@@ -351,7 +372,7 @@ pub fn parse_bundle_range(spec: &str, max_bundle: u32) -> Result<Vec<u32>> {
 /// Operations are 0-indexed global positions (0 = first operation, bundle 1 position 0)
 pub fn parse_operation_range(spec: &str, max_operation: u64) -> Result<Vec<u64>> {
     use anyhow::Context;
-    
+
     if max_operation == 0 {
         anyhow::bail!("No operations available");
     }
@@ -484,7 +505,7 @@ mod tests {
         let mut buffer = OutputBuffer::new(10);
         buffer.push("line1");
         buffer.push("line2");
-        
+
         let flushed = buffer.flush();
         assert_eq!(flushed, "line1\nline2\n");
         assert!(buffer.is_empty());
@@ -495,7 +516,7 @@ mod tests {
         let mut buffer = OutputBuffer::new(10);
         buffer.push("line1");
         buffer.push("line2");
-        
+
         // Each line adds len + 1 (for newline)
         assert_eq!(buffer.get_matched_bytes(), 5 + 1 + 5 + 1);
     }
@@ -534,7 +555,12 @@ mod tests {
     fn test_parse_bundle_range_empty_max() {
         let result = parse_bundle_range("1", 0);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No bundles available"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No bundles available")
+        );
     }
 
     #[test]
@@ -548,14 +574,24 @@ mod tests {
     fn test_parse_bundle_range_invalid_range() {
         let result = parse_bundle_range("5-3", 10);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("start must be <= end"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("start must be <= end")
+        );
     }
 
     #[test]
     fn test_parse_bundle_range_invalid_format() {
         let result = parse_bundle_range("1-2-3", 10);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid range format"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid range format")
+        );
     }
 
     #[test]
@@ -592,14 +628,24 @@ mod tests {
     fn test_parse_bundle_range_keyword_head_offset_invalid() {
         let result = parse_bundle_range("head~10", 10);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("exceeds maximum bundle"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("exceeds maximum bundle")
+        );
     }
 
     #[test]
     fn test_parse_bundle_range_keyword_shorthand_offset_invalid() {
         let result = parse_bundle_range("~10", 10);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("exceeds maximum bundle"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("exceeds maximum bundle")
+        );
     }
 
     #[test]
@@ -643,7 +689,12 @@ mod tests {
     fn test_parse_operation_range_empty_max() {
         let result = parse_operation_range("0", 0);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No operations available"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No operations available")
+        );
     }
 
     #[test]
@@ -657,21 +708,36 @@ mod tests {
     fn test_parse_operation_range_invalid_range() {
         let result = parse_operation_range("10-5", 1000);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("start must be <= end"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("start must be <= end")
+        );
     }
 
     #[test]
     fn test_parse_operation_range_invalid_format() {
         let result = parse_operation_range("1-2-3", 1000);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid range format"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid range format")
+        );
     }
 
     #[test]
     fn test_parse_operation_range_invalid_number() {
         let result = parse_operation_range("abc", 1000);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid operation number"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid operation number")
+        );
     }
 
     #[test]

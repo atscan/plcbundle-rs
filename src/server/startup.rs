@@ -2,10 +2,10 @@
 // This module handles all the complex setup logic for starting the server,
 // including manager initialization, DID index building, handle resolver setup, etc.
 
+use crate::constants;
 use crate::manager::BundleManager;
 use crate::runtime::BundleRuntime;
 use crate::server::{Server, ServerConfig};
-use crate::constants;
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -56,13 +56,13 @@ pub fn initialize_manager(config: &StartupConfig) -> Result<BundleManager> {
 
     // Preload mempool for server use (faster responses)
     let preload_mempool = true;
-    
+
     let options = crate::ManagerOptions {
         handle_resolver_url: handle_resolver_url.clone(),
         preload_mempool,
         verbose: config.verbose,
     };
-    
+
     let manager = if config.sync {
         // Sync mode can auto-init
         match BundleManager::new(config.dir.clone(), options.clone()) {
@@ -87,7 +87,10 @@ pub fn initialize_manager(config: &StartupConfig) -> Result<BundleManager> {
     // Log handle resolver configuration
     if config.verbose {
         if let Some(url) = manager.get_handle_resolver_base_url() {
-            log::debug!("[HandleResolver] External handle resolver configured: {}", url);
+            log::debug!(
+                "[HandleResolver] External handle resolver configured: {}",
+                url
+            );
         } else {
             log::debug!("[HandleResolver] External handle resolver not configured");
         }
@@ -96,11 +99,10 @@ pub fn initialize_manager(config: &StartupConfig) -> Result<BundleManager> {
     Ok(manager)
 }
 
-
 /// Build or verify DID index if resolver is enabled
-/// 
+///
 /// `progress_callback_factory` is an optional function that creates a progress callback
-/// and finish function given the total bundle count and total bytes. This allows the caller 
+/// and finish function given the total bundle count and total bytes. This allows the caller
 /// to create progress tracking (e.g., a progress bar) after knowing the bundle count.
 pub fn setup_did_index<F>(
     manager: &mut BundleManager,
@@ -131,7 +133,7 @@ where
         .get("total_entries")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
-    
+
     if verbose {
         log::debug!(
             "[DIDResolver] DID index stats: total_dids={}, total_entries={}",
@@ -147,10 +149,7 @@ where
 
         let last_bundle = manager.get_last_bundle();
         if verbose {
-            log::debug!(
-                "[DIDResolver] Last bundle number: {}",
-                last_bundle
-            );
+            log::debug!("[DIDResolver] Last bundle number: {}", last_bundle);
         }
 
         // Check if repository is empty
@@ -179,29 +178,25 @@ where
         }
 
         let start_time = std::time::Instant::now();
-        
+
         // Calculate total uncompressed size for progress tracking
         let bundle_numbers: Vec<u32> = (1..=last_bundle).collect();
         let total_uncompressed_size = index.total_uncompressed_size_for_bundles(&bundle_numbers);
-        
+
         // Build index with progress callback (create it now that we know the totals)
         let (callback, finish_fn) = if let Some(factory) = progress_callback_factory {
             let (cb, finish) = factory(last_bundle, total_uncompressed_size);
-            let callback = move |current: u32, total: u32, bytes_processed: u64, total_bytes: u64| {
-                cb(current, total, bytes_processed, total_bytes);
-            };
+            let callback =
+                move |current: u32, total: u32, bytes_processed: u64, total_bytes: u64| {
+                    cb(current, total, bytes_processed, total_bytes);
+                };
             (Some(callback), finish)
         } else {
             (None, None)
         };
-        
-        manager.build_did_index(
-            constants::DID_INDEX_FLUSH_INTERVAL,
-            callback,
-            None,
-            None,
-        )?;
-        
+
+        manager.build_did_index(constants::DID_INDEX_FLUSH_INTERVAL, callback, None, None)?;
+
         // Finish progress tracking if provided
         if let Some(finish) = finish_fn {
             finish();
@@ -218,7 +213,7 @@ where
             .get("total_entries")
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
-        
+
         eprintln!("✓ DID index built");
         eprintln!("  Total DIDs: {}\n", final_total_dids);
 
@@ -230,12 +225,13 @@ where
                 final_total_entries
             );
         }
-        
+
         // Verify index integrity after building
         if verbose {
             log::debug!("[DIDResolver] Verifying DID index integrity...");
         }
-        let verify_result = manager.verify_did_index::<fn(u32, u32, u64, u64)>(false, 64, false, None)?;
+        let verify_result =
+            manager.verify_did_index::<fn(u32, u32, u64, u64)>(false, 64, false, None)?;
         if verify_result.missing_base_shards > 0 {
             anyhow::bail!(
                 "DID index is corrupted: {} missing base shard(s). Run '{} index repair' to fix.",
@@ -260,12 +256,13 @@ where
                 total_dids
             );
         }
-        
+
         // Verify index integrity before starting server
         if verbose {
             log::debug!("[DIDResolver] Verifying DID index integrity...");
         }
-        let verify_result = manager.verify_did_index::<fn(u32, u32, u64, u64)>(false, 64, false, None)?;
+        let verify_result =
+            manager.verify_did_index::<fn(u32, u32, u64, u64)>(false, 64, false, None)?;
         if verify_result.missing_base_shards > 0 {
             anyhow::bail!(
                 "DID index is corrupted: {} missing base shard(s). Run '{} index repair' to fix.",
@@ -289,23 +286,25 @@ where
 }
 
 /// Test handle resolver on startup
-pub async fn test_handle_resolver(
-    manager: &BundleManager,
-    verbose: bool,
-) -> Result<()> {
+pub async fn test_handle_resolver(manager: &BundleManager, verbose: bool) -> Result<()> {
     if let Some(handle_resolver) = manager.get_handle_resolver() {
         if verbose {
-            log::debug!("[HandleResolver] Testing external handle resolver with handle resolution...");
+            log::debug!(
+                "[HandleResolver] Testing external handle resolver with handle resolution..."
+            );
         }
         eprintln!("Testing handle resolver...");
-        
+
         // Use a well-known handle that should always resolve
         let test_handle = "bsky.app";
         let start = std::time::Instant::now();
         match handle_resolver.resolve_handle(test_handle).await {
             Ok(did) => {
                 let duration = start.elapsed();
-                eprintln!("✓ Handle resolver test successful ({:.3}s)", duration.as_secs_f64());
+                eprintln!(
+                    "✓ Handle resolver test successful ({:.3}s)",
+                    duration.as_secs_f64()
+                );
                 if verbose {
                     log::debug!(
                         "[HandleResolver] Test resolution of '{}' -> '{}' successful in {:.3}s",
@@ -317,7 +316,11 @@ pub async fn test_handle_resolver(
             }
             Err(e) => {
                 let duration = start.elapsed();
-                eprintln!("⚠️  Handle resolver test failed ({:.3}s): {}", duration.as_secs_f64(), e);
+                eprintln!(
+                    "⚠️  Handle resolver test failed ({:.3}s): {}",
+                    duration.as_secs_f64(),
+                    e
+                );
                 if verbose {
                     log::warn!(
                         "[HandleResolver] Test resolution of '{}' failed after {:.3}s: {}",
@@ -350,7 +353,10 @@ pub async fn run_resolver_ping_loop(
             "[HandleResolver] Starting keep-alive ping loop (interval: {:?})",
             ping_interval
         );
-        log::debug!("[HandleResolver] Handle resolver URL: {}", resolver.get_base_url());
+        log::debug!(
+            "[HandleResolver] Handle resolver URL: {}",
+            resolver.get_base_url()
+        );
     }
 
     // Initial delay before first ping
@@ -507,7 +513,8 @@ pub fn setup_resolver_ping_loop(
 
 /// Progress callback factory type
 /// Takes (last_bundle, total_bytes) and returns (progress_callback, finish_function)
-pub type ProgressCallbackFactory = Box<dyn FnOnce(u32, u64) -> (ProgressCallback, Option<ProgressFinish>) + Send + Sync>;
+pub type ProgressCallbackFactory =
+    Box<dyn FnOnce(u32, u64) -> (ProgressCallback, Option<ProgressFinish>) + Send + Sync>;
 
 /// Main server startup function that orchestrates all initialization
 pub async fn start_server(
@@ -520,7 +527,12 @@ pub async fn start_server(
     let mut manager = initialize_manager(&config)?;
 
     // Setup DID index if resolver is enabled
-    setup_did_index(&mut manager, config.enable_resolver, config.verbose, progress_callback_factory)?;
+    setup_did_index(
+        &mut manager,
+        config.enable_resolver,
+        config.verbose,
+        progress_callback_factory,
+    )?;
 
     // Test handle resolver on startup if resolver is enabled
     if config.enable_resolver {
@@ -551,7 +563,12 @@ pub async fn start_server(
     let mut resolver_tasks = JoinSet::new();
 
     // Start sync loop if enabled
-    setup_sync_loop(Arc::clone(&manager), &config, &server_runtime, &mut background_tasks);
+    setup_sync_loop(
+        Arc::clone(&manager),
+        &config,
+        &server_runtime,
+        &mut background_tasks,
+    );
 
     // Start handle resolver keep-alive ping task if resolver is enabled
     setup_resolver_ping_loop(&manager, &config, &server_runtime, &mut resolver_tasks);
@@ -575,29 +592,25 @@ pub async fn start_server(
         .context("Server error")?;
 
     // Use common shutdown cleanup handler
-    server_runtime.wait_for_shutdown_cleanup(
-        "Server",
-        Some(&mut resolver_tasks),
-        Some(&mut background_tasks),
-    ).await;
-    
+    server_runtime
+        .wait_for_shutdown_cleanup(
+            "Server",
+            Some(&mut resolver_tasks),
+            Some(&mut background_tasks),
+        )
+        .await;
+
     Ok(())
 }
 
 /// Display server startup information
 fn display_server_info(manager: &BundleManager, addr: &str, config: &StartupConfig) {
     use crate::server::get_ascii_art_banner;
-    
+
     // Print ASCII art banner
-    eprintln!(
-        "{}",
-        get_ascii_art_banner(env!("CARGO_PKG_VERSION"))
-    );
+    eprintln!("{}", get_ascii_art_banner(env!("CARGO_PKG_VERSION")));
     eprintln!("{} HTTP server started", constants::BINARY_NAME);
-    eprintln!(
-        "  Directory: {}",
-        manager.directory().display()
-    );
+    eprintln!("  Directory: {}", manager.directory().display());
     eprintln!("  Listening: http://{}", addr);
 
     if config.sync {
@@ -634,4 +647,3 @@ fn display_server_info(manager: &BundleManager, addr: &str, config: &StartupConf
     let index = manager.get_index();
     eprintln!("  Bundles: {} available", index.bundles.len());
 }
-

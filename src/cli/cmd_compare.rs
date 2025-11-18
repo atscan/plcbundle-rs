@@ -1,8 +1,8 @@
 // Compare command - compare repositories
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueHint};
-use plcbundle::{BundleManager, constants, remote};
 use plcbundle::constants::bundle_position_to_global;
+use plcbundle::{BundleManager, constants, remote};
 use sonic_rs::JsonValueTrait;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -73,7 +73,9 @@ pub fn run(cmd: CompareCommand, dir: PathBuf, global_verbose: bool) -> Result<()
         let last_bundle = manager.get_last_bundle();
         let bundle_nums = super::utils::parse_bundle_spec(Some(bundles_str), last_bundle)?;
         if bundle_nums.len() != 1 {
-            anyhow::bail!("--bundles must specify a single bundle number for comparison (e.g., \"23\")");
+            anyhow::bail!(
+                "--bundles must specify a single bundle number for comparison (e.g., \"23\")"
+            );
         }
         let bundle_num = bundle_nums[0];
         rt.block_on(diff_specific_bundle(
@@ -126,11 +128,12 @@ async fn diff_indexes(
     eprintln!("📥 Loading target index...");
     let target_index = if target.starts_with("http://") || target.starts_with("https://") {
         let client = remote::RemoteClient::new(target)?;
-        client.fetch_index().await
+        client
+            .fetch_index()
+            .await
             .context("Failed to load target index")?
     } else {
-        remote::load_local_index(target)
-            .context("Failed to load target index")?
+        remote::load_local_index(target).context("Failed to load target index")?
     };
 
     // Check origins - CRITICAL: must match for valid comparison
@@ -204,11 +207,12 @@ async fn diff_specific_bundle(
     eprintln!("📥 Loading remote index...");
     let remote_index = if target.starts_with("http://") || target.starts_with("https://") {
         let client = remote::RemoteClient::new(target)?;
-        client.fetch_index().await
+        client
+            .fetch_index()
+            .await
             .context("Failed to load remote index")?
     } else {
-        remote::load_local_index(target)
-            .context("Failed to load remote index")?
+        remote::load_local_index(target).context("Failed to load remote index")?
     };
     let target_origin = &remote_index.origin;
 
@@ -256,7 +260,8 @@ async fn diff_specific_bundle(
     eprintln!("📦 Loading remote bundle {}...\n", bundle_num);
     let remote_ops = if target.starts_with("http://") || target.starts_with("https://") {
         let client = remote::RemoteClient::new(target)?;
-        client.fetch_bundle_operations(bundle_num)
+        client
+            .fetch_bundle_operations(bundle_num)
             .await
             .context("Failed to load remote bundle")?
     } else {
@@ -270,7 +275,8 @@ async fn diff_specific_bundle(
         };
 
         // Try to load bundle from target directory
-        let target_manager = super::utils::create_manager(target_dir.to_path_buf(), false, false, false)?;
+        let target_manager =
+            super::utils::create_manager(target_dir.to_path_buf(), false, false, false)?;
         let target_result = target_manager
             .load_bundle(bundle_num, plcbundle::LoadOptions::default())
             .context("Failed to load bundle from target directory")?;
@@ -612,9 +618,7 @@ fn display_comparison(c: &IndexComparison, verbose: bool, origins_match: bool) {
         } else {
             // Just missing/extra bundles - not critical
             eprintln!("ℹ️  Indexes differ (missing or extra bundles, but hashes match)");
-            eprintln!(
-                "   This is normal when comparing repositories at different sync states."
-            );
+            eprintln!("   This is normal when comparing repositories at different sync states.");
         }
     }
 }
@@ -1113,22 +1117,23 @@ fn display_operation_comparison(
 
         // Add hints for exploring missing operations
         if let Some((first_cid, first_pos)) = missing_in_local.first()
-            && target.starts_with("http") {
-                let base_url = if let Some(stripped) = target.strip_suffix('/') {
-                    stripped
-                } else {
-                    target
-                };
-                let global_pos = bundle_position_to_global(bundle_num, *first_pos);
-                eprintln!("  💡 To explore missing operations:");
-                eprintln!(
-                    "     • Global position: {} (bundle {} position {})",
-                    global_pos, bundle_num, first_pos
-                );
-                eprintln!(
-                    "     • View in remote: curl '{}/op/{}' | grep '{}' | jq .",
-                    base_url, global_pos, first_cid
-                );
+            && target.starts_with("http")
+        {
+            let base_url = if let Some(stripped) = target.strip_suffix('/') {
+                stripped
+            } else {
+                target
+            };
+            let global_pos = bundle_position_to_global(bundle_num, *first_pos);
+            eprintln!("  💡 To explore missing operations:");
+            eprintln!(
+                "     • Global position: {} (bundle {} position {})",
+                global_pos, bundle_num, first_pos
+            );
+            eprintln!(
+                "     • View in remote: curl '{}/op/{}' | grep '{}' | jq .",
+                base_url, global_pos, first_cid
+            );
         }
         eprintln!();
     }
@@ -1162,8 +1167,7 @@ fn display_operation_comparison(
 
         // Add hints for exploring missing operations
         if let Some((_first_cid, first_pos)) = missing_in_remote.first() {
-            let global_pos =
-                bundle_position_to_global(bundle_num, *first_pos);
+            let global_pos = bundle_position_to_global(bundle_num, *first_pos);
             eprintln!("  💡 To explore missing operations:");
             eprintln!(
                 "     • Global position: {} (bundle {} position {})",
@@ -1211,7 +1215,11 @@ fn display_operation_comparison(
             sample_size.min(local_ops.len())
         );
         eprintln!("────────────────────────────────");
-        for (i, op) in local_ops.iter().enumerate().take(sample_size.min(local_ops.len())) {
+        for (i, op) in local_ops
+            .iter()
+            .enumerate()
+            .take(sample_size.min(local_ops.len()))
+        {
             let remote_match = if let Some(ref cid) = op.cid {
                 if let Some(&remote_pos) = remote_cids.get(cid) {
                     if remote_pos == i {

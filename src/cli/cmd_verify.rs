@@ -1,5 +1,5 @@
 use super::progress::ProgressBar;
-use super::utils::{format_bytes, format_bytes_per_sec, format_number, HasGlobalFlags};
+use super::utils::{HasGlobalFlags, format_bytes, format_bytes_per_sec, format_number};
 use anyhow::{Result, bail};
 use clap::Args;
 use plcbundle::{BundleManager, VerifyResult, VerifySpec};
@@ -69,8 +69,12 @@ pub struct VerifyCommand {
 }
 
 impl HasGlobalFlags for VerifyCommand {
-    fn verbose(&self) -> bool { false }
-    fn quiet(&self) -> bool { false }
+    fn verbose(&self) -> bool {
+        false
+    }
+    fn quiet(&self) -> bool {
+        false
+    }
 }
 
 pub fn run(cmd: VerifyCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
@@ -101,7 +105,7 @@ pub fn run(cmd: VerifyCommand, dir: PathBuf, global_verbose: bool) -> Result<()>
     if let Some(bundles_str) = cmd.bundles {
         let last_bundle = manager.get_last_bundle();
         let bundle_nums = super::utils::parse_bundle_spec(Some(bundles_str), last_bundle)?;
-        
+
         if bundle_nums.len() == 1 {
             verify_single_bundle(&manager, bundle_nums[0], global_verbose, cmd.full, cmd.fast)?;
         } else {
@@ -388,9 +392,9 @@ fn verify_chain(
                     }
 
                     // Provide helpful hint for common issues
-                    let has_hash_mismatch = errors.iter().any(|e| {
-                        e.contains("hash") && e.contains("mismatch")
-                    });
+                    let has_hash_mismatch = errors
+                        .iter()
+                        .any(|e| e.contains("hash") && e.contains("mismatch"));
                     if has_hash_mismatch {
                         eprintln!(
                             "  💡 Hint: Bundle file may have been migrated but index wasn't updated."
@@ -404,8 +408,9 @@ fn verify_chain(
 
             // Store first error for summary
             if first_error.is_none()
-                && let Some(first_err) = errors.first() {
-                    first_error = Some(anyhow::anyhow!("{}", first_err));
+                && let Some(first_err) = errors.first()
+            {
+                first_error = Some(anyhow::anyhow!("{}", first_err));
             }
         } else {
             verified_count += 1;
@@ -531,7 +536,8 @@ fn verify_chain(
             }
 
             if total_uncompressed_size > 0 {
-                let bytes_per_sec_uncompressed = total_uncompressed_size as f64 / elapsed.as_secs_f64();
+                let bytes_per_sec_uncompressed =
+                    total_uncompressed_size as f64 / elapsed.as_secs_f64();
                 eprintln!(
                     "   Data rate:  {} (uncompressed)",
                     format_bytes_per_sec(bytes_per_sec_uncompressed)
@@ -543,10 +549,10 @@ fn verify_chain(
         eprintln!("\n❌ Chain verification failed");
         eprintln!("   Verified: {}/{} bundles", verified_count, bundles.len());
         eprintln!("   Errors:   {}", error_count);
-        
+
         // Show failed bundles with their error messages
         print_failed_bundles(&failed_bundles, 10);
-        
+
         eprintln!("   Time:     {:?}", elapsed);
 
         // Show helpful hint if hash mismatch detected
@@ -582,7 +588,7 @@ fn verify_range(
     num_threads: usize,
 ) -> Result<()> {
     let use_parallel = num_threads > 1;
-    
+
     eprintln!("\n🔬 Verifying bundles {} - {}", start, end);
     if use_parallel {
         eprintln!("   Using {} worker thread(s)", num_threads);
@@ -593,15 +599,7 @@ fn verify_range(
     let overall_start = Instant::now();
 
     let verify_err = if use_parallel {
-        verify_range_parallel(
-            manager,
-            start,
-            end,
-            num_threads,
-            verbose,
-            full,
-            fast,
-        )
+        verify_range_parallel(manager, start, end, num_threads, verbose, full, fast)
     } else {
         verify_range_sequential(manager, start, end, total as usize, verbose, full, fast)
     };
@@ -763,7 +761,7 @@ fn verify_range_parallel(
 }
 
 /// Print failed bundles with their error messages
-/// 
+///
 /// # Arguments
 /// * `failed_bundles` - Vector of (bundle_num, errors) tuples
 /// * `threshold` - Maximum number of bundles to list in full before truncating (e.g., 10 or 20)
@@ -804,6 +802,9 @@ fn print_failed_bundles(failed_bundles: &[(u32, Vec<String>)], threshold: usize)
                 }
             }
         }
-        eprintln!("      ... and {} more failed bundles", failed_bundles.len() - 5);
+        eprintln!(
+            "      ... and {} more failed bundles",
+            failed_bundles.len() - 5
+        );
     }
 }

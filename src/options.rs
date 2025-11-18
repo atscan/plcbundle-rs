@@ -120,17 +120,13 @@ mod tests {
 
     #[test]
     fn test_options_builder_directory() {
-        let opts = OptionsBuilder::new()
-            .directory("/tmp/test")
-            .build();
+        let opts = OptionsBuilder::new().directory("/tmp/test").build();
         assert_eq!(opts.directory, PathBuf::from("/tmp/test"));
     }
 
     #[test]
     fn test_options_builder_query() {
-        let opts = OptionsBuilder::new()
-            .query("operation.type")
-            .build();
+        let opts = OptionsBuilder::new().query("operation.type").build();
         assert_eq!(opts.query, "operation.type");
     }
 
@@ -144,17 +140,13 @@ mod tests {
 
     #[test]
     fn test_options_builder_num_threads() {
-        let opts = OptionsBuilder::new()
-            .num_threads(4)
-            .build();
+        let opts = OptionsBuilder::new().num_threads(4).build();
         assert_eq!(opts.num_threads, 4);
     }
 
     #[test]
     fn test_options_builder_batch_size() {
-        let opts = OptionsBuilder::new()
-            .batch_size(5000)
-            .build();
+        let opts = OptionsBuilder::new().batch_size(5000).build();
         assert_eq!(opts.batch_size, 5000);
     }
 
@@ -167,7 +159,7 @@ mod tests {
             .num_threads(8)
             .batch_size(1000)
             .build();
-        
+
         assert_eq!(opts.directory, PathBuf::from("/tmp/test"));
         assert_eq!(opts.query, "did");
         assert_eq!(opts.query_mode, QueryMode::JmesPath);

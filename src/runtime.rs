@@ -1,11 +1,11 @@
 //! Graceful shutdown coordination for server and background tasks, with unified shutdown future and fatal-error handling
 // Runtime module - shutdown coordination for server and background tasks
-use tokio::signal;
-use tokio::sync::watch;
-use tokio::task::JoinSet;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::signal;
+use tokio::sync::watch;
+use tokio::task::JoinSet;
 
 /// Lightweight coordination for bundle operations shutdown and background tasks
 /// Used by both server and sync continuous mode for graceful shutdown handling
@@ -77,13 +77,13 @@ impl BundleRuntime {
     }
 
     /// Common shutdown cleanup handler for server and sync commands
-    /// 
+    ///
     /// This method handles the common pattern of:
     /// 1. Triggering shutdown (if not already triggered)
     /// 2. Aborting resolver tasks immediately (if any)
     /// 3. Handling background tasks based on shutdown type (fatal vs normal)
     /// 4. Printing completion message
-    /// 
+    ///
     /// # Arguments
     /// * `service_name` - Name of the service (e.g., "Server", "Sync") for messages
     /// * `resolver_tasks` - Optional resolver tasks to abort immediately
@@ -98,10 +98,14 @@ impl BundleRuntime {
         self.trigger_shutdown();
 
         // Always abort resolver tasks immediately - they're just keep-alive pings
-        if let Some(resolver_tasks) = resolver_tasks && !resolver_tasks.is_empty() {
+        if let Some(resolver_tasks) = resolver_tasks
+            && !resolver_tasks.is_empty()
+        {
             resolver_tasks.abort_all();
             while let Some(result) = resolver_tasks.join_next().await {
-                if let Err(e) = result && !e.is_cancelled() {
+                if let Err(e) = result
+                    && !e.is_cancelled()
+                {
                     eprintln!("Resolver task error: {}", e);
                 }
             }
@@ -115,7 +119,9 @@ impl BundleRuntime {
                 background_tasks.abort_all();
                 // Wait briefly for aborted tasks to finish
                 while let Some(result) = background_tasks.join_next().await {
-                    if let Err(e) = result && !e.is_cancelled() {
+                    if let Err(e) = result
+                        && !e.is_cancelled()
+                    {
                         eprintln!("Background task error: {}", e);
                     }
                 }
@@ -145,7 +151,7 @@ impl Default for BundleRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::time::{sleep, Duration};
+    use tokio::time::{Duration, sleep};
 
     #[tokio::test]
     async fn test_programmatic_shutdown() {
@@ -199,4 +205,3 @@ mod tests {
         assert!(*rx.borrow());
     }
 }
-

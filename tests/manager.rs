@@ -28,7 +28,9 @@ async fn test_bundle_manager_core() -> Result<()> {
     assert!(raw.contains("did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"));
 
     // Build DID index so DID lookups work
-    manager.batch_update_did_index_async(1, manager.get_last_bundle()).await?;
+    manager
+        .batch_update_did_index_async(1, manager.get_last_bundle())
+        .await?;
 
     // Query DID operations and resolve DID
     let did = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
@@ -125,7 +127,9 @@ async fn test_delete_bundle_and_sample_dids() -> Result<()> {
     common::setup_manager(&dir2_path)?;
     common::add_dummy_bundle(&dir2_path)?;
     let manager2 = plcbundle::BundleManager::new(dir2_path.clone(), ())?;
-    manager2.batch_update_did_index_async(1, manager2.get_last_bundle()).await?;
+    manager2
+        .batch_update_did_index_async(1, manager2.get_last_bundle())
+        .await?;
 
     // Verify we can query DID operations from the newly built index
     let first_did = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";

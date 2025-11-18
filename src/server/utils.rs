@@ -1,7 +1,7 @@
 // Utility functions for validation and common operations
 
-use axum::http::{HeaderMap, HeaderValue, Uri};
 use crate::constants;
+use axum::http::{HeaderMap, HeaderValue, Uri};
 
 /// Check if a path is a common browser file that should be ignored
 pub fn is_common_browser_file(path: &str) -> bool {
@@ -55,7 +55,12 @@ pub fn is_valid_did_or_handle(input: &str) -> bool {
 
     // Must not have invalid characters
     for c in input.chars() {
-        if !(c.is_ascii_lowercase() || c.is_ascii_uppercase() || c.is_ascii_digit() || c == '.' || c == '-') {
+        if !(c.is_ascii_lowercase()
+            || c.is_ascii_uppercase()
+            || c.is_ascii_digit()
+            || c == '.'
+            || c == '-')
+        {
             return false;
         }
     }
@@ -117,22 +122,22 @@ pub fn parse_operation_pointer(pointer: &str) -> anyhow::Result<(u32, usize)> {
 /// Extract base URL from request headers and URI
 pub fn extract_base_url(headers: &HeaderMap, uri: &Uri) -> String {
     if let Some(host_str) = headers.get("host").and_then(|h| h.to_str().ok()) {
-            // Check if request is HTTPS (from X-Forwarded-Proto or X-Forwarded-Ssl)
-            let is_https = headers
-                .get("x-forwarded-proto")
+        // Check if request is HTTPS (from X-Forwarded-Proto or X-Forwarded-Ssl)
+        let is_https = headers
+            .get("x-forwarded-proto")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s == "https")
+            .unwrap_or(false)
+            || headers
+                .get("x-forwarded-ssl")
                 .and_then(|v| v.to_str().ok())
-                .map(|s| s == "https")
-                .unwrap_or(false)
-                || headers
-                    .get("x-forwarded-ssl")
-                    .and_then(|v| v.to_str().ok())
-                    .map(|s| s == "on")
-                    .unwrap_or(false);
+                .map(|s| s == "on")
+                .unwrap_or(false);
 
-            let scheme = if is_https { "https" } else { "http" };
-            return format!("{}://{}", scheme, host_str);
+        let scheme = if is_https { "https" } else { "http" };
+        return format!("{}://{}", scheme, host_str);
     }
-    
+
     if let Some(authority) = uri.authority() {
         format!("http://{}", authority)
     } else {
@@ -155,7 +160,7 @@ pub fn bundle_download_headers(content_type: &'static str, filename: &str) -> He
 pub fn parse_duration(s: &str) -> anyhow::Result<tokio::time::Duration> {
     use anyhow::Context;
     use tokio::time::Duration;
-    
+
     // Simple parser: "60s", "5m", "1h"
     let s = s.trim();
     if let Some(stripped) = s.strip_suffix('s') {
@@ -173,5 +178,3 @@ pub fn parse_duration(s: &str) -> anyhow::Result<tokio::time::Duration> {
         Ok(Duration::from_secs(secs))
     }
 }
-
-

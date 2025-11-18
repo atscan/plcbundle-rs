@@ -1,13 +1,12 @@
-
 use anyhow::Result;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
 
+use plcbundle::BundleManager;
 use plcbundle::index::{BundleMetadata, Index};
 use plcbundle::operations::Operation;
-use plcbundle::BundleManager;
 
 pub fn setup_manager(dir: &PathBuf) -> Result<BundleManager> {
     plcbundle::Index::init(dir, "http://localhost:1234".to_string(), true)?;

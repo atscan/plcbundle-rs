@@ -128,7 +128,7 @@ pub const DID_INDEX_FLUSH_INTERVAL: u32 = 64;
 
 /// Calculate global position from bundle number and position within bundle
 /// Global position = ((bundle_number - 1) * BUNDLE_SIZE) + position
-/// 
+///
 /// # Examples
 /// - Bundle 1, position 0 → global 0
 /// - Bundle 1, position 9999 → global 9999
@@ -152,7 +152,7 @@ pub fn mempool_position_to_global(last_bundle: u32, mempool_position: usize) -> 
 
 /// Convert global position to bundle number and position
 /// Returns (bundle_number, position) where bundle_number is 1-indexed and position is 0-indexed
-/// 
+///
 /// # Examples
 /// - Global 0 → bundle 1, position 0
 /// - Global 9999 → bundle 1, position 9999
@@ -205,16 +205,16 @@ mod tests {
     fn test_bundle_position_to_global() {
         // Bundle 1, position 0 → global 0
         assert_eq!(bundle_position_to_global(1, 0), 0);
-        
+
         // Bundle 1, position 9999 → global 9999
         assert_eq!(bundle_position_to_global(1, 9999), 9999);
-        
+
         // Bundle 2, position 0 → global 10000
         assert_eq!(bundle_position_to_global(2, 0), 10000);
-        
+
         // Bundle 2, position 500 → global 10500
         assert_eq!(bundle_position_to_global(2, 500), 10500);
-        
+
         // Bundle 3, position 42 → global 20042
         assert_eq!(bundle_position_to_global(3, 42), 20042);
     }
@@ -223,7 +223,7 @@ mod tests {
     fn test_bundle_position_to_global_edge_cases() {
         // Bundle 0 (edge case, should handle gracefully)
         assert_eq!(bundle_position_to_global(0, 0), 0);
-        
+
         // Large bundle numbers
         assert_eq!(bundle_position_to_global(100, 0), 990000);
         assert_eq!(bundle_position_to_global(100, 5000), 995000);
@@ -241,13 +241,13 @@ mod tests {
     fn test_mempool_position_to_global() {
         // With last_bundle = 0, mempool position 0 → global 0
         assert_eq!(mempool_position_to_global(0, 0), 0);
-        
+
         // With last_bundle = 1, mempool position 0 → global 10000
         assert_eq!(mempool_position_to_global(1, 0), 10000);
-        
+
         // With last_bundle = 1, mempool position 42 → global 10042
         assert_eq!(mempool_position_to_global(1, 42), 10042);
-        
+
         // With last_bundle = 2, mempool position 100 → global 20100
         assert_eq!(mempool_position_to_global(2, 100), 20100);
     }
@@ -258,22 +258,22 @@ mod tests {
         let (bundle, pos) = global_to_bundle_position(0);
         assert_eq!(bundle, 1);
         assert_eq!(pos, 0);
-        
+
         // Global 9999 → bundle 1, position 9999
         let (bundle, pos) = global_to_bundle_position(9999);
         assert_eq!(bundle, 1);
         assert_eq!(pos, 9999);
-        
+
         // Global 10000 → bundle 2, position 0
         let (bundle, pos) = global_to_bundle_position(10000);
         assert_eq!(bundle, 2);
         assert_eq!(pos, 0);
-        
+
         // Global 10500 → bundle 2, position 500
         let (bundle, pos) = global_to_bundle_position(10500);
         assert_eq!(bundle, 2);
         assert_eq!(pos, 500);
-        
+
         // Global 20042 → bundle 3, position 42
         let (bundle, pos) = global_to_bundle_position(20042);
         assert_eq!(bundle, 3);
@@ -288,7 +288,11 @@ mod tests {
                 let global = bundle_position_to_global(bundle, position);
                 let (bundle_back, pos_back) = global_to_bundle_position(global);
                 assert_eq!(bundle, bundle_back, "Bundle mismatch for global {}", global);
-                assert_eq!(position, pos_back, "Position mismatch for global {}", global);
+                assert_eq!(
+                    position, pos_back,
+                    "Position mismatch for global {}",
+                    global
+                );
             }
         }
     }
@@ -311,7 +315,10 @@ mod tests {
         assert_eq!(DID_INDEX_DELTAS, "deltas");
         assert_eq!(DID_INDEX_CONFIG, "config.json");
         assert_eq!(DEFAULT_PLC_DIRECTORY_URL, "https://plc.directory");
-        assert_eq!(DEFAULT_HANDLE_RESOLVER_URL, "https://quickdid.smokesignal.tools");
+        assert_eq!(
+            DEFAULT_HANDLE_RESOLVER_URL,
+            "https://quickdid.smokesignal.tools"
+        );
         assert_eq!(DEFAULT_ORIGIN, "local");
         assert_eq!(ZSTD_COMPRESSION_LEVEL, 1);
         assert_eq!(DID_INDEX_FLUSH_INTERVAL, 64);

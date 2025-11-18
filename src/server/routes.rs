@@ -1,13 +1,13 @@
 // Route setup and configuration
 
-use crate::server::config::ServerConfig;
+use crate::manager::BundleManager;
 use crate::server::ServerState;
+use crate::server::config::ServerConfig;
 use crate::server::{
     handle_bundle, handle_bundle_data, handle_bundle_jsonl, handle_debug_didindex,
     handle_debug_memory, handle_debug_resolver, handle_did_routing_guard, handle_index_json,
     handle_mempool, handle_operation, handle_root, handle_status,
 };
-use crate::manager::BundleManager;
 use axum::Router;
 use std::sync::Arc;
 use std::time::Instant;
@@ -34,7 +34,10 @@ pub fn create_router(
 
     // WebSocket route (if enabled)
     if config.enable_websocket {
-        router = router.route("/ws", axum::routing::get(crate::server::websocket::handle_websocket));
+        router = router.route(
+            "/ws",
+            axum::routing::get(crate::server::websocket::handle_websocket),
+        );
     }
 
     // DID resolution routes (if enabled) - must be last to catch all other paths
@@ -48,4 +51,3 @@ pub fn create_router(
             start_time,
         })
 }
-

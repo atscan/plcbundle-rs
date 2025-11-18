@@ -7,8 +7,8 @@ use std::path::PathBuf;
 mod cmd_bench;
 mod cmd_clean;
 mod cmd_clone;
-mod cmd_completions;
 mod cmd_compare;
+mod cmd_completions;
 mod cmd_did;
 mod cmd_export;
 mod cmd_index;
@@ -195,18 +195,21 @@ macro_rules! clap_help {
             "{all-args}\n\n",
             "Examples:\n",
             $examples
-        ).replace("{bin}", BIN)
+        )
+        .replace("{bin}", BIN)
     }};
 
     (before: $before:literal, examples: $examples:literal) => {{
         const BIN: &str = env!("CARGO_PKG_NAME");
         concat!(
             "{about-with-newline}\n",
-            $before, "\n\n",
+            $before,
+            "\n\n",
             "{usage-heading} {usage}\n\n",
             "{all-args}\n\n",
             "Examples:\n",
             $examples
-        ).replace("{bin}", BIN)
+        )
+        .replace("{bin}", BIN)
     }};
 }

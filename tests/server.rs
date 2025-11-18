@@ -57,7 +57,9 @@ async fn test_server_did_endpoints() -> Result<()> {
     let manager = plcbundle::BundleManager::new(dir_path, ())?;
     let manager = Arc::new(manager);
     // Build DID index so the resolver can find operations in bundles
-    manager.batch_update_did_index_async(1, manager.get_last_bundle()).await?;
+    manager
+        .batch_update_did_index_async(1, manager.get_last_bundle())
+        .await?;
     let port = 3032;
     let server_handle = common::start_test_server(Arc::clone(&manager), port).await?;
 
@@ -66,7 +68,10 @@ async fn test_server_did_endpoints() -> Result<()> {
 
     // Test DID document endpoint (first DID from dummy bundle)
     let first_did = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
-    let res = client.get(format!("{}/{}", base_url, first_did)).send().await?;
+    let res = client
+        .get(format!("{}/{}", base_url, first_did))
+        .send()
+        .await?;
     let status = res.status();
     let header_x_request_type = res
         .headers()
@@ -88,7 +93,13 @@ async fn test_server_did_endpoints() -> Result<()> {
     assert_eq!(json["id"], first_did);
 
     // Test DID data endpoint
-    let res = client.get(format!("{}/did:plc:aaaaaaaaaaaaaaaaaaaaaaaa/data", base_url)).send().await?;
+    let res = client
+        .get(format!(
+            "{}/did:plc:aaaaaaaaaaaaaaaaaaaaaaaa/data",
+            base_url
+        ))
+        .send()
+        .await?;
     let status = res.status();
     let body_text = res.text().await?;
     if !status.is_success() {
@@ -98,7 +109,13 @@ async fn test_server_did_endpoints() -> Result<()> {
     assert_eq!(json["did"], "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa");
 
     // Test DID audit log endpoint
-    let res = client.get(format!("{}/did:plc:aaaaaaaaaaaaaaaaaaaaaaaa/log/audit", base_url)).send().await?;
+    let res = client
+        .get(format!(
+            "{}/did:plc:aaaaaaaaaaaaaaaaaaaaaaaa/log/audit",
+            base_url
+        ))
+        .send()
+        .await?;
     let status = res.status();
     let body_text = res.text().await?;
     if !status.is_success() {
@@ -107,7 +124,10 @@ async fn test_server_did_endpoints() -> Result<()> {
     let json: serde_json::Value = serde_json::from_str(&body_text)?;
     assert!(json.is_array());
     assert!(!json.as_array().unwrap().is_empty());
-    assert_eq!(json.as_array().unwrap()[0]["did"], "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa");
+    assert_eq!(
+        json.as_array().unwrap()[0]["did"],
+        "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"
+    );
 
     server_handle.abort();
     Ok(())
@@ -128,7 +148,9 @@ async fn test_server_data_endpoints() -> Result<()> {
     let manager = plcbundle::BundleManager::new(dir_path, ())?;
     let manager = Arc::new(manager);
     // Ensure DID index is available for data/op lookups
-    manager.batch_update_did_index_async(1, manager.get_last_bundle()).await?;
+    manager
+        .batch_update_did_index_async(1, manager.get_last_bundle())
+        .await?;
     let port = 3031;
     let server_handle = common::start_test_server(Arc::clone(&manager), port).await?;
 
@@ -136,7 +158,10 @@ async fn test_server_data_endpoints() -> Result<()> {
     let base_url = format!("http://127.0.0.1:{}", port);
 
     // Test index.json endpoint
-    let res = client.get(format!("{}/index.json", base_url)).send().await?;
+    let res = client
+        .get(format!("{}/index.json", base_url))
+        .send()
+        .await?;
     println!("Testing endpoint: /index.json, status: {}", res.status());
     assert!(res.status().is_success());
     let json: serde_json::Value = res.json().await?;

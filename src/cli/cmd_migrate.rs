@@ -1,6 +1,6 @@
 // Migrate command - convert bundles to multi-frame format
 use super::progress::ProgressBar;
-use super::utils::{format_bytes, HasGlobalFlags};
+use super::utils::{HasGlobalFlags, format_bytes};
 use anyhow::{Result, bail};
 use clap::Args;
 use plcbundle::BundleManager;
@@ -65,8 +65,12 @@ pub struct MigrateCommand {
 }
 
 impl HasGlobalFlags for MigrateCommand {
-    fn verbose(&self) -> bool { false }
-    fn quiet(&self) -> bool { false }
+    fn verbose(&self) -> bool {
+        false
+    }
+    fn quiet(&self) -> bool {
+        false
+    }
 }
 
 pub fn run(cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
@@ -75,7 +79,10 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Result<()
     // Auto-detect number of threads if 0
     let workers = super::utils::get_worker_threads(cmd.threads, 4);
 
-    eprintln!("Scanning for legacy bundles in: {}\n", super::utils::display_path(&dir).display());
+    eprintln!(
+        "Scanning for legacy bundles in: {}\n",
+        super::utils::display_path(&dir).display()
+    );
 
     let index = manager.get_index();
     let bundles = &index.bundles;
@@ -87,7 +94,9 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Result<()
 
     // Determine which bundles to consider for migration
     let last_bundle = index.last_bundle;
-    let target_bundles: Option<std::collections::HashSet<u32>> = if let Some(ref bundles_spec) = cmd.bundles {
+    let target_bundles: Option<std::collections::HashSet<u32>> = if let Some(ref bundles_spec) =
+        cmd.bundles
+    {
         let bundle_list = super::utils::parse_bundle_spec(Some(bundles_spec.clone()), last_bundle)?;
         Some(bundle_list.into_iter().collect())
     } else {
@@ -102,8 +111,9 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Result<()
     for meta in bundles {
         // Filter by bundle range if specified
         if let Some(ref target_set) = target_bundles
-            && !target_set.contains(&meta.bundle_number) {
-                continue;
+            && !target_set.contains(&meta.bundle_number)
+        {
+            continue;
         }
 
         let embedded_meta = manager.get_embedded_metadata(meta.bundle_number)?;
@@ -145,7 +155,7 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Result<()
     // Show migration plan
     eprintln!("Migration Plan");
     eprintln!("══════════════\n");
-    
+
     if let Some(ref bundles_spec) = cmd.bundles {
         eprintln!("  Range:    {}", bundles_spec);
     }
@@ -211,14 +221,14 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Result<()
 
     let progress_arc = Arc::new(Mutex::new(progress));
     // Use atomics for counters to reduce lock contention
-    use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     let count_atomic = Arc::new(AtomicUsize::new(0));
     let bytes_atomic = Arc::new(AtomicU64::new(0));
-    
+
     // Update progress bar less frequently to reduce contention
     // Update every N bundles or every 100ms, whichever comes first
     let update_interval = (workers.max(1) * 4).max(10); // At least every 10 bundles, or 4x workers
-    
+
     let results: Vec<_> = if workers > 1 {
         // Parallel mode: process in chunks to maintain some ordering
         // Increase chunk size to reduce contention
@@ -235,7 +245,8 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Result<()
 
                         // Update atomics (lock-free)
                         let current_count = count_atomic.fetch_add(1, Ordering::Relaxed) + 1;
-                        let total_bytes = bytes_atomic.fetch_add(info.old_size, Ordering::Relaxed) + info.old_size;
+                        let total_bytes = bytes_atomic.fetch_add(info.old_size, Ordering::Relaxed)
+                            + info.old_size;
 
                         // Only update progress bar periodically to reduce lock contention
                         if current_count.is_multiple_of(update_interval) || current_count == 1 {
@@ -257,7 +268,8 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Result<()
                 let result = manager.migrate_bundle(info.bundle_number);
 
                 let current_count = i + 1;
-                let total_bytes = bytes_atomic.fetch_add(info.old_size, Ordering::Relaxed) + info.old_size;
+                let total_bytes =
+                    bytes_atomic.fetch_add(info.old_size, Ordering::Relaxed) + info.old_size;
 
                 // Update every bundle in sequential mode (no contention)
                 let prog = progress_arc.lock().unwrap();
@@ -376,9 +388,7 @@ pub fn run(cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Result<()
             let ratio_diff_str = format!("{:+.3}x", ratio_diff);
             eprintln!(
                 "Ratio         {:<13} {:<13} {}",
-                old_ratio_str,
-                new_ratio_str,
-                ratio_diff_str
+                old_ratio_str, new_ratio_str, ratio_diff_str
             );
             let avg_change = size_diff / success as i64;
             let avg_change_str = if avg_change >= 0 {

@@ -3,6 +3,7 @@
 use crate::constants;
 use anyhow::{Context, Result};
 use memmap2::{Mmap, MmapMut, MmapOptions};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -13,7 +14,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use rayon::prelude::*;
 const DID_SHARD_COUNT: usize = 256;
 const DID_PREFIX: &str = "did:plc:";
 const DID_IDENTIFIER_LEN: usize = 24;
@@ -27,11 +27,11 @@ type ShardProcessResult = Result<(ShardEntries, u64, u64)>;
 
 // ============================================================================
 // OpLocation - Packed 32-bit global position with nullified flag
-// 
+//
 // Storage format:
 //   - Bits 31-1: Global position (0-indexed across all bundles)
 //   - Bit 0: Nullified flag (1 if nullified, 0 otherwise)
-// 
+//
 // Global position = ((bundle - 1) * BUNDLE_SIZE) + position
 // ============================================================================
 
@@ -256,10 +256,7 @@ impl ShardBuilder {
     }
 
     fn add(&mut self, identifier: String, loc: OpLocation) {
-        self.entries
-            .entry(identifier)
-            .or_default()
-            .push(loc);
+        self.entries.entry(identifier).or_default().push(loc);
     }
 
     fn merge(&mut self, other: HashMap<String, Vec<OpLocation>>) {
@@ -704,7 +701,9 @@ impl Manager {
                 total_flush_time.as_secs_f64(),
                 total_flush_time.as_secs_f64() / duration.as_secs_f64() * 100.0,
                 (duration - total_write_time - total_flush_time).as_secs_f64(),
-                (duration - total_write_time - total_flush_time).as_secs_f64() / duration.as_secs_f64() * 100.0
+                (duration - total_write_time - total_flush_time).as_secs_f64()
+                    / duration.as_secs_f64()
+                    * 100.0
             );
             log::debug!(
                 "[DID Index]   Throughput: {:.0} entries/sec, {:.0} syscalls/sec (est.)",
@@ -718,10 +717,7 @@ impl Manager {
 
     /// Process a single bundle and return entries grouped by shard
     /// This is the shared implementation used by both parallel and sequential processing
-    fn process_bundle_for_index(
-        bundle_dir: &PathBuf,
-        bundle_num: u32,
-    ) -> ShardProcessResult {
+    fn process_bundle_for_index(bundle_dir: &PathBuf, bundle_num: u32) -> ShardProcessResult {
         use std::fs::File;
         use std::io::BufReader;
 
@@ -746,10 +742,7 @@ impl Manager {
 
     /// Core bundle processing logic - processes lines from a reader and groups by shard
     /// This shared function eliminates duplication between parallel and sequential processing
-    fn process_bundle_lines<R: std::io::BufRead>(
-        bundle_num: u32,
-        reader: R,
-    ) -> ShardProcessResult {
+    fn process_bundle_lines<R: std::io::BufRead>(bundle_num: u32, reader: R) -> ShardProcessResult {
         use sonic_rs::JsonValueTrait;
 
         let mut shard_entries: HashMap<u8, Vec<(String, OpLocation)>> = HashMap::new();
@@ -772,26 +765,30 @@ impl Manager {
 
             // Parse only the fields we need (did and nullified)
             if let Ok(value) = sonic_rs::from_str::<sonic_rs::Value>(&line)
-                && let Some(did) = value.get("did").and_then(|v| v.as_str()) {
-                let nullified = value.get("nullified")
+                && let Some(did) = value.get("did").and_then(|v| v.as_str())
+            {
+                let nullified = value
+                    .get("nullified")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
 
-                    // Calculate shard directly from DID bytes (no String allocation)
-                    if let Some(shard_num) = calculate_shard_from_did(did) {
-                        // Only allocate String when we actually need to store it
-                        let identifier = &did[DID_PREFIX.len()..DID_PREFIX.len() + DID_IDENTIFIER_LEN];
-                        let identifier = identifier.to_string();
-                        
-                        let global_pos = crate::constants::bundle_position_to_global(bundle_num, position as usize) as u32;
-                        let loc = OpLocation::new(global_pos, nullified);
+                // Calculate shard directly from DID bytes (no String allocation)
+                if let Some(shard_num) = calculate_shard_from_did(did) {
+                    // Only allocate String when we actually need to store it
+                    let identifier = &did[DID_PREFIX.len()..DID_PREFIX.len() + DID_IDENTIFIER_LEN];
+                    let identifier = identifier.to_string();
 
-                        shard_entries
-                            .entry(shard_num)
-                            .or_default()
-                            .push((identifier, loc));
-                    }
+                    let global_pos =
+                        crate::constants::bundle_position_to_global(bundle_num, position as usize)
+                            as u32;
+                    let loc = OpLocation::new(global_pos, nullified);
+
+                    shard_entries
+                        .entry(shard_num)
+                        .or_default()
+                        .push((identifier, loc));
                 }
+            }
 
             position += 1;
             if position >= constants::BUNDLE_SIZE as u16 {
@@ -821,29 +818,33 @@ impl Manager {
         progress_callback: Option<F>,
         num_threads: usize,
         interrupted: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    ) -> Result<(u64, u64, std::time::Duration, std::time::Duration)> // Returns (total_operations, bundles_processed, stage1_duration, stage2_duration)
+    ) -> Result<(u64, u64, std::time::Duration, std::time::Duration)>
+    // Returns (total_operations, bundles_processed, stage1_duration, stage2_duration)
     where
         F: Fn(u32, u32, u64, Option<String>) + Send + Sync, // (current, total, bytes_processed, stage)
     {
-        use std::time::Instant;
         use std::sync::atomic::AtomicU64;
+        use std::time::Instant;
 
         let build_start = Instant::now();
 
-        log::debug!("[DID Index] Starting streaming build for {} bundles", last_bundle);
+        log::debug!(
+            "[DID Index] Starting streaming build for {} bundles",
+            last_bundle
+        );
 
         // Clear existing index
         fs::create_dir_all(&self.shard_dir)?;
         fs::remove_dir_all(&self.delta_dir).ok();
-        
+
         // Cleanup any leftover temp files from previous interrupted builds
         self.cleanup_temp_files()?;
-        
+
         // Set up cleanup guard to remove temp files on panic or early exit
         struct CleanupGuard {
             shard_dir: PathBuf,
         }
-        
+
         impl Drop for CleanupGuard {
             fn drop(&mut self) {
                 // Clean up temp files on drop (panic or normal exit)
@@ -852,7 +853,7 @@ impl Manager {
                 }
             }
         }
-        
+
         impl CleanupGuard {
             fn cleanup(shard_dir: &Path) -> Result<()> {
                 if !shard_dir.exists() {
@@ -873,7 +874,7 @@ impl Manager {
                 Ok(())
             }
         }
-        
+
         let _cleanup_guard = CleanupGuard {
             shard_dir: self.shard_dir.clone(),
         };
@@ -904,7 +905,10 @@ impl Manager {
                 Err(e) => {
                     // Handler might already be set (e.g., by CLI layer)
                     // This is okay, but log it for debugging
-                    log::debug!("[DID Index] CTRL+C handler registration: {} (may already be set)", e);
+                    log::debug!(
+                        "[DID Index] CTRL+C handler registration: {} (may already be set)",
+                        e
+                    );
                 }
             }
         }
@@ -920,7 +924,10 @@ impl Manager {
         };
 
         if use_parallel {
-            log::debug!("[DID Index] Using {} threads for parallel bundle processing", actual_threads);
+            log::debug!(
+                "[DID Index] Using {} threads for parallel bundle processing",
+                actual_threads
+            );
             rayon::ThreadPoolBuilder::new()
                 .num_threads(actual_threads)
                 .build_global()
@@ -933,7 +940,7 @@ impl Manager {
         let bytes_processed = AtomicU64::new(0);
         let mut flush_count = 0usize;
         let mut total_flush_time = std::time::Duration::ZERO;
-        
+
         // Metrics tracking (aggregated every N bundles)
         let metrics_interval = 100u32; // Log metrics every 100 bundles
         let mut metrics_start = Instant::now();
@@ -944,45 +951,53 @@ impl Manager {
         // Process bundles in batches (parallel or sequential)
         let batch_size = if use_parallel { 100 } else { 1 }; // Process 100 bundles at a time in parallel
         let bundle_numbers: Vec<u32> = (1..=last_bundle).collect();
-        
+
         for batch_start in (0..bundle_numbers.len()).step_by(batch_size) {
             let batch_end = (batch_start + batch_size).min(bundle_numbers.len());
             let batch: Vec<u32> = bundle_numbers[batch_start..batch_end].to_vec();
-            
+
             let batch_results: Vec<ShardProcessResult> = if use_parallel {
                 // Process batch in parallel
-                batch.par_iter()
+                batch
+                    .par_iter()
                     .map(|&bundle_num| Self::process_bundle_for_index(bundle_dir, bundle_num))
                     .collect()
             } else {
                 // Process batch sequentially (for metrics tracking)
                 // Use the shared process_bundle_for_index function to avoid code duplication
-                batch.iter()
+                batch
+                    .iter()
                     .map(|&bundle_num| {
                         let bundle_processing_start = Instant::now();
                         let result = Self::process_bundle_for_index(bundle_dir, bundle_num);
                         metrics_bundle_total += bundle_processing_start.elapsed();
-                        
+
                         // Track aggregate metrics from result
                         if let Ok((_, bundle_bytes, bundle_operations)) = &result {
                             metrics_bytes += bundle_bytes;
                             metrics_ops += bundle_operations;
                         }
-                        
+
                         result
                     })
                     .collect()
             };
-            
+
             // Merge results from batch into main shard_entries
             // Zip batch with results to track bundle numbers (rayon preserves order)
             for (bundle_num, result) in batch.iter().zip(batch_results.iter()) {
                 let (mut batch_entries, batch_bytes, batch_ops) = match result {
                     Ok(r) => r.clone(),
-                    Err(e) => return Err(anyhow::anyhow!("Error processing bundle {}: {}", bundle_num, e)),
+                    Err(e) => {
+                        return Err(anyhow::anyhow!(
+                            "Error processing bundle {}: {}",
+                            bundle_num,
+                            e
+                        ));
+                    }
                 };
                 bytes_processed.fetch_add(batch_bytes, Ordering::Relaxed);
-                
+
                 // Track basic metrics from batch results (works in both parallel and sequential mode)
                 metrics_ops += batch_ops;
                 metrics_bytes += batch_bytes;
@@ -994,32 +1009,38 @@ impl Manager {
                     batch_bytes,
                     total_operations
                 );
-                
+
                 // Merge batch entries into main shard_entries
                 for (shard_num, mut entries) in batch_entries.drain() {
-                    shard_entries.entry(shard_num)
+                    shard_entries
+                        .entry(shard_num)
                         .or_default()
                         .append(&mut entries);
                 }
-                
+
                 // Update progress after each bundle (more granular updates)
                 let current_bytes = bytes_processed.load(Ordering::Relaxed);
                 if let Some(ref cb) = progress_callback {
-                    cb(*bundle_num, last_bundle, current_bytes, Some("Stage 1/2: Processing bundles".to_string()));
+                    cb(
+                        *bundle_num,
+                        last_bundle,
+                        current_bytes,
+                        Some("Stage 1/2: Processing bundles".to_string()),
+                    );
                 }
-                
+
                 // Flush to disk periodically to avoid excessive memory (check after each bundle)
                 if flush_interval > 0 && *bundle_num % flush_interval == 0 {
                     let flush_start = Instant::now();
                     let mem_before = shard_entries.values().map(|v| v.len()).sum::<usize>();
                     let shards_used = shard_entries.len();
-                    
+
                     self.flush_shard_entries(&mut shard_entries)?;
                     flush_count += 1;
-                    
+
                     let flush_duration = flush_start.elapsed();
                     total_flush_time += flush_duration;
-                    
+
                     log::info!(
                         "[DID Index] Flush #{}: {} entries across {} shards (bundle {}/{}), took {:.3}s",
                         flush_count,
@@ -1031,13 +1052,14 @@ impl Manager {
                     );
                 }
             }
-            
+
             // Check for metrics logging (using last bundle in batch)
             let last_bundle_in_batch = batch.last().copied().unwrap_or(0);
             if last_bundle_in_batch > 0 {
-                
                 // Log detailed metrics every N bundles
-                if last_bundle_in_batch % metrics_interval == 0 || last_bundle_in_batch == last_bundle {
+                if last_bundle_in_batch % metrics_interval == 0
+                    || last_bundle_in_batch == last_bundle
+                {
                     let metrics_duration = metrics_start.elapsed();
                     let ops_per_sec = if metrics_duration.as_secs_f64() > 0.0 {
                         metrics_ops as f64 / metrics_duration.as_secs_f64()
@@ -1049,17 +1071,19 @@ impl Manager {
                     } else {
                         0.0
                     };
-                    
+
                     log::info!(
                         "[DID Index] Metrics (bundles {}..{}): {} ops, {:.1} MB | {:.1} ops/sec, {:.1} MB/sec",
-                        last_bundle_in_batch.saturating_sub(metrics_interval - 1).max(1),
+                        last_bundle_in_batch
+                            .saturating_sub(metrics_interval - 1)
+                            .max(1),
                         last_bundle_in_batch,
                         metrics_ops,
                         metrics_bytes as f64 / 1_000_000.0,
                         ops_per_sec,
                         mb_per_sec
                     );
-                    
+
                     // Show bundle processing time (simplified metrics)
                     if metrics_bundle_total.as_secs_f64() > 0.0 {
                         log::info!(
@@ -1067,7 +1091,7 @@ impl Manager {
                             metrics_bundle_total.as_secs_f64() * 1000.0
                         );
                     }
-                    
+
                     // Reset metrics for next interval
                     metrics_start = Instant::now();
                     metrics_ops = 0;
@@ -1085,7 +1109,10 @@ impl Manager {
             self.flush_shard_entries(&mut shard_entries)?;
             let final_flush_duration = final_flush_start.elapsed();
             total_flush_time += final_flush_duration;
-            log::info!("[DID Index] Final flush completed in {:.3}s", final_flush_duration.as_secs_f64());
+            log::info!(
+                "[DID Index] Final flush completed in {:.3}s",
+                final_flush_duration.as_secs_f64()
+            );
         }
 
         // CRITICAL: Ensure all file handles are closed and data is synced to disk
@@ -1106,27 +1133,40 @@ impl Manager {
         let use_parallel_consolidation = use_parallel;
         // CRITICAL: Use usize range then map to u8, because DID_SHARD_COUNT (256) as u8 wraps to 0
         let shard_numbers: Vec<u8> = (0..DID_SHARD_COUNT).map(|i| i as u8).collect();
-        
+
         // Use atomic counter for progress tracking in parallel mode
         let progress_counter = std::sync::atomic::AtomicU32::new(0);
         let progress_cb = progress_callback.as_ref();
-        
+
         let consolidation_results: Vec<Result<(u8, i64)>> = if use_parallel_consolidation {
             // Process shards in parallel
             // IMPORTANT: Use try_reduce or collect with explicit error handling
             // to ensure all shards are processed even if some fail
-            shard_numbers.par_iter()
+            shard_numbers
+                .par_iter()
                 .map(|&shard_num| {
-                    log::debug!("[DID Index] Parallel consolidation starting for shard {:02x}", shard_num);
+                    log::debug!(
+                        "[DID Index] Parallel consolidation starting for shard {:02x}",
+                        shard_num
+                    );
                     // Wrap in explicit error handling to ensure we process all shards
                     let result = match self.consolidate_shard(shard_num) {
                         Ok(shard_did_count) => {
                             // Update progress atomically
                             if let Some(ref cb) = progress_cb {
                                 let count = progress_counter.fetch_add(1, Ordering::Relaxed) + 1;
-                                cb(count, DID_SHARD_COUNT as u32, 0, Some("Stage 2/2: Consolidating shards".to_string()));
+                                cb(
+                                    count,
+                                    DID_SHARD_COUNT as u32,
+                                    0,
+                                    Some("Stage 2/2: Consolidating shards".to_string()),
+                                );
                             }
-                            log::debug!("[DID Index] Shard {:02x} consolidation succeeded: {} DIDs", shard_num, shard_did_count);
+                            log::debug!(
+                                "[DID Index] Shard {:02x} consolidation succeeded: {} DIDs",
+                                shard_num,
+                                shard_did_count
+                            );
                             Ok((shard_num, shard_did_count))
                         }
                         Err(e) => {
@@ -1138,7 +1178,12 @@ impl Manager {
                             // Still update progress even on error
                             if let Some(ref cb) = progress_cb {
                                 let count = progress_counter.fetch_add(1, Ordering::Relaxed) + 1;
-                                cb(count, DID_SHARD_COUNT as u32, 0, Some("Stage 2/2: Consolidating shards".to_string()));
+                                cb(
+                                    count,
+                                    DID_SHARD_COUNT as u32,
+                                    0,
+                                    Some("Stage 2/2: Consolidating shards".to_string()),
+                                );
                             }
                             // Return 0 DIDs for failed shard, but don't fail the entire operation
                             log::debug!(
@@ -1148,28 +1193,49 @@ impl Manager {
                             Ok((shard_num, 0))
                         }
                     };
-                    log::debug!("[DID Index] Parallel consolidation result for shard {:02x}: {:?}", shard_num, result);
+                    log::debug!(
+                        "[DID Index] Parallel consolidation result for shard {:02x}: {:?}",
+                        shard_num,
+                        result
+                    );
                     result
                 })
                 .collect()
         } else {
             // Process shards sequentially with progress updates
             log::debug!("[DID Index] Using sequential consolidation");
-            shard_numbers.iter()
+            shard_numbers
+                .iter()
                 .map(|&shard_num| {
-                    log::debug!("[DID Index] Sequential consolidation starting for shard {:02x}", shard_num);
+                    log::debug!(
+                        "[DID Index] Sequential consolidation starting for shard {:02x}",
+                        shard_num
+                    );
                     // Update progress callback for consolidation phase
                     if let Some(ref cb) = progress_callback {
                         // For consolidation, we use shard number as progress indicator
                         // Total is DID_SHARD_COUNT, current is shard_num + 1
-                        cb((shard_num + 1) as u32, DID_SHARD_COUNT as u32, 0, Some("Stage 2/2: Consolidating shards".to_string()));
+                        cb(
+                            (shard_num + 1) as u32,
+                            DID_SHARD_COUNT as u32,
+                            0,
+                            Some("Stage 2/2: Consolidating shards".to_string()),
+                        );
                     }
                     let result = self.consolidate_shard(shard_num);
-                    log::debug!("[DID Index] Sequential consolidation result for shard {:02x}: {:?}", shard_num, result);
+                    log::debug!(
+                        "[DID Index] Sequential consolidation result for shard {:02x}: {:?}",
+                        shard_num,
+                        result
+                    );
                     match result {
                         Ok(shard_did_count) => Ok((shard_num, shard_did_count)),
                         Err(e) => {
-                            log::warn!("[DID Index] Sequential consolidation failed for shard {:02x}: {}", shard_num, e);
+                            log::warn!(
+                                "[DID Index] Sequential consolidation failed for shard {:02x}: {}",
+                                shard_num,
+                                e
+                            );
                             Ok((shard_num, 0))
                         }
                     }
@@ -1192,7 +1258,7 @@ impl Manager {
                 shard_did_count,
                 total_dids
             );
-            
+
             // Update shard metadata with did_count
             self.modify_config(|config| {
                 if let Some(shard_meta) = config.shards.get_mut(shard_num as usize) {
@@ -1200,12 +1266,12 @@ impl Manager {
                 }
             })?;
         }
-        
+
         log::debug!(
             "[DID Index] Final total_dids after collecting all shard results: {}",
             total_dids
         );
-        
+
         // Explicitly cleanup temp files on successful completion
         // (Drop guard will also handle this, but explicit cleanup ensures it happens)
         self.cleanup_temp_files()?;
@@ -1239,7 +1305,12 @@ impl Manager {
             total_duration.as_secs_f64()
         );
 
-        Ok((total_operations, last_bundle as u64, stage1_duration, pass2_duration))
+        Ok((
+            total_operations,
+            last_bundle as u64,
+            stage1_duration,
+            pass2_duration,
+        ))
     }
 
     // Update index for new bundle (incremental)
@@ -1273,7 +1344,8 @@ impl Manager {
 
             valid_dids += 1;
             let shard_num = self.calculate_shard(&identifier);
-            let global_pos = crate::constants::bundle_position_to_global(bundle_num, position) as u32;
+            let global_pos =
+                crate::constants::bundle_position_to_global(bundle_num, position) as u32;
             let loc = OpLocation::new(global_pos, *nullified);
 
             shard_ops
@@ -1473,23 +1545,23 @@ impl Manager {
     /// Returns (intact_shards, corrupted_shards, missing_shards)
     pub fn verify_base_shard_integrity(&self) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
         use sha2::{Digest, Sha256};
-        
+
         let config = self.config.read().unwrap();
         let mut intact = Vec::new();
         let mut corrupted = Vec::new();
         let mut missing = Vec::new();
-        
+
         for shard_num in 0..DID_SHARD_COUNT {
             let shard_meta = config.shards.get(shard_num).unwrap();
             let shard_path = self.shard_path(shard_num as u8);
-            
+
             if !shard_path.exists() {
                 if shard_meta.did_count > 0 {
                     missing.push(shard_num as u8);
                 }
                 continue;
             }
-            
+
             // If no hash stored, we can't verify (old index or empty shard)
             if let Some(expected_hash) = &shard_meta.base_shard_hash {
                 let file_data = match fs::read(&shard_path) {
@@ -1499,11 +1571,11 @@ impl Manager {
                         continue;
                     }
                 };
-                
+
                 let mut hasher = Sha256::new();
                 hasher.update(&file_data);
                 let actual_hash = format!("{:x}", hasher.finalize());
-                
+
                 if actual_hash == *expected_hash {
                     intact.push(shard_num as u8);
                 } else {
@@ -1515,7 +1587,7 @@ impl Manager {
                 intact.push(shard_num as u8);
             }
         }
-        
+
         Ok((intact, corrupted, missing))
     }
 
@@ -2048,15 +2120,21 @@ impl Manager {
         struct TempFileGuard {
             path: PathBuf,
         }
-        
+
         impl Drop for TempFileGuard {
             fn drop(&mut self) {
-                if self.path.exists() && let Err(e) = fs::remove_file(&self.path) {
-                    log::warn!("[DID Index] Failed to remove temp file {}: {}", self.path.display(), e);
+                if self.path.exists()
+                    && let Err(e) = fs::remove_file(&self.path)
+                {
+                    log::warn!(
+                        "[DID Index] Failed to remove temp file {}: {}",
+                        self.path.display(),
+                        e
+                    );
                 }
             }
         }
-        
+
         let _temp_guard = TempFileGuard {
             path: temp_path.clone(),
         };
@@ -2175,7 +2253,7 @@ impl Manager {
         // Parse entries (28 bytes each)
         let parse_start = Instant::now();
         let entry_count = data.len() / 28;
-        
+
         if entry_count == 0 {
             log::warn!(
                 "[DID Index] Shard {:02x} consolidate: temp file {} has {} bytes but no complete entries (need at least 28 bytes per entry)",
@@ -2187,7 +2265,8 @@ impl Manager {
             return Ok(0);
         }
         // Store (identifier_string, raw_bytes, location) so we can preserve exact bytes
-        let mut entries: Vec<(String, [u8; DID_IDENTIFIER_LEN], OpLocation)> = Vec::with_capacity(entry_count);
+        let mut entries: Vec<(String, [u8; DID_IDENTIFIER_LEN], OpLocation)> =
+            Vec::with_capacity(entry_count);
 
         for i in 0..entry_count {
             let offset = i * 28;
@@ -2202,11 +2281,11 @@ impl Manager {
             let identifier_bytes = &data[offset..offset + DID_IDENTIFIER_LEN];
             // Create a string from the bytes for HashMap key (lossy conversion handles invalid UTF-8)
             let identifier = String::from_utf8_lossy(identifier_bytes).to_string();
-            
+
             // Preserve the exact raw bytes for writing back
             let mut raw_bytes = [0u8; DID_IDENTIFIER_LEN];
             raw_bytes.copy_from_slice(identifier_bytes);
-            
+
             let loc_bytes = [
                 data[offset + 24],
                 data[offset + 25],
@@ -2238,13 +2317,23 @@ impl Manager {
         // Write final shard, using raw bytes when available
         let write_start = Instant::now();
         let target = self.shard_path(shard_num);
-        self.write_shard_to_path_with_bytes(shard_num, &builder, &target, "base", Some(&identifier_to_bytes))?;
+        self.write_shard_to_path_with_bytes(
+            shard_num,
+            &builder,
+            &target,
+            "base",
+            Some(&identifier_to_bytes),
+        )?;
         let write_duration = write_start.elapsed();
 
         // Explicitly remove temp file immediately after successful write
         // (Drop guard will also handle this, but explicit removal ensures immediate cleanup)
         if let Err(e) = fs::remove_file(&temp_path) {
-            log::warn!("[DID Index] Failed to remove temp file {}: {}", temp_path.display(), e);
+            log::warn!(
+                "[DID Index] Failed to remove temp file {}: {}",
+                temp_path.display(),
+                e
+            );
         }
 
         let total_duration = start.elapsed();
@@ -2456,7 +2545,9 @@ impl Manager {
         let start = Instant::now();
 
         // Ensure shard directory exists
-        if let Some(parent) = target.parent() && !parent.exists() {
+        if let Some(parent) = target.parent()
+            && !parent.exists()
+        {
             fs::create_dir_all(parent)?;
         }
 
@@ -2556,7 +2647,10 @@ impl Manager {
             for id in identifiers {
                 // Use raw bytes if available, otherwise normalize from string
                 let id_bytes = if let Some(bytes_map) = identifier_bytes {
-                    bytes_map.get(id).copied().unwrap_or_else(|| normalize_identifier_bytes(id))
+                    bytes_map
+                        .get(id)
+                        .copied()
+                        .unwrap_or_else(|| normalize_identifier_bytes(id))
                 } else {
                     normalize_identifier_bytes(id)
                 };
@@ -2601,8 +2695,9 @@ impl Manager {
         // Read from final file location to ensure we hash exactly what's on disk
         let shard_hash = if label == "base" {
             use sha2::{Digest, Sha256};
-            let file_data = fs::read(target)
-                .with_context(|| format!("Failed to read shard file for hashing {}", target.display()))?;
+            let file_data = fs::read(target).with_context(|| {
+                format!("Failed to read shard file for hashing {}", target.display())
+            })?;
             let mut hasher = Sha256::new();
             hasher.update(&file_data);
             Some(format!("{:x}", hasher.finalize()))
@@ -2728,7 +2823,7 @@ impl Manager {
     fn invalidate_shard_cache(&self, shard_num: u8) {
         self.shard_cache.write().unwrap().remove(&shard_num);
     }
-    
+
     /// Clean up temporary files from interrupted builds
     pub fn cleanup_temp_files(&self) -> Result<()> {
         if !self.shard_dir.exists() {
@@ -2738,13 +2833,18 @@ impl Manager {
         for entry in fs::read_dir(&self.shard_dir)? {
             let entry = entry?;
             let path = entry.path();
-            if let Some(ext) = path.extension() && ext == "tmp" {
+            if let Some(ext) = path.extension()
+                && ext == "tmp"
+            {
                 fs::remove_file(&path)?;
                 cleaned += 1;
             }
         }
         if cleaned > 0 {
-            log::info!("[DID Index] Cleaned up {} leftover temp files from previous build", cleaned);
+            log::info!(
+                "[DID Index] Cleaned up {} leftover temp files from previous build",
+                cleaned
+            );
         }
         Ok(())
     }
@@ -2757,23 +2857,23 @@ impl Manager {
             .get("last_bundle")
             .and_then(|v| v.as_i64())
             .unwrap_or(0) as u32;
-        
+
         let mut errors = 0;
         let mut warnings = 0;
         let mut error_categories: Vec<(String, usize)> = Vec::new();
-        
+
         // Check 1: Last bundle consistency
         if index_last_bundle < last_bundle_in_repo {
             warnings += 1;
         }
-        
+
         // Check 2: Verify shard files exist
         let shard_details = self.get_shard_details(None)?;
         let mut missing_base_shards = 0;
         let mut missing_delta_segments = 0;
         let mut shards_checked = 0;
         let mut segments_checked = 0;
-        
+
         for detail in &shard_details {
             let base_exists = detail
                 .get("base_exists")
@@ -2783,7 +2883,7 @@ impl Manager {
                 .get("did_count")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
-            
+
             if did_count > 0 {
                 shards_checked += 1;
                 if !base_exists {
@@ -2791,7 +2891,7 @@ impl Manager {
                     errors += 1;
                 }
             }
-            
+
             if let Some(segments) = detail.get("segments").and_then(|v| v.as_array()) {
                 for seg in segments {
                     segments_checked += 1;
@@ -2803,40 +2903,40 @@ impl Manager {
                 }
             }
         }
-        
+
         if missing_base_shards > 0 {
             error_categories.push(("Missing base shards".to_string(), missing_base_shards));
         }
         if missing_delta_segments > 0 {
             error_categories.push(("Missing delta segments".to_string(), missing_delta_segments));
         }
-        
+
         // Check 3: Verify index configuration
         let shard_count = stats
             .get("shard_count")
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
-        
+
         if shard_count != 256 {
             warnings += 1;
         }
-        
+
         // Check 4: Check delta segment accumulation
         let delta_segments = stats
             .get("delta_segments")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
-        
+
         const SEGMENT_WARNING_THRESHOLD: u64 = 1280;
         const SEGMENT_ERROR_THRESHOLD: u64 = 5120;
-        
+
         if delta_segments >= SEGMENT_ERROR_THRESHOLD {
             errors += 1;
             error_categories.push(("Too many delta segments".to_string(), 1));
         } else if delta_segments >= SEGMENT_WARNING_THRESHOLD {
             warnings += 1;
         }
-        
+
         Ok(VerifyResult {
             errors,
             warnings,
@@ -2861,12 +2961,12 @@ impl Manager {
             .get("delta_segments")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
-        
+
         let shard_details = self.get_shard_details(None)?;
         let mut missing_base_shards = 0;
         let mut missing_delta_segments = 0;
         let mut missing_segment_bundles = std::collections::HashSet::new();
-        
+
         for detail in &shard_details {
             let base_exists = detail
                 .get("base_exists")
@@ -2876,34 +2976,41 @@ impl Manager {
                 .get("did_count")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
-            
+
             if did_count > 0 && !base_exists {
                 missing_base_shards += 1;
             }
-            
+
             if let Some(segments) = detail.get("segments").and_then(|v| v.as_array()) {
                 for seg in segments {
                     let exists = seg.get("exists").and_then(|v| v.as_bool()).unwrap_or(false);
                     if !exists {
                         missing_delta_segments += 1;
-                        if let Some(start) = seg.get("bundle_start").and_then(|v| v.as_u64()).map(|v| v as u32)
-                            && let Some(end) = seg.get("bundle_end").and_then(|v| v.as_u64()).map(|v| v as u32) {
-                                for bundle_num in start..=end {
-                                    missing_segment_bundles.insert(bundle_num);
-                                }
+                        if let Some(start) = seg
+                            .get("bundle_start")
+                            .and_then(|v| v.as_u64())
+                            .map(|v| v as u32)
+                            && let Some(end) = seg
+                                .get("bundle_end")
+                                .and_then(|v| v.as_u64())
+                                .map(|v| v as u32)
+                        {
+                            for bundle_num in start..=end {
+                                missing_segment_bundles.insert(bundle_num);
                             }
+                        }
                     }
                 }
             }
         }
-        
+
         let missing_bundles = last_bundle_in_repo.saturating_sub(index_last_bundle);
-        
-        let needs_rebuild = index_last_bundle < last_bundle_in_repo 
-            || missing_base_shards > 0 
+
+        let needs_rebuild = index_last_bundle < last_bundle_in_repo
+            || missing_base_shards > 0
             || missing_delta_segments > 0;
         let needs_compact = delta_segments > 50;
-        
+
         Ok(RepairInfo {
             needs_rebuild,
             needs_compact,
@@ -2932,7 +3039,8 @@ impl Manager {
         use std::fs;
 
         // Create temporary directory for rebuilt index
-        let temp_dir = std::env::temp_dir().join(format!("plcbundle_verify_{}", std::process::id()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("plcbundle_verify_{}", std::process::id()));
         fs::create_dir_all(&temp_dir)?;
 
         // Create temporary DID index
@@ -2944,7 +3052,7 @@ impl Manager {
             last_bundle,
             flush_interval,
             progress_callback,
-            0, // num_threads: auto-detect
+            0,    // num_threads: auto-detect
             None, // interrupted flag
         )?;
 
@@ -3066,20 +3174,16 @@ impl Manager {
     }
 
     /// Repair index - intelligently rebuilds or updates as needed
-    /// 
+    ///
     /// `bundle_loader` is a callback that loads a bundle and returns operations as (did, nullified) pairs
     /// Returns a RepairResult indicating what was done. If `repaired` is true but `bundles_processed` is 0,
     /// it means a full rebuild is needed (caller should call build_from_scratch).
-    pub fn repair<L>(
-        &mut self,
-        last_bundle: u32,
-        bundle_loader: L,
-    ) -> Result<RepairResult>
+    pub fn repair<L>(&mut self, last_bundle: u32, bundle_loader: L) -> Result<RepairResult>
     where
         L: Fn(u32) -> Result<Vec<(String, bool)>>, // Load bundle and return operations
     {
         let repair_info = self.get_repair_info(last_bundle)?;
-        
+
         if !repair_info.needs_rebuild && !repair_info.needs_compact {
             return Ok(RepairResult {
                 repaired: false,
@@ -3088,32 +3192,32 @@ impl Manager {
                 segments_rebuilt: 0,
             });
         }
-        
+
         let mut segments_rebuilt = 0;
         let mut bundles_processed = 0;
-        
+
         // Case 1: Rebuild if needed
         if repair_info.needs_rebuild {
             // Optimization: If only delta segments are missing, verify base shard integrity
             // and rebuild only missing segments if base shards are intact
-            let can_rebuild_segments_only = repair_info.missing_base_shards == 0 
-                && repair_info.missing_delta_segments > 0 
+            let can_rebuild_segments_only = repair_info.missing_base_shards == 0
+                && repair_info.missing_delta_segments > 0
                 && repair_info.missing_bundles == 0;
-            
+
             if can_rebuild_segments_only {
                 let (_intact, corrupted, missing) = self.verify_base_shard_integrity()?;
-                
+
                 if corrupted.is_empty() && missing.is_empty() {
                     // Rebuild only missing segments
                     let mut bundle_list = repair_info.missing_segment_bundles.clone();
                     bundle_list.sort();
-                    
+
                     if !bundle_list.is_empty() {
                         for bundle_num in &bundle_list {
                             let operations = bundle_loader(*bundle_num)?;
                             self.update_for_bundle(*bundle_num, operations)?;
                         }
-                        
+
                         bundles_processed = bundle_list.len() as u32;
                         segments_rebuilt = repair_info.missing_delta_segments;
                     }
@@ -3129,8 +3233,9 @@ impl Manager {
                 }
             } else {
                 // Need full rebuild or incremental update
-                let force_full_rebuild = repair_info.missing_base_shards > 0 || repair_info.missing_bundles > 1000;
-                
+                let force_full_rebuild =
+                    repair_info.missing_base_shards > 0 || repair_info.missing_bundles > 1000;
+
                 if force_full_rebuild || repair_info.missing_bundles > 1000 {
                     // Full rebuild - signal to caller
                     return Ok(RepairResult {
@@ -3145,12 +3250,12 @@ impl Manager {
                         let operations = bundle_loader(bundle_num)?;
                         self.update_for_bundle(bundle_num, operations)?;
                     }
-                    
+
                     bundles_processed = repair_info.missing_bundles;
                 }
             }
         }
-        
+
         // Case 2: Compact if needed
         let compacted = if repair_info.needs_compact {
             self.compact_pending_segments(None)?;
@@ -3158,7 +3263,7 @@ impl Manager {
         } else {
             false
         };
-        
+
         Ok(RepairResult {
             repaired: repair_info.needs_rebuild,
             compacted,
@@ -3217,7 +3322,11 @@ fn extract_identifier(did: &str) -> Result<String> {
 
     let identifier = &did[DID_PREFIX.len()..];
     if identifier.len() != DID_IDENTIFIER_LEN {
-        anyhow::bail!("Invalid DID identifier length: expected {} bytes, got {} bytes", DID_IDENTIFIER_LEN, identifier.len());
+        anyhow::bail!(
+            "Invalid DID identifier length: expected {} bytes, got {} bytes",
+            DID_IDENTIFIER_LEN,
+            identifier.len()
+        );
     }
 
     Ok(identifier.to_string())
@@ -3229,19 +3338,19 @@ fn calculate_shard_from_did(did: &str) -> Option<u8> {
     if !did.starts_with(DID_PREFIX) {
         return None;
     }
-    
+
     let identifier_start = DID_PREFIX.len();
     let identifier_end = identifier_start + DID_IDENTIFIER_LEN;
-    
+
     if did.len() < identifier_end {
         return None;
     }
-    
+
     let identifier_bytes = &did.as_bytes()[identifier_start..identifier_end];
-    
+
     use fnv::FnvHasher;
     use std::hash::Hasher;
-    
+
     let mut hasher = FnvHasher::default();
     hasher.write(identifier_bytes);
     let hash = hasher.finish() as u32;
@@ -3433,15 +3542,35 @@ mod tests {
                 let loc1 = OpLocation::new(global_pos, nullified);
                 let u32_val = loc1.as_u32();
                 let loc2 = OpLocation::from_u32(u32_val);
-                
-                assert_eq!(loc1.global_position(), loc2.global_position(), 
-                    "Global position mismatch for {} (nullified={})", global_pos, nullified);
-                assert_eq!(loc1.nullified(), loc2.nullified(),
-                    "Nullified flag mismatch for {} (nullified={})", global_pos, nullified);
-                assert_eq!(loc1.bundle(), loc2.bundle(),
-                    "Bundle mismatch for {} (nullified={})", global_pos, nullified);
-                assert_eq!(loc1.position(), loc2.position(),
-                    "Position mismatch for {} (nullified={})", global_pos, nullified);
+
+                assert_eq!(
+                    loc1.global_position(),
+                    loc2.global_position(),
+                    "Global position mismatch for {} (nullified={})",
+                    global_pos,
+                    nullified
+                );
+                assert_eq!(
+                    loc1.nullified(),
+                    loc2.nullified(),
+                    "Nullified flag mismatch for {} (nullified={})",
+                    global_pos,
+                    nullified
+                );
+                assert_eq!(
+                    loc1.bundle(),
+                    loc2.bundle(),
+                    "Bundle mismatch for {} (nullified={})",
+                    global_pos,
+                    nullified
+                );
+                assert_eq!(
+                    loc1.position(),
+                    loc2.position(),
+                    "Position mismatch for {} (nullified={})",
+                    global_pos,
+                    nullified
+                );
             }
         }
     }

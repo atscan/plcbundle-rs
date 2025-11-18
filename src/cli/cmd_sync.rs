@@ -5,8 +5,8 @@ use clap::{Args, ValueHint};
 use plcbundle::{
     constants,
     plc_client::PLCClient,
-    sync::{SyncLoggerImpl, SyncConfig, SyncManager},
     runtime::BundleRuntime,
+    sync::{SyncConfig, SyncLoggerImpl, SyncManager},
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -76,12 +76,15 @@ pub struct SyncCommand {
     /// Maximum bundles to fetch (0 = all, only for one-time sync)
     #[arg(long, default_value = "0", conflicts_with = "continuous")]
     pub max_bundles: usize,
-
 }
 
 impl HasGlobalFlags for SyncCommand {
-    fn verbose(&self) -> bool { false }
-    fn quiet(&self) -> bool { false }
+    fn verbose(&self) -> bool {
+        false
+    }
+    fn quiet(&self) -> bool {
+        false
+    }
 }
 
 pub fn run(cmd: SyncCommand, dir: PathBuf, global_quiet: bool, global_verbose: bool) -> Result<()> {
@@ -95,7 +98,12 @@ pub fn run(cmd: SyncCommand, dir: PathBuf, global_quiet: bool, global_verbose: b
         }
 
         let client = PLCClient::new(&cmd.plc)?;
-        let manager = Arc::new(super::utils::create_manager(dir.clone(), global_verbose, global_quiet, false)?);
+        let manager = Arc::new(super::utils::create_manager(
+            dir.clone(),
+            global_verbose,
+            global_quiet,
+            false,
+        )?);
 
         let config = SyncConfig {
             plc_url: cmd.plc.clone(),
@@ -145,7 +153,9 @@ pub fn run(cmd: SyncCommand, dir: PathBuf, global_quiet: bool, global_verbose: b
             }
 
             // Use common shutdown cleanup handler (no tasks to clean up for sync)
-            runtime.wait_for_shutdown_cleanup::<()>("Sync", None, None).await;
+            runtime
+                .wait_for_shutdown_cleanup::<()>("Sync", None, None)
+                .await;
 
             Ok(())
         } else {

@@ -1,6 +1,6 @@
 use anyhow::Result;
-use plcbundle::processor::{Stats, OutputHandler};
 use clap::{Args, ValueEnum, ValueHint};
+use plcbundle::processor::{OutputHandler, Stats};
 use plcbundle::*;
 use std::io::Write;
 use std::path::PathBuf;
@@ -175,7 +175,7 @@ pub fn run(cmd: QueryCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resul
 
     let start = Instant::now();
     let output = Arc::new(StdoutHandler::new(stats_only));
-    
+
     // Track bundle count separately since callback gives increment, not total
     let bundle_count = Arc::new(Mutex::new(0usize));
     let pb_arc = pb.as_ref().map(|pb| Arc::new(Mutex::new(pb)));
@@ -192,12 +192,12 @@ pub fn run(cmd: QueryCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resul
                     *count += 1;
                     let current_bundles = *count;
                     drop(count);
-                    
+
                     let pb = pb_mutex.lock().unwrap();
-                    
+
                     // Update progress with bundles processed and bytes
                     pb.set_with_bytes(current_bundles, stats.total_bytes);
-                    
+
                     // Set message with matches
                     pb.set_message(format!(
                         "✓ {} matches",

@@ -656,13 +656,18 @@ pub unsafe extern "C" fn bundle_manager_rebuild_did_index(
     let manager = unsafe { &*manager };
 
     let callback = progress_callback.map(|cb| {
-        Box::new(move |current: u32, total: u32, bytes_processed: u64, total_bytes: u64| {
-            cb(current, total, bytes_processed, total_bytes);
-        }) as Box<dyn Fn(u32, u32, u64, u64) + Send + Sync>
+        Box::new(
+            move |current: u32, total: u32, bytes_processed: u64, total_bytes: u64| {
+                cb(current, total, bytes_processed, total_bytes);
+            },
+        ) as Box<dyn Fn(u32, u32, u64, u64) + Send + Sync>
     });
 
     // Use default flush interval for FFI
-    match manager.manager.build_did_index(constants::DID_INDEX_FLUSH_INTERVAL, callback, None, None) {
+    match manager
+        .manager
+        .build_did_index(constants::DID_INDEX_FLUSH_INTERVAL, callback, None, None)
+    {
         Ok(stats) => {
             if !out_stats.is_null() {
                 unsafe {

@@ -1,8 +1,10 @@
 // Bundle-related handlers
 
 use crate::constants;
-use crate::server::error::{bad_request, internal_error, is_not_found_error, not_found, task_join_error};
 use crate::server::ServerState;
+use crate::server::error::{
+    bad_request, internal_error, is_not_found_error, not_found, task_join_error,
+};
 use crate::server::utils::{bundle_download_headers, parse_operation_pointer};
 use axum::{
     body::Body,
@@ -43,10 +45,8 @@ pub async fn handle_bundle_data(
             let stream = ReaderStream::new(file);
             let body = Body::from_stream(stream);
 
-            let headers = bundle_download_headers(
-                "application/zstd",
-                &constants::bundle_filename(number),
-            );
+            let headers =
+                bundle_download_headers("application/zstd", &constants::bundle_filename(number));
 
             (StatusCode::OK, headers, body).into_response()
         }
@@ -167,4 +167,3 @@ pub async fn handle_operation(
         Err(e) => task_join_error(e).into_response(),
     }
 }
-

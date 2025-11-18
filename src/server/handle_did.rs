@@ -1,8 +1,10 @@
 // DID resolution handlers
 
 use crate::resolver::{build_did_state, format_audit_log};
-use crate::server::error::{bad_request, gone, internal_error, is_not_found_error, not_found, task_join_error};
 use crate::server::ServerState;
+use crate::server::error::{
+    bad_request, gone, internal_error, is_not_found_error, not_found, task_join_error,
+};
 use crate::server::utils::{is_common_browser_file, is_valid_did_or_handle};
 use axum::{
     extract::State,
@@ -12,7 +14,10 @@ use axum::{
 use serde_json::json;
 use std::sync::Arc;
 
-pub async fn handle_did_routing_guard(State(state): State<ServerState>, uri: Uri) -> impl IntoResponse {
+pub async fn handle_did_routing_guard(
+    State(state): State<ServerState>,
+    uri: Uri,
+) -> impl IntoResponse {
     // Only handle if resolver is enabled, otherwise return 404
     if !state.config.enable_resolver {
         return not_found("not found").into_response();
@@ -109,16 +114,22 @@ async fn handle_did_document(State(state): State<ServerState>, input: &str) -> i
     let resolution_source = if is_mempool { "mempool" } else { "bundle" };
 
     // Calculate operation age
-    let operation_age_seconds = if let Ok(op_time) = chrono::DateTime::parse_from_rfc3339(&result.operation.created_at) {
-        let now = chrono::Utc::now();
-        let op_utc = op_time.with_timezone(&chrono::Utc);
-        (now - op_utc).num_seconds().max(0) as u64
-    } else {
-        0
-    };
+    let operation_age_seconds =
+        if let Ok(op_time) = chrono::DateTime::parse_from_rfc3339(&result.operation.created_at) {
+            let now = chrono::Utc::now();
+            let op_utc = op_time.with_timezone(&chrono::Utc);
+            (now - op_utc).num_seconds().max(0) as u64
+        } else {
+            0
+        };
 
     // Get operation size
-    let operation_size = result.operation.raw_json.as_ref().map(|s| s.len()).unwrap_or(0);
+    let operation_size = result
+        .operation
+        .raw_json
+        .as_ref()
+        .map(|s| s.len())
+        .unwrap_or(0);
 
     // Set headers
     let mut headers = HeaderMap::new();
@@ -133,11 +144,21 @@ async fn handle_did_document(State(state): State<ServerState>, input: &str) -> i
     } else {
         headers.insert("X-Request-Type", HeaderValue::from_static("did"));
     }
-    headers.insert("X-Resolution-Source", HeaderValue::from_str(resolution_source).unwrap());
-    headers.insert("X-Mempool", HeaderValue::from_str(if is_mempool { "true" } else { "false" }).unwrap());
+    headers.insert(
+        "X-Resolution-Source",
+        HeaderValue::from_str(resolution_source).unwrap(),
+    );
+    headers.insert(
+        "X-Mempool",
+        HeaderValue::from_str(if is_mempool { "true" } else { "false" }).unwrap(),
+    );
     headers.insert(
         "X-Mempool-Time-Ms",
-        HeaderValue::from_str(&format!("{:.3}", result.mempool_time.as_secs_f64() * 1000.0)).unwrap(),
+        HeaderValue::from_str(&format!(
+            "{:.3}",
+            result.mempool_time.as_secs_f64() * 1000.0
+        ))
+        .unwrap(),
     );
     headers.insert(
         "X-Index-Time-Ms",
@@ -147,7 +168,7 @@ async fn handle_did_document(State(state): State<ServerState>, input: &str) -> i
         "X-Load-Time-Ms",
         HeaderValue::from_str(&format!("{:.3}", result.load_time.as_secs_f64() * 1000.0)).unwrap(),
     );
-    
+
     // Calculate global position
     let global_position = if result.bundle_number == 0 {
         // From mempool
@@ -161,7 +182,7 @@ async fn handle_did_document(State(state): State<ServerState>, input: &str) -> i
         "X-Global-Position",
         HeaderValue::from_str(&global_position.to_string()).unwrap(),
     );
-    
+
     headers.insert("X-Bundle-Number", HeaderValue::from(result.bundle_number));
     headers.insert("X-Bundle-Position", HeaderValue::from(result.position));
     headers.insert(
@@ -171,10 +192,18 @@ async fn handle_did_document(State(state): State<ServerState>, input: &str) -> i
     if let Some(cid) = &result.operation.cid {
         headers.insert("X-Operation-CID", HeaderValue::from_str(cid).unwrap());
     }
-    headers.insert("X-Operation-Created", HeaderValue::from_str(&result.operation.created_at).unwrap());
+    headers.insert(
+        "X-Operation-Created",
+        HeaderValue::from_str(&result.operation.created_at).unwrap(),
+    );
     headers.insert(
         "X-Operation-Nullified",
-        HeaderValue::from_str(if result.operation.nullified { "true" } else { "false" }).unwrap(),
+        HeaderValue::from_str(if result.operation.nullified {
+            "true"
+        } else {
+            "false"
+        })
+        .unwrap(),
     );
     headers.insert(
         "X-Operation-Size",
@@ -255,4 +284,3 @@ async fn handle_did_audit_log(State(state): State<ServerState>, input: &str) -> 
     let audit_log = format_audit_log(&operations);
     (StatusCode::OK, axum::Json(audit_log)).into_response()
 }
-

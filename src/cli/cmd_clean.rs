@@ -82,12 +82,13 @@ pub fn run(cmd: CleanCommand, dir: PathBuf, global_verbose: bool) -> Result<()> 
 
     // Show errors if any
     if let Some(errors) = &result.errors
-        && !errors.is_empty() {
-            eprintln!("\n⚠ Warning: Some errors occurred during cleanup:");
-            for error in errors {
-                eprintln!("  - {}", error);
-            }
+        && !errors.is_empty()
+    {
+        eprintln!("\n⚠ Warning: Some errors occurred during cleanup:");
+        for error in errors {
+            eprintln!("  - {}", error);
         }
+    }
 
     Ok(())
 }
@@ -120,7 +121,9 @@ fn display_clean_preview(dir: &PathBuf, preview: &CleanPreview, _verbose: bool) 
     if !root_files.is_empty() {
         println!("  Repository root:");
         for file in &root_files {
-            let rel_path = file.path.strip_prefix(dir)
+            let rel_path = file
+                .path
+                .strip_prefix(dir)
                 .unwrap_or(&file.path)
                 .to_string_lossy();
             println!("    • {} ({})", rel_path, utils::format_bytes(file.size));
@@ -132,7 +135,9 @@ fn display_clean_preview(dir: &PathBuf, preview: &CleanPreview, _verbose: bool) 
     if !config_files.is_empty() {
         println!("  DID index directory:");
         for file in &config_files {
-            let rel_path = file.path.strip_prefix(dir)
+            let rel_path = file
+                .path
+                .strip_prefix(dir)
                 .unwrap_or(&file.path)
                 .to_string_lossy();
             println!("    • {} ({})", rel_path, utils::format_bytes(file.size));
@@ -144,7 +149,9 @@ fn display_clean_preview(dir: &PathBuf, preview: &CleanPreview, _verbose: bool) 
     if !shard_files.is_empty() {
         println!("  Shards directory:");
         for file in &shard_files {
-            let rel_path = file.path.strip_prefix(dir)
+            let rel_path = file
+                .path
+                .strip_prefix(dir)
                 .unwrap_or(&file.path)
                 .to_string_lossy();
             println!("    • {} ({})", rel_path, utils::format_bytes(file.size));
@@ -152,7 +159,11 @@ fn display_clean_preview(dir: &PathBuf, preview: &CleanPreview, _verbose: bool) 
         println!();
     }
 
-    println!("  Total: {} file(s), {}", preview.files.len(), utils::format_bytes(preview.total_size));
+    println!(
+        "  Total: {} file(s), {}",
+        preview.files.len(),
+        utils::format_bytes(preview.total_size)
+    );
     println!();
 
     Ok(())
@@ -168,4 +179,3 @@ fn confirm_clean() -> Result<bool> {
     let response = response.trim().to_lowercase();
     Ok(response == "y" || response == "yes")
 }
-

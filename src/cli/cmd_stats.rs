@@ -160,13 +160,13 @@ fn collect_summary_stats(
         .collect();
 
     let bundle_count = bundle_metadatas.len();
-    let total_operations: u64 = bundle_metadatas.iter().map(|b| b.operation_count as u64).sum();
+    let total_operations: u64 = bundle_metadatas
+        .iter()
+        .map(|b| b.operation_count as u64)
+        .sum();
     let total_dids: u64 = bundle_metadatas.iter().map(|b| b.did_count as u64).sum();
     let total_compressed_size: u64 = bundle_metadatas.iter().map(|b| b.compressed_size).sum();
-    let total_uncompressed_size: u64 = bundle_metadatas
-        .iter()
-        .map(|b| b.uncompressed_size)
-        .sum();
+    let total_uncompressed_size: u64 = bundle_metadatas.iter().map(|b| b.uncompressed_size).sum();
 
     let compression_ratio = if total_uncompressed_size > 0 {
         (1.0 - total_compressed_size as f64 / total_uncompressed_size as f64) * 100.0
@@ -268,7 +268,10 @@ fn collect_did_stats(
         .filter(|b| bundle_nums.contains(&b.bundle_number))
         .collect();
 
-    let total_did_operations: u64 = bundle_metadatas.iter().map(|b| b.operation_count as u64).sum();
+    let total_did_operations: u64 = bundle_metadatas
+        .iter()
+        .map(|b| b.operation_count as u64)
+        .sum();
     let total_unique_dids: usize = bundle_metadatas.iter().map(|b| b.did_count as usize).sum();
 
     // For more detailed stats, we'd need to iterate operations, but that's expensive
@@ -322,27 +325,27 @@ fn collect_timeline_stats(
         .map(|b| &b.start_time)
         .min()
         .cloned();
-    let latest_time = bundle_metadatas
-        .iter()
-        .map(|b| &b.end_time)
-        .max()
-        .cloned();
+    let latest_time = bundle_metadatas.iter().map(|b| &b.end_time).max().cloned();
 
-    let time_span_days = if let (Some(earliest), Some(latest)) = (earliest_time.as_ref(), latest_time.as_ref()) {
-        if let (Ok(e), Ok(l)) = (
-            chrono::DateTime::parse_from_rfc3339(earliest),
-            chrono::DateTime::parse_from_rfc3339(latest),
-        ) {
-            let duration = l.signed_duration_since(e);
-            Some(duration.num_seconds() as f64 / 86400.0)
+    let time_span_days =
+        if let (Some(earliest), Some(latest)) = (earliest_time.as_ref(), latest_time.as_ref()) {
+            if let (Ok(e), Ok(l)) = (
+                chrono::DateTime::parse_from_rfc3339(earliest),
+                chrono::DateTime::parse_from_rfc3339(latest),
+            ) {
+                let duration = l.signed_duration_since(e);
+                Some(duration.num_seconds() as f64 / 86400.0)
+            } else {
+                None
+            }
         } else {
             None
-        }
-    } else {
-        None
-    };
+        };
 
-    let total_operations: u64 = bundle_metadatas.iter().map(|b| b.operation_count as u64).sum();
+    let total_operations: u64 = bundle_metadatas
+        .iter()
+        .map(|b| b.operation_count as u64)
+        .sum();
     let operations_per_day = time_span_days.and_then(|days| {
         if days > 0.0 {
             Some(total_operations as f64 / days)
@@ -396,27 +399,57 @@ fn print_human_stats(stats: &serde_json::Value, stat_type: StatType) -> Result<(
             println!("═══════════════════════════════════════════════════════════════");
             println!();
             println!("  Bundle Range:        {}", stats["bundle_range"]);
-            println!("  Total Bundles:       {}", utils::format_number(stats["bundle_count"].as_u64().unwrap_or(0)));
-            println!("  Total Operations:    {}", utils::format_number(stats["total_operations"].as_u64().unwrap_or(0)));
-            println!("  Total DIDs:          {}", utils::format_number(stats["total_dids"].as_u64().unwrap_or(0)));
+            println!(
+                "  Total Bundles:       {}",
+                utils::format_number(stats["bundle_count"].as_u64().unwrap_or(0))
+            );
+            println!(
+                "  Total Operations:    {}",
+                utils::format_number(stats["total_operations"].as_u64().unwrap_or(0))
+            );
+            println!(
+                "  Total DIDs:          {}",
+                utils::format_number(stats["total_dids"].as_u64().unwrap_or(0))
+            );
             println!();
             println!("  Storage:");
-            println!("    Compressed:        {}", utils::format_bytes(stats["total_compressed_size"].as_u64().unwrap_or(0)));
-            println!("    Uncompressed:      {}", utils::format_bytes(stats["total_uncompressed_size"].as_u64().unwrap_or(0)));
-            println!("    Compression:      {:.1}%", stats["compression_ratio"].as_f64().unwrap_or(0.0));
+            println!(
+                "    Compressed:        {}",
+                utils::format_bytes(stats["total_compressed_size"].as_u64().unwrap_or(0))
+            );
+            println!(
+                "    Uncompressed:      {}",
+                utils::format_bytes(stats["total_uncompressed_size"].as_u64().unwrap_or(0))
+            );
+            println!(
+                "    Compression:      {:.1}%",
+                stats["compression_ratio"].as_f64().unwrap_or(0.0)
+            );
             println!();
             println!("  Averages:");
-            println!("    Ops per Bundle:    {:.1}", stats["avg_operations_per_bundle"].as_f64().unwrap_or(0.0));
-            println!("    DIDs per Bundle:   {:.1}", stats["avg_dids_per_bundle"].as_f64().unwrap_or(0.0));
+            println!(
+                "    Ops per Bundle:    {:.1}",
+                stats["avg_operations_per_bundle"].as_f64().unwrap_or(0.0)
+            );
+            println!(
+                "    DIDs per Bundle:   {:.1}",
+                stats["avg_dids_per_bundle"].as_f64().unwrap_or(0.0)
+            );
         }
         StatType::Operations => {
             println!("🔧 Operation Statistics");
             println!("═══════════════════════════════════════════════════════════════");
             println!();
-            println!("  Total Operations:    {}", utils::format_number(stats["total_operations"].as_u64().unwrap_or(0)));
-            println!("  Nullified:           {}", utils::format_number(stats["nullified_operations"].as_u64().unwrap_or(0)));
+            println!(
+                "  Total Operations:    {}",
+                utils::format_number(stats["total_operations"].as_u64().unwrap_or(0))
+            );
+            println!(
+                "  Nullified:           {}",
+                utils::format_number(stats["nullified_operations"].as_u64().unwrap_or(0))
+            );
             println!();
-            
+
             if let Some(types) = stats.get("operation_types").and_then(|v| v.as_object()) {
                 println!("  Operation Types:");
                 let mut type_vec: Vec<_> = types.iter().collect();
@@ -433,8 +466,9 @@ fn print_human_stats(stats: &serde_json::Value, stat_type: StatType) -> Result<(
                         .and_then(|p| p.get(op_type))
                         .and_then(|v| v.as_f64())
                         .unwrap_or(0.0);
-                    println!("    {:<20} {:>10} ({:>5.1}%)", 
-                        op_type, 
+                    println!(
+                        "    {:<20} {:>10} ({:>5.1}%)",
+                        op_type,
                         utils::format_number(count),
                         percentage
                     );
@@ -445,9 +479,18 @@ fn print_human_stats(stats: &serde_json::Value, stat_type: StatType) -> Result<(
             println!("🆔 DID Statistics");
             println!("═══════════════════════════════════════════════════════════════");
             println!();
-            println!("  Unique DIDs:         {}", utils::format_number(stats["total_unique_dids"].as_u64().unwrap_or(0)));
-            println!("  Total Operations:    {}", utils::format_number(stats["total_did_operations"].as_u64().unwrap_or(0)));
-            println!("  Avg Ops per DID:     {:.2}", stats["avg_operations_per_did"].as_f64().unwrap_or(0.0));
+            println!(
+                "  Unique DIDs:         {}",
+                utils::format_number(stats["total_unique_dids"].as_u64().unwrap_or(0))
+            );
+            println!(
+                "  Total Operations:    {}",
+                utils::format_number(stats["total_did_operations"].as_u64().unwrap_or(0))
+            );
+            println!(
+                "  Avg Ops per DID:     {:.2}",
+                stats["avg_operations_per_did"].as_f64().unwrap_or(0.0)
+            );
         }
         StatType::Timeline => {
             println!("⏰ Timeline Statistics");
@@ -473,4 +516,3 @@ fn print_human_stats(stats: &serde_json::Value, stat_type: StatType) -> Result<(
     println!();
     Ok(())
 }
-

@@ -1,7 +1,7 @@
 // Debug handlers
 
-use crate::server::error::not_found;
 use crate::server::ServerState;
+use crate::server::error::not_found;
 use axum::{
     extract::State,
     http::{HeaderMap, HeaderValue, StatusCode},
@@ -14,9 +14,7 @@ pub async fn handle_debug_memory(State(state): State<ServerState>) -> impl IntoR
     // Get DID index stats for memory info (avoid holding lock in async context)
     let did_stats = tokio::task::spawn_blocking({
         let manager = Arc::clone(&state.manager);
-        move || {
-            manager.get_did_index_stats()
-        }
+        move || manager.get_did_index_stats()
     })
     .await
     .unwrap_or_default();
@@ -43,9 +41,7 @@ pub async fn handle_debug_didindex(State(state): State<ServerState>) -> impl Int
     // Avoid holding lock in async context
     let stats = tokio::task::spawn_blocking({
         let manager = Arc::clone(&state.manager);
-        move || {
-            manager.get_did_index_stats()
-        }
+        move || manager.get_did_index_stats()
     })
     .await
     .unwrap_or_default();
@@ -60,4 +56,3 @@ pub async fn handle_debug_resolver(State(state): State<ServerState>) -> impl Int
     let resolver_stats = state.manager.get_resolver_stats();
     (StatusCode::OK, axum::Json(json!(resolver_stats))).into_response()
 }
-

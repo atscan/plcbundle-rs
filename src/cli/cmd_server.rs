@@ -7,16 +7,15 @@ use std::path::PathBuf;
 use tokio::time::Duration;
 
 #[cfg(feature = "server")]
-use plcbundle::server::{start_server, StartupConfig, ProgressCallbackFactory};
-#[cfg(feature = "server")]
 use super::progress::ProgressBar;
+#[cfg(feature = "server")]
+use plcbundle::server::{ProgressCallbackFactory, StartupConfig, start_server};
 #[cfg(feature = "server")]
 use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "server")]
 fn parse_duration_for_clap(s: &str) -> Result<Duration, String> {
-    plcbundle::server::parse_duration(s)
-        .map_err(|e| e.to_string())
+    plcbundle::server::parse_duration(s).map_err(|e| e.to_string())
 }
 
 #[derive(Args)]
@@ -76,7 +75,7 @@ pub struct ServerCommand {
     #[cfg(feature = "server")]
     #[arg(long, default_value = "60s", value_parser = parse_duration_for_clap, help_heading = "Sync Options")]
     pub interval: Duration,
-    
+
     #[cfg(not(feature = "server"))]
     #[arg(long, default_value = "60s", help_heading = "Sync Options")]
     pub interval: String,
@@ -96,7 +95,6 @@ pub struct ServerCommand {
     /// Handle resolver URL (defaults to quickdid.smokesignal.tools if not provided)
     #[arg(long, help_heading = "Feature Options", value_hint = ValueHint::Url)]
     pub handle_resolver: Option<String>,
-
 }
 
 pub fn run(cmd: ServerCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
@@ -115,12 +113,12 @@ pub fn run(cmd: ServerCommand, dir: PathBuf, global_verbose: bool) -> Result<()>
 #[cfg(feature = "server")]
 fn run_server(cmd: ServerCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
     use anyhow::Context;
-    use tokio::runtime::Runtime;
     use plcbundle::constants;
+    use tokio::runtime::Runtime;
 
     // Create tokio runtime for async operations
     let rt = Runtime::new().context("Failed to create tokio runtime")?;
-    
+
     // Determine handle resolver URL
     let handle_resolver_url = if cmd.handle_resolver.is_none() {
         Some(constants::DEFAULT_HANDLE_RESOLVER_URL.to_string())
@@ -147,24 +145,33 @@ fn run_server(cmd: ServerCommand, dir: PathBuf, global_verbose: bool) -> Result<
     // This factory will be called with (last_bundle, total_bytes) when the index needs to be built
     let progress_callback_factory: Option<ProgressCallbackFactory> = if cmd.resolver {
         Some(Box::new(move |last_bundle: u32, total_bytes: u64| {
-            let progress = Arc::new(Mutex::new(ProgressBar::with_bytes(last_bundle as usize, total_bytes)));
+            let progress = Arc::new(Mutex::new(ProgressBar::with_bytes(
+                last_bundle as usize,
+                total_bytes,
+            )));
             let progress_clone = progress.clone();
             let progress_finish = progress.clone();
             let verbose = global_verbose;
-            
-            let callback = Box::new(move |current: u32, _total: u32, bytes_processed: u64, _total_bytes: u64| {
-                let pb = progress_clone.lock().unwrap();
-                pb.set_with_bytes(current as usize, bytes_processed);
-                if verbose && current.is_multiple_of(100) {
-                    log::debug!("[DIDResolver] Index progress: {}/{} bundles", current, _total);
-                }
-            }) as Box<dyn Fn(u32, u32, u64, u64) + Send + Sync>;
-            
+
+            let callback = Box::new(
+                move |current: u32, _total: u32, bytes_processed: u64, _total_bytes: u64| {
+                    let pb = progress_clone.lock().unwrap();
+                    pb.set_with_bytes(current as usize, bytes_processed);
+                    if verbose && current.is_multiple_of(100) {
+                        log::debug!(
+                            "[DIDResolver] Index progress: {}/{} bundles",
+                            current,
+                            _total
+                        );
+                    }
+                },
+            ) as Box<dyn Fn(u32, u32, u64, u64) + Send + Sync>;
+
             let finish = Box::new(move || {
                 let pb = progress_finish.lock().unwrap();
                 pb.finish();
             }) as Box<dyn FnOnce() + Send + Sync>;
-            
+
             (callback, Some(finish))
         }))
     } else {

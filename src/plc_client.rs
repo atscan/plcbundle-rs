@@ -205,7 +205,7 @@ impl PLCClient {
 
         log::debug!("Fetching DID document from: {}", url);
         let request_start = Instant::now();
-        
+
         let response = self
             .client
             .get(&url)
@@ -215,7 +215,11 @@ impl PLCClient {
             .context(format!("Failed to fetch DID document from {}", url))?;
 
         let request_duration = request_start.elapsed();
-        log::debug!("HTTP request completed in {:?}, status: {}", request_duration, response.status());
+        log::debug!(
+            "HTTP request completed in {:?}, status: {}",
+            request_duration,
+            response.status()
+        );
 
         // Handle rate limiting (429)
         if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
@@ -226,7 +230,11 @@ impl PLCClient {
         }
 
         if !response.status().is_success() {
-            log::error!("Unexpected status code: {} for DID document at {}", response.status(), url);
+            log::error!(
+                "Unexpected status code: {} for DID document at {}",
+                response.status(),
+                url
+            );
             anyhow::bail!(
                 "Unexpected status code: {} for DID document at {}",
                 response.status(),
@@ -247,8 +255,8 @@ impl PLCClient {
     /// Uses the /did/{did} endpoint.
     pub async fn fetch_did_document(&self, did: &str) -> Result<DIDDocument> {
         let data = self.fetch_did_document_raw(did).await?;
-        let document: DIDDocument = sonic_rs::from_str(&data)
-            .context("Failed to parse DID document JSON")?;
+        let document: DIDDocument =
+            sonic_rs::from_str(&data).context("Failed to parse DID document JSON")?;
         Ok(document)
     }
 }
@@ -280,7 +288,6 @@ fn parse_retry_after(response: &reqwest::Response) -> Duration {
     // Default to 60 seconds if no header or parsing fails
     Duration::from_secs(MAX_RETRY_SECONDS)
 }
-
 
 /// Simple token bucket rate limiter
 /// Prevents burst requests by starting with 0 permits and refilling at steady rate
@@ -347,4 +354,3 @@ mod tests {
         assert!(client.base_url.contains("plc.directory"));
     }
 }
-

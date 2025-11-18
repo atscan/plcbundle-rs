@@ -375,7 +375,12 @@ mod tests {
     use crate::manager::{ChainVerifySpec, VerifySpec};
     use tempfile::TempDir;
 
-    fn create_test_bundle_metadata(bundle_num: u32, parent: &str, cursor: &str, end_time: &str) -> BundleMetadata {
+    fn create_test_bundle_metadata(
+        bundle_num: u32,
+        parent: &str,
+        cursor: &str,
+        end_time: &str,
+    ) -> BundleMetadata {
         BundleMetadata {
             bundle_number: bundle_num,
             start_time: "2024-01-01T00:00:00Z".to_string(),
@@ -462,7 +467,12 @@ mod tests {
             updated_at: "2024-01-01T00:00:00Z".to_string(),
             total_size_bytes: 1000,
             total_uncompressed_size_bytes: 2000,
-            bundles: vec![create_test_bundle_metadata(1, "", "", "2024-01-01T01:00:00Z")],
+            bundles: vec![create_test_bundle_metadata(
+                1,
+                "",
+                "",
+                "2024-01-01T01:00:00Z",
+            )],
         };
 
         let spec = ChainVerifySpec {
@@ -491,8 +501,18 @@ mod tests {
             total_uncompressed_size_bytes: 6000,
             bundles: vec![
                 create_test_bundle_metadata(1, "", "", "2024-01-01T01:00:00Z"), // end_time = "2024-01-01T01:00:00Z"
-                create_test_bundle_metadata(2, "hash1", "2024-01-01T01:00:00Z", "2024-01-01T02:00:00Z"), // cursor = bundle 1's end_time
-                create_test_bundle_metadata(3, "hash2", "2024-01-01T02:00:00Z", "2024-01-01T03:00:00Z"), // cursor = bundle 2's end_time
+                create_test_bundle_metadata(
+                    2,
+                    "hash1",
+                    "2024-01-01T01:00:00Z",
+                    "2024-01-01T02:00:00Z",
+                ), // cursor = bundle 1's end_time
+                create_test_bundle_metadata(
+                    3,
+                    "hash2",
+                    "2024-01-01T02:00:00Z",
+                    "2024-01-01T03:00:00Z",
+                ), // cursor = bundle 2's end_time
             ],
         };
 
@@ -520,7 +540,12 @@ mod tests {
             total_uncompressed_size_bytes: 4000,
             bundles: vec![
                 create_test_bundle_metadata(1, "", "", "2024-01-01T01:00:00Z"),
-                create_test_bundle_metadata(2, "wrong_hash", "2024-01-01T01:00:00Z", "2024-01-01T02:00:00Z"), // Wrong parent hash
+                create_test_bundle_metadata(
+                    2,
+                    "wrong_hash",
+                    "2024-01-01T01:00:00Z",
+                    "2024-01-01T02:00:00Z",
+                ), // Wrong parent hash
             ],
         };
 
@@ -534,7 +559,12 @@ mod tests {
         assert!(!result.valid);
         assert_eq!(result.bundles_checked, 2);
         assert!(!result.errors.is_empty());
-        assert!(result.errors.iter().any(|(_, msg)| msg.contains("Parent hash mismatch")));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|(_, msg)| msg.contains("Parent hash mismatch"))
+        );
     }
 
     #[test]
@@ -563,7 +593,12 @@ mod tests {
         assert!(!result.valid);
         assert_eq!(result.bundles_checked, 2);
         assert!(!result.errors.is_empty());
-        assert!(result.errors.iter().any(|(_, msg)| msg.contains("Cursor mismatch")));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|(_, msg)| msg.contains("Cursor mismatch"))
+        );
     }
 
     #[test]
@@ -576,7 +611,12 @@ mod tests {
             updated_at: "2024-01-01T00:00:00Z".to_string(),
             total_size_bytes: 1000,
             total_uncompressed_size_bytes: 2000,
-            bundles: vec![create_test_bundle_metadata(1, "", "should_be_empty", "2024-01-01T01:00:00Z")], // First bundle has non-empty cursor
+            bundles: vec![create_test_bundle_metadata(
+                1,
+                "",
+                "should_be_empty",
+                "2024-01-01T01:00:00Z",
+            )], // First bundle has non-empty cursor
         };
 
         let spec = ChainVerifySpec {
@@ -589,7 +629,12 @@ mod tests {
         assert!(!result.valid);
         assert_eq!(result.bundles_checked, 1);
         assert!(!result.errors.is_empty());
-        assert!(result.errors.iter().any(|(_, msg)| msg.contains("Cursor should be empty")));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|(_, msg)| msg.contains("Cursor should be empty"))
+        );
     }
 
     #[test]
@@ -604,7 +649,12 @@ mod tests {
             total_uncompressed_size_bytes: 4000,
             bundles: vec![
                 create_test_bundle_metadata(1, "", "", "2024-01-01T01:00:00Z"),
-                create_test_bundle_metadata(3, "hash2", "2024-01-01T02:00:00Z", "2024-01-01T03:00:00Z"), // Missing bundle 2
+                create_test_bundle_metadata(
+                    3,
+                    "hash2",
+                    "2024-01-01T02:00:00Z",
+                    "2024-01-01T03:00:00Z",
+                ), // Missing bundle 2
             ],
         };
 
@@ -619,7 +669,12 @@ mod tests {
         assert_eq!(result.bundles_checked, 2); // Only bundles 1 and 3 checked
         assert!(!result.errors.is_empty());
         assert!(result.errors.iter().any(|(num, _)| *num == 2));
-        assert!(result.errors.iter().any(|(_, msg)| msg.contains("not in index")));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|(_, msg)| msg.contains("not in index"))
+        );
     }
 
     #[test]
@@ -632,7 +687,12 @@ mod tests {
             updated_at: "2024-01-01T00:00:00Z".to_string(),
             total_size_bytes: 1000,
             total_uncompressed_size_bytes: 2000,
-            bundles: vec![create_test_bundle_metadata(2, "hash1", "2024-01-01T01:00:00Z", "2024-01-01T02:00:00Z")], // Missing bundle 1
+            bundles: vec![create_test_bundle_metadata(
+                2,
+                "hash1",
+                "2024-01-01T01:00:00Z",
+                "2024-01-01T02:00:00Z",
+            )], // Missing bundle 1
         };
 
         let spec = ChainVerifySpec {
@@ -645,7 +705,12 @@ mod tests {
         assert!(!result.valid);
         assert_eq!(result.bundles_checked, 1); // Only bundle 2 checked
         assert!(!result.errors.is_empty());
-        assert!(result.errors.iter().any(|(_, msg)| msg.contains("Previous bundle 1 not found")));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|(_, msg)| msg.contains("Previous bundle 1 not found"))
+        );
     }
 
     #[test]
@@ -661,10 +726,30 @@ mod tests {
             total_uncompressed_size_bytes: 10000,
             bundles: vec![
                 create_test_bundle_metadata(1, "", "", "2024-01-01T01:00:00Z"), // end_time = "2024-01-01T01:00:00Z"
-                create_test_bundle_metadata(2, "hash1", "2024-01-01T01:00:00Z", "2024-01-01T02:00:00Z"), // cursor = bundle 1's end_time
-                create_test_bundle_metadata(3, "hash2", "2024-01-01T02:00:00Z", "2024-01-01T03:00:00Z"), // cursor = bundle 2's end_time
-                create_test_bundle_metadata(4, "hash3", "2024-01-01T03:00:00Z", "2024-01-01T04:00:00Z"), // cursor = bundle 3's end_time
-                create_test_bundle_metadata(5, "hash4", "2024-01-01T04:00:00Z", "2024-01-01T05:00:00Z"), // cursor = bundle 4's end_time
+                create_test_bundle_metadata(
+                    2,
+                    "hash1",
+                    "2024-01-01T01:00:00Z",
+                    "2024-01-01T02:00:00Z",
+                ), // cursor = bundle 1's end_time
+                create_test_bundle_metadata(
+                    3,
+                    "hash2",
+                    "2024-01-01T02:00:00Z",
+                    "2024-01-01T03:00:00Z",
+                ), // cursor = bundle 2's end_time
+                create_test_bundle_metadata(
+                    4,
+                    "hash3",
+                    "2024-01-01T03:00:00Z",
+                    "2024-01-01T04:00:00Z",
+                ), // cursor = bundle 3's end_time
+                create_test_bundle_metadata(
+                    5,
+                    "hash4",
+                    "2024-01-01T04:00:00Z",
+                    "2024-01-01T05:00:00Z",
+                ), // cursor = bundle 4's end_time
             ],
         };
 
@@ -692,7 +777,12 @@ mod tests {
             total_uncompressed_size_bytes: 4000,
             bundles: vec![
                 create_test_bundle_metadata(1, "", "", "2024-01-01T01:00:00Z"),
-                create_test_bundle_metadata(2, "wrong_hash", "wrong_cursor", "2024-01-01T02:00:00Z"), // Wrong but won't be checked
+                create_test_bundle_metadata(
+                    2,
+                    "wrong_hash",
+                    "wrong_cursor",
+                    "2024-01-01T02:00:00Z",
+                ), // Wrong but won't be checked
             ],
         };
 
@@ -721,8 +811,18 @@ mod tests {
             total_uncompressed_size_bytes: 6000,
             bundles: vec![
                 create_test_bundle_metadata(1, "", "", "2024-01-01T01:00:00Z"), // end_time = "2024-01-01T01:00:00Z"
-                create_test_bundle_metadata(2, "hash1", "2024-01-01T01:00:00Z", "2024-01-01T02:00:00Z"), // cursor = bundle 1's end_time
-                create_test_bundle_metadata(3, "hash2", "2024-01-01T02:00:00Z", "2024-01-01T03:00:00Z"), // cursor = bundle 2's end_time
+                create_test_bundle_metadata(
+                    2,
+                    "hash1",
+                    "2024-01-01T01:00:00Z",
+                    "2024-01-01T02:00:00Z",
+                ), // cursor = bundle 1's end_time
+                create_test_bundle_metadata(
+                    3,
+                    "hash2",
+                    "2024-01-01T02:00:00Z",
+                    "2024-01-01T03:00:00Z",
+                ), // cursor = bundle 2's end_time
             ],
         };
 
@@ -750,10 +850,30 @@ mod tests {
             total_uncompressed_size_bytes: 10000,
             bundles: vec![
                 create_test_bundle_metadata(1, "", "", "2024-01-01T01:00:00Z"), // end_time = "2024-01-01T01:00:00Z"
-                create_test_bundle_metadata(2, "hash1", "2024-01-01T01:00:00Z", "2024-01-01T02:00:00Z"), // cursor = bundle 1's end_time
-                create_test_bundle_metadata(3, "hash2", "2024-01-01T02:00:00Z", "2024-01-01T03:00:00Z"), // cursor = bundle 2's end_time
-                create_test_bundle_metadata(4, "hash3", "2024-01-01T03:00:00Z", "2024-01-01T04:00:00Z"), // cursor = bundle 3's end_time
-                create_test_bundle_metadata(5, "hash4", "2024-01-01T04:00:00Z", "2024-01-01T05:00:00Z"), // cursor = bundle 4's end_time
+                create_test_bundle_metadata(
+                    2,
+                    "hash1",
+                    "2024-01-01T01:00:00Z",
+                    "2024-01-01T02:00:00Z",
+                ), // cursor = bundle 1's end_time
+                create_test_bundle_metadata(
+                    3,
+                    "hash2",
+                    "2024-01-01T02:00:00Z",
+                    "2024-01-01T03:00:00Z",
+                ), // cursor = bundle 2's end_time
+                create_test_bundle_metadata(
+                    4,
+                    "hash3",
+                    "2024-01-01T03:00:00Z",
+                    "2024-01-01T04:00:00Z",
+                ), // cursor = bundle 3's end_time
+                create_test_bundle_metadata(
+                    5,
+                    "hash4",
+                    "2024-01-01T04:00:00Z",
+                    "2024-01-01T05:00:00Z",
+                ), // cursor = bundle 4's end_time
             ],
         };
 

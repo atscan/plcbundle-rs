@@ -1,9 +1,6 @@
 // Error handling utilities and response helpers
 
-use axum::{
-    http::StatusCode,
-    response::IntoResponse,
-};
+use axum::{http::StatusCode, response::IntoResponse};
 use serde_json::json;
 
 /// Helper to create a JSON error response
@@ -45,4 +42,3 @@ pub fn is_not_found_error(e: &anyhow::Error) -> bool {
     let msg = e.to_string();
     msg.contains("not found") || msg.contains("not in index")
 }
-

@@ -403,9 +403,10 @@ fn bench_operation_read(
     let mut bundle_op_counts = Vec::with_capacity(bundles.len());
     for &bundle_num in &bundles {
         if let Ok(bundle) = manager.load_bundle(bundle_num, LoadOptions::default())
-            && !bundle.operations.is_empty() {
-                bundle_op_counts.push((bundle_num, bundle.operations.len()));
-            }
+            && !bundle.operations.is_empty()
+        {
+            bundle_op_counts.push((bundle_num, bundle.operations.len()));
+        }
     }
 
     if bundle_op_counts.is_empty() {
@@ -421,7 +422,7 @@ fn bench_operation_read(
 
     // Benchmark - random bundle and random position each iteration
     let mut timings = Vec::with_capacity(iterations);
-    
+
     let pb = if interactive {
         Some(ProgressBar::new(iterations))
     } else {
@@ -481,7 +482,7 @@ fn bench_did_index_lookup(
     // Ensure DID index is loaded (sample_random_dids already does this, but be explicit)
     // The did_index will be loaded by sample_random_dids above
     let did_index = manager.get_did_index();
-    
+
     // Ensure it's actually loaded (in case sample_random_dids didn't load it)
     {
         let guard = did_index.read().unwrap();
@@ -502,7 +503,7 @@ fn bench_did_index_lookup(
 
     // Benchmark - different DID each iteration
     let mut timings = Vec::with_capacity(iterations);
-    
+
     let pb = if interactive {
         Some(ProgressBar::new(iterations))
     } else {
@@ -516,7 +517,12 @@ fn bench_did_index_lookup(
 
         let did = &dids[i % dids.len()];
         let start = Instant::now();
-        let _ = did_index.read().unwrap().as_ref().unwrap().get_did_locations(did)?;
+        let _ = did_index
+            .read()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .get_did_locations(did)?;
         timings.push(start.elapsed().as_secs_f64() * 1000.0);
     }
 
@@ -554,7 +560,7 @@ fn bench_did_resolution(
     // Benchmark - different DID each iteration
     manager.clear_caches();
     let mut timings = Vec::with_capacity(iterations);
-    
+
     let pb = if interactive {
         Some(ProgressBar::new(iterations))
     } else {

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Args, ValueHint};
-use plcbundle::{constants, BundleManager};
+use plcbundle::{BundleManager, constants};
 use std::path::{Path, PathBuf};
 
 #[derive(Args)]
@@ -218,7 +218,10 @@ mod tests {
             origin: None,
             force: false,
         };
-        assert!(run(cmd).is_err(), "Should fail when trying to initialize already-initialized repository without --force");
+        assert!(
+            run(cmd).is_err(),
+            "Should fail when trying to initialize already-initialized repository without --force"
+        );
 
         // Verify the origin is still "first" (not overwritten)
         let index = Index::load(temp.path()).unwrap();

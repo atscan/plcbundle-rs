@@ -1,4 +1,3 @@
-
 //! PLC synchronization: events and logger, boundary-CID deduplication, one-shot and continuous modes, and robust error/backoff handling
 
 // Sync module - PLC directory synchronization
@@ -22,7 +21,6 @@ pub struct PLCOperation {
     nullified: Option<Value>,
     #[serde(rename = "createdAt")]
     created_at: String,
-
 
     #[serde(skip)]
     pub raw_json: Option<String>,
@@ -181,7 +179,6 @@ pub trait SyncLogger: Send + Sync {
     // Allow the sync logger to accept multiple arguments for detailed bundle info
     // (Removed workaround method; use allow attribute on trait method instead)
 
-
     fn on_caught_up(
         &self,
         next_bundle: u32,
@@ -256,7 +253,9 @@ impl SyncLogger for SyncLoggerImpl {
 
     fn on_sync_start(&self, interval: Duration) {
         eprintln!("[Sync] Starting initial sync...");
-        if let Some(verbose) = &self.verbose && *verbose.lock().unwrap() {
+        if let Some(verbose) = &self.verbose
+            && *verbose.lock().unwrap()
+        {
             eprintln!("[Sync] Sync loop interval: {:?}", interval);
         }
     }
@@ -468,10 +467,7 @@ impl SyncManager {
             let segments_compacted = delta_segments_before.saturating_sub(delta_segments_after);
             eprintln!(
                 "[Sync] ✓ Index compacted | segments: {} → {} ({} removed) | index: {}ms",
-                delta_segments_before,
-                delta_segments_after,
-                segments_compacted,
-                index_ms
+                delta_segments_before, delta_segments_after, segments_compacted, index_ms
             );
         }
     }
@@ -482,9 +478,10 @@ impl SyncManager {
         loop {
             // Check for shutdown if configured
             if let Some(ref shutdown_rx) = self.config.shutdown_rx
-                && *shutdown_rx.borrow() {
-                    break;
-                }
+                && *shutdown_rx.borrow()
+            {
+                break;
+            }
 
             // Get stats before sync to track compaction
             let stats_before = self.manager.get_did_index_stats();
@@ -525,10 +522,16 @@ impl SyncManager {
                     });
 
                     // Show compaction message if index was compacted
-                    self.show_compaction_if_needed(did_index_compacted, delta_segments_before, index_ms);
+                    self.show_compaction_if_needed(
+                        did_index_compacted,
+                        delta_segments_before,
+                        index_ms,
+                    );
 
                     // Check if we've reached the limit
-                    if let Some(max) = max_bundles && synced >= max {
+                    if let Some(max) = max_bundles
+                        && synced >= max
+                    {
                         break;
                     }
                 }
@@ -593,7 +596,9 @@ impl SyncManager {
 
         loop {
             // Check for shutdown before starting sync
-            if let Some(ref shutdown_rx) = self.config.shutdown_rx && *shutdown_rx.borrow() {
+            if let Some(ref shutdown_rx) = self.config.shutdown_rx
+                && *shutdown_rx.borrow()
+            {
                 if self.config.verbose {
                     eprintln!("[Sync] Shutdown requested, stopping...");
                 }
@@ -647,7 +652,11 @@ impl SyncManager {
                     });
 
                     // Show compaction message if index was compacted
-                    self.show_compaction_if_needed(did_index_compacted, delta_segments_before, index_ms);
+                    self.show_compaction_if_needed(
+                        did_index_compacted,
+                        delta_segments_before,
+                        index_ms,
+                    );
 
                     // Check max bundles limit
                     if self.config.max_bundles > 0
@@ -663,7 +672,9 @@ impl SyncManager {
                     }
 
                     // Check for shutdown before sleeping
-                    if let Some(ref shutdown_rx) = self.config.shutdown_rx && *shutdown_rx.borrow() {
+                    if let Some(ref shutdown_rx) = self.config.shutdown_rx
+                        && *shutdown_rx.borrow()
+                    {
                         if self.config.verbose {
                             eprintln!("[Sync] Shutdown requested, stopping...");
                         }
@@ -700,7 +711,9 @@ impl SyncManager {
                     fetch_duration_ms,
                 }) => {
                     // Check for shutdown
-                    if let Some(ref shutdown_rx) = self.config.shutdown_rx && *shutdown_rx.borrow() {
+                    if let Some(ref shutdown_rx) = self.config.shutdown_rx
+                        && *shutdown_rx.borrow()
+                    {
                         if self.config.verbose {
                             eprintln!("[Sync] Shutdown requested, stopping...");
                         }
@@ -985,7 +998,11 @@ mod tests {
 
     #[test]
     fn test_get_boundary_cids_single() {
-        let ops = vec![create_operation_helper("did:plc:test", Some("cid1"), "2024-01-01T00:00:00Z")];
+        let ops = vec![create_operation_helper(
+            "did:plc:test",
+            Some("cid1"),
+            "2024-01-01T00:00:00Z",
+        )];
         let cids = get_boundary_cids(&ops);
         assert_eq!(cids.len(), 1);
         assert!(cids.contains("cid1"));

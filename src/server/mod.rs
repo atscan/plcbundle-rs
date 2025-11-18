@@ -18,9 +18,9 @@ mod handle_status;
 #[cfg(feature = "server")]
 mod routes;
 #[cfg(feature = "server")]
-mod utils;
-#[cfg(feature = "server")]
 mod startup;
+#[cfg(feature = "server")]
+mod utils;
 #[cfg(feature = "server")]
 mod websocket;
 
@@ -36,7 +36,9 @@ use std::time::Instant;
 #[cfg(feature = "server")]
 pub use config::ServerConfig;
 #[cfg(feature = "server")]
-pub use startup::{StartupConfig, start_server, ProgressCallback, ProgressCallbackFactory, ProgressFinish};
+pub use startup::{
+    ProgressCallback, ProgressCallbackFactory, ProgressFinish, StartupConfig, start_server,
+};
 #[cfg(feature = "server")]
 pub use utils::parse_duration;
 
@@ -115,5 +117,6 @@ pub fn get_ascii_art_banner(_version: &str) -> String {
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠉⠂⠂⠏⠿⢻⣥⡪⢽⣳⣳⣥⡶⣫⣍⢐⣥⣻⣾⡻⣅⢭⡴⢭⣿⠕⣧⡭⣞⣻⣣⣻⢿⠟⠛⠙⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠄⠋⠫⠯⣍⢻⣿⣿⣷⣕⣵⣹⣽⣿⣷⣇⡏⣿⡿⣍⡝⠵⠯⠁⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠐⠠⠁⠋⢣⠓⡍⣫⠹⣿⣿⣷⡿⠯⠺⠁⠁⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠋⢀⠋⢈⡿⠿⠁⠉⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"#.to_string()
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠋⢀⠋⢈⡿⠿⠁⠉⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"#
+        .to_string()
 }

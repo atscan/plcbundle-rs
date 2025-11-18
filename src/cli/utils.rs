@@ -9,13 +9,13 @@ use std::path::{Path, PathBuf};
 pub mod colors {
     /// Standard green color (used for success, matches, etc.)
     pub const GREEN: &str = "\x1b[32m";
-    
+
     /// Standard red color (used for errors, deletions, etc.)
     pub const RED: &str = "\x1b[31m";
-    
+
     /// Reset color code
     pub const RESET: &str = "\x1b[0m";
-    
+
     /// Dim/bright black color (used for context, unchanged lines, etc.)
     pub const DIM: &str = "\x1b[2m";
 }
@@ -76,7 +76,6 @@ pub fn parse_bundle_spec(spec: Option<String>, max_bundle: u32) -> Result<Vec<u3
     }
 }
 
-
 /// Display path resolving "." to absolute path
 /// Per RULES.md: NEVER display "." in user-facing output
 pub fn display_path(path: &Path) -> PathBuf {
@@ -110,15 +109,20 @@ pub fn is_repository_empty(manager: &BundleManager) -> bool {
 ///
 /// This is the standard way to create a BundleManager from CLI commands.
 /// It respects the verbose and quiet flags for logging.
-/// 
+///
 /// # Arguments
 /// * `dir` - Directory path
 /// * `verbose` - Enable verbose logging
 /// * `_quiet` - Quiet mode (currently unused)
 /// * `preload_mempool` - If true, preload mempool at initialization (for commands that need it)
-pub fn create_manager(dir: PathBuf, verbose: bool, _quiet: bool, preload_mempool: bool) -> Result<BundleManager> {
+pub fn create_manager(
+    dir: PathBuf,
+    verbose: bool,
+    _quiet: bool,
+    preload_mempool: bool,
+) -> Result<BundleManager> {
     use anyhow::Context;
-    
+
     // Check if directory exists
     if !dir.exists() {
         anyhow::bail!(
@@ -128,7 +132,7 @@ pub fn create_manager(dir: PathBuf, verbose: bool, _quiet: bool, preload_mempool
             plcbundle::constants::BINARY_NAME
         );
     }
-    
+
     // Check if it's a bundle directory (has plc_bundles.json)
     let index_path = dir.join("plc_bundles.json");
     if !index_path.exists() {
@@ -139,15 +143,19 @@ pub fn create_manager(dir: PathBuf, verbose: bool, _quiet: bool, preload_mempool
             plcbundle::constants::BINARY_NAME
         );
     }
-    
+
     let display_dir = display_path(&dir);
     let options = plcbundle::ManagerOptions {
         handle_resolver_url: None,
         preload_mempool,
         verbose,
     };
-    let manager = BundleManager::new(dir, options)
-        .with_context(|| format!("Failed to load bundle repository from: {}", display_dir.display()))?;
+    let manager = BundleManager::new(dir, options).with_context(|| {
+        format!(
+            "Failed to load bundle repository from: {}",
+            display_dir.display()
+        )
+    })?;
 
     Ok(manager)
 }
@@ -156,7 +164,11 @@ pub fn create_manager(dir: PathBuf, verbose: bool, _quiet: bool, preload_mempool
 ///
 /// Convenience function for commands that implement `HasGlobalFlags`.
 /// The global flags (verbose, quiet) are automatically extracted from the command.
-pub fn create_manager_from_cmd<C: HasGlobalFlags>(dir: PathBuf, cmd: &C, preload_mempool: bool) -> Result<BundleManager> {
+pub fn create_manager_from_cmd<C: HasGlobalFlags>(
+    dir: PathBuf,
+    cmd: &C,
+    preload_mempool: bool,
+) -> Result<BundleManager> {
     create_manager(dir, cmd.verbose(), cmd.quiet(), preload_mempool)
 }
 
@@ -178,7 +190,9 @@ pub fn resolve_bundle_target(
         }
     } else {
         // Otherwise treat as file path. For now, this is an error as direct file access is disallowed.
-        anyhow::bail!("Loading from arbitrary paths not yet implemented. Please specify a bundle number.");
+        anyhow::bail!(
+            "Loading from arbitrary paths not yet implemented. Please specify a bundle number."
+        );
     }
 }
 
@@ -197,12 +211,12 @@ pub fn get_all_bundle_metadata(manager: &BundleManager) -> Vec<plcbundle::index:
 pub fn get_free_disk_space(path: &Path) -> Option<u64> {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
-    
+
     let c_path = match CString::new(path.as_os_str().as_bytes()) {
         Ok(p) => p,
         Err(_) => return None,
     };
-    
+
     unsafe {
         let mut stat: libc::statvfs = std::mem::zeroed();
         if libc::statvfs(c_path.as_ptr(), &mut stat) == 0 {

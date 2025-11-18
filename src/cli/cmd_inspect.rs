@@ -201,7 +201,9 @@ pub fn run(cmd: InspectCommand, dir: PathBuf) -> Result<()> {
         // For arbitrary file paths, we still need filesystem access - this should be refactored
         // to use a manager method for loading from arbitrary paths in the future if supported.
         // For now, it will return an error as per `resolve_bundle_target`.
-        anyhow::bail!("Loading from arbitrary paths not yet implemented. Please specify a bundle number.");
+        anyhow::bail!(
+            "Loading from arbitrary paths not yet implemented. Please specify a bundle number."
+        );
     };
 
     if !cmd.json {
@@ -380,28 +382,26 @@ fn analyze_operations(operations: &[Operation], cmd: &InspectCommand) -> Result<
             if let Some(aka) = op_val.get("alsoKnownAs").and_then(|v| v.as_array()) {
                 for item in aka.iter() {
                     if let Some(aka_str) = item.as_str()
-                        && aka_str.starts_with("at://") {
-                            total_handles += 1;
+                        && aka_str.starts_with("at://")
+                    {
+                        total_handles += 1;
 
-                            // Extract domain
-                            let handle = aka_str.strip_prefix("at://").unwrap_or("");
-                            let handle = handle.split('/').next().unwrap_or("");
+                        // Extract domain
+                        let handle = aka_str.strip_prefix("at://").unwrap_or("");
+                        let handle = handle.split('/').next().unwrap_or("");
 
-                            // Count domain (TLD)
-                            let parts: Vec<&str> = handle.split('.').collect();
-                            if parts.len() >= 2 {
-                                let domain = format!(
-                                    "{}.{}",
-                                    parts[parts.len() - 2],
-                                    parts[parts.len() - 1]
-                                );
-                                *domain_counts.entry(domain).or_insert(0) += 1;
-                            }
+                        // Count domain (TLD)
+                        let parts: Vec<&str> = handle.split('.').collect();
+                        if parts.len() >= 2 {
+                            let domain =
+                                format!("{}.{}", parts[parts.len() - 2], parts[parts.len() - 1]);
+                            *domain_counts.entry(domain).or_insert(0) += 1;
+                        }
 
-                            // Check for invalid patterns
-                            if handle.contains('_') {
-                                invalid_handles += 1;
-                            }
+                        // Check for invalid patterns
+                        if handle.contains('_') {
+                            invalid_handles += 1;
+                        }
                     }
                 }
             }
@@ -413,14 +413,15 @@ fn analyze_operations(operations: &[Operation], cmd: &InspectCommand) -> Result<
                 // Extract PDS endpoints
                 if let Some(pds_val) = op_val.get("services").and_then(|v| v.get("atproto_pds"))
                     && let Some(_pds) = pds_val.as_object()
-                    && let Some(endpoint) = pds_val.get("endpoint").and_then(|v| v.as_str()) {
-                        // Normalize endpoint
-                        let endpoint = endpoint
-                            .strip_prefix("https://")
-                            .or_else(|| endpoint.strip_prefix("http://"))
-                            .unwrap_or(endpoint);
-                        let endpoint = endpoint.split('/').next().unwrap_or(endpoint);
-                        *endpoint_counts.entry(endpoint.to_string()).or_insert(0) += 1;
+                    && let Some(endpoint) = pds_val.get("endpoint").and_then(|v| v.as_str())
+                {
+                    // Normalize endpoint
+                    let endpoint = endpoint
+                        .strip_prefix("https://")
+                        .or_else(|| endpoint.strip_prefix("http://"))
+                        .unwrap_or(endpoint);
+                    let endpoint = endpoint.split('/').next().unwrap_or(endpoint);
+                    *endpoint_counts.entry(endpoint.to_string()).or_insert(0) += 1;
                 }
             }
         }
@@ -663,89 +664,92 @@ fn display_human(
     println!();
 
     // Embedded metadata (if available and not skipped)
-    if !cmd.skip_metadata && result.has_metadata_frame
-        && let Some(ref meta) = result.embedded_metadata {
-            println!("📋 Embedded Metadata (Skippable Frame)");
-            println!("───────────────────────────────────────");
-            println!("  Format:              {}", meta.format);
-            println!("  Origin:              {}", meta.origin);
-            println!("  Bundle Number:       {}", meta.bundle_number);
+    if !cmd.skip_metadata
+        && result.has_metadata_frame
+        && let Some(ref meta) = result.embedded_metadata
+    {
+        println!("📋 Embedded Metadata (Skippable Frame)");
+        println!("───────────────────────────────────────");
+        println!("  Format:              {}", meta.format);
+        println!("  Origin:              {}", meta.origin);
+        println!("  Bundle Number:       {}", meta.bundle_number);
 
-            if !meta.created_by.is_empty() {
-                println!("  Created by:          {}", meta.created_by);
-            }
-            println!("  Created at:          {}", meta.created_at);
-
-            println!("\n  Content:");
-            println!(
-                "    Operations:        {}",
-                format_number(meta.operation_count)
-            );
-            println!("    Unique DIDs:       {}", format_number(meta.did_count));
-            println!(
-                "    Frames:            {} × {} ops",
-                meta.frame_count,
-                format_number(meta.frame_size)
-            );
-            println!(
-                "    Timespan:          {} → {}",
-                meta.start_time, meta.end_time
-            );
-
-            let duration = if let (Ok(start), Ok(end)) = (
-                DateTime::parse_from_rfc3339(&meta.start_time),
-                DateTime::parse_from_rfc3339(&meta.end_time),
-            ) {
-                end.signed_duration_since(start)
-            } else {
-                chrono::Duration::seconds(0)
-            };
-            println!(
-                "    Duration:          {}",
-                format_duration_verbose(duration)
-            );
-
-            println!("\n  Integrity:");
-            println!("    Content hash:      {}", meta.content_hash);
-            if let Some(ref parent) = meta.parent_hash
-                && !parent.is_empty() {
-                    println!("    Parent hash:       {}", parent);
-            }
-
-            // Index metadata for chain info
-            if let Some(ref index_meta) = result.index_metadata {
-                println!("\n  Chain:");
-                println!("    Chain hash:        {}", index_meta.hash);
-                if !index_meta.parent.is_empty() {
-                    println!("    Parent:            {}", index_meta.parent);
-                }
-                if !index_meta.cursor.is_empty() {
-                    println!("    Cursor:            {}", index_meta.cursor);
-                }
-            }
-
-            if !meta.frame_offsets.is_empty() {
-                println!("\n  Frame Index:");
-                println!("    {} frame offsets (embedded)", meta.frame_offsets.len());
-
-                if let Some(metadata_size) = meta.metadata_frame_size {
-                    println!("    Metadata size:     {}", format_bytes(metadata_size));
-                }
-
-                // Show compact list of first few offsets
-                if meta.frame_offsets.len() <= 10 {
-                    println!("    Offsets:           {:?}", meta.frame_offsets);
-                } else {
-                    println!(
-                        "    First offsets:     {:?} ... ({} more)",
-                        &meta.frame_offsets[..5],
-                        meta.frame_offsets.len() - 5
-                    );
-                }
-            }
-
-            println!();
+        if !meta.created_by.is_empty() {
+            println!("  Created by:          {}", meta.created_by);
         }
+        println!("  Created at:          {}", meta.created_at);
+
+        println!("\n  Content:");
+        println!(
+            "    Operations:        {}",
+            format_number(meta.operation_count)
+        );
+        println!("    Unique DIDs:       {}", format_number(meta.did_count));
+        println!(
+            "    Frames:            {} × {} ops",
+            meta.frame_count,
+            format_number(meta.frame_size)
+        );
+        println!(
+            "    Timespan:          {} → {}",
+            meta.start_time, meta.end_time
+        );
+
+        let duration = if let (Ok(start), Ok(end)) = (
+            DateTime::parse_from_rfc3339(&meta.start_time),
+            DateTime::parse_from_rfc3339(&meta.end_time),
+        ) {
+            end.signed_duration_since(start)
+        } else {
+            chrono::Duration::seconds(0)
+        };
+        println!(
+            "    Duration:          {}",
+            format_duration_verbose(duration)
+        );
+
+        println!("\n  Integrity:");
+        println!("    Content hash:      {}", meta.content_hash);
+        if let Some(ref parent) = meta.parent_hash
+            && !parent.is_empty()
+        {
+            println!("    Parent hash:       {}", parent);
+        }
+
+        // Index metadata for chain info
+        if let Some(ref index_meta) = result.index_metadata {
+            println!("\n  Chain:");
+            println!("    Chain hash:        {}", index_meta.hash);
+            if !index_meta.parent.is_empty() {
+                println!("    Parent:            {}", index_meta.parent);
+            }
+            if !index_meta.cursor.is_empty() {
+                println!("    Cursor:            {}", index_meta.cursor);
+            }
+        }
+
+        if !meta.frame_offsets.is_empty() {
+            println!("\n  Frame Index:");
+            println!("    {} frame offsets (embedded)", meta.frame_offsets.len());
+
+            if let Some(metadata_size) = meta.metadata_frame_size {
+                println!("    Metadata size:     {}", format_bytes(metadata_size));
+            }
+
+            // Show compact list of first few offsets
+            if meta.frame_offsets.len() <= 10 {
+                println!("    Offsets:           {:?}", meta.frame_offsets);
+            } else {
+                println!(
+                    "    First offsets:     {:?} ... ({} more)",
+                    &meta.frame_offsets[..5],
+                    meta.frame_offsets.len() - 5
+                );
+            }
+        }
+
+        println!();
+    }
 
     // Operations breakdown
     println!("📊 Operations Analysis");
@@ -812,12 +816,13 @@ fn display_human(
         println!("────────────────────");
         println!("  Total handles:       {}", format_number(total_handles));
         if let Some(invalid) = result.invalid_handles
-            && invalid > 0 {
-                println!(
-                    "  Invalid patterns:    {} ({:.1}%)",
-                    format_number(invalid),
-                    (invalid as f64 / total_handles as f64 * 100.0)
-                );
+            && invalid > 0
+        {
+            println!(
+                "  Invalid patterns:    {} ({:.1}%)",
+                format_number(invalid),
+                (invalid as f64 / total_handles as f64 * 100.0)
+            );
         }
 
         if !result.top_domains.is_empty() {

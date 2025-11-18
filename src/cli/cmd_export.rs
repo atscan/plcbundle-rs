@@ -10,7 +10,9 @@ use std::time::Instant;
 
 use super::progress::ProgressBar;
 use super::utils;
-use plcbundle::constants::{global_to_bundle_position, total_operations_from_bundles, bundle_position_to_global};
+use plcbundle::constants::{
+    bundle_position_to_global, global_to_bundle_position, total_operations_from_bundles,
+};
 use plcbundle::format::format_std_duration_auto;
 
 #[derive(Args)]
@@ -74,7 +76,6 @@ pub struct ExportCommand {
     pub reverse: bool,
 }
 
-
 pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Result<()> {
     let output = cmd.output;
     let count = cmd.count;
@@ -132,7 +133,11 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
             eprintln!("Exporting {} operations", utils::format_number(op_count));
         } else {
             let bundle_range_str = format_bundle_range(&bundle_numbers);
-            eprintln!("Exporting bundles: {} ({})", bundle_range_str, bundle_numbers.len());
+            eprintln!(
+                "Exporting bundles: {} ({})",
+                bundle_range_str,
+                bundle_numbers.len()
+            );
         }
     }
 
@@ -156,16 +161,21 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
     let total_compressed_size: u64 = bundle_numbers
         .iter()
         .filter_map(|bundle_num| {
-            index.get_bundle(*bundle_num).map(|meta| meta.compressed_size)
+            index
+                .get_bundle(*bundle_num)
+                .map(|meta| meta.compressed_size)
         })
         .sum();
-    
+
     // Create progress bar tracking bundles processed
     // Skip progress bar if quiet mode or if only one bundle needs to be loaded
     let pb = if quiet || bundle_numbers.len() == 1 {
         None
     } else {
-        Some(ProgressBar::with_bytes(bundle_numbers.len(), total_uncompressed_size))
+        Some(ProgressBar::with_bytes(
+            bundle_numbers.len(),
+            total_uncompressed_size,
+        ))
     };
 
     let start = Instant::now();
@@ -179,8 +189,9 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
     for bundle_num in bundle_numbers {
         // Check count limit
         if let Some(limit) = count
-            && exported_count >= limit {
-                break;
+            && exported_count >= limit
+        {
+            break;
         }
 
         // Use BundleManager API to get decompressed stream
@@ -226,8 +237,9 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
 
             // Check count limit
             if let Some(limit) = count
-                && exported_count >= limit {
-                    break;
+                && exported_count >= limit
+            {
+                break;
             }
 
             output_buffer.push_str(&line);
@@ -246,15 +258,19 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
 
             // Progress update (operations count in message, but bundles in progress bar)
             if let Some(ref pb) = pb
-                && (exported_count % BATCH_SIZE == 0 || exported_count == 1) {
-                    let bytes = bytes_written.lock().unwrap();
-                    let total_bytes = *bytes + output_buffer.len() as u64;
-                    drop(bytes);
-                    pb.set_with_bytes(bundles_processed, total_bytes);
-                    pb.set_message(format!("{} ops", utils::format_number(exported_count as u64)));
+                && (exported_count % BATCH_SIZE == 0 || exported_count == 1)
+            {
+                let bytes = bytes_written.lock().unwrap();
+                let total_bytes = *bytes + output_buffer.len() as u64;
+                drop(bytes);
+                pb.set_with_bytes(bundles_processed, total_bytes);
+                pb.set_message(format!(
+                    "{} ops",
+                    utils::format_number(exported_count as u64)
+                ));
             }
         }
-        
+
         // Update progress after processing each bundle
         bundles_processed += 1;
         if let Some(ref pb) = pb {
@@ -262,7 +278,10 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
             let total_bytes = *bytes + output_buffer.len() as u64;
             drop(bytes);
             pb.set_with_bytes(bundles_processed, total_bytes);
-            pb.set_message(format!("{} ops", utils::format_number(exported_count as u64)));
+            pb.set_message(format!(
+                "{} ops",
+                utils::format_number(exported_count as u64)
+            ));
         }
     }
 
@@ -287,25 +306,30 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
     if !quiet {
         let elapsed = start.elapsed();
         let elapsed_secs = elapsed.as_secs_f64();
-        
+
         // Format duration with auto-scaling using utility function
         let duration_str = format_std_duration_auto(elapsed);
-        
+
         let mut parts = Vec::new();
-        parts.push(format!("Exported: {} ops", utils::format_number(exported_count as u64)));
+        parts.push(format!(
+            "Exported: {} ops",
+            utils::format_number(exported_count as u64)
+        ));
         parts.push(format!("in {}", duration_str));
-        
+
         if elapsed_secs > 0.0 {
             // Calculate throughputs
-            let uncompressed_throughput_mb = (total_uncompressed_size as f64 / elapsed_secs) / (1024.0 * 1024.0);
-            let compressed_throughput_mb = (total_compressed_size as f64 / elapsed_secs) / (1024.0 * 1024.0);
-            
-            parts.push(format!("({:.1} MB/s uncompressed, {:.1} MB/s compressed)",
-                uncompressed_throughput_mb,
-                compressed_throughput_mb
+            let uncompressed_throughput_mb =
+                (total_uncompressed_size as f64 / elapsed_secs) / (1024.0 * 1024.0);
+            let compressed_throughput_mb =
+                (total_compressed_size as f64 / elapsed_secs) / (1024.0 * 1024.0);
+
+            parts.push(format!(
+                "({:.1} MB/s uncompressed, {:.1} MB/s compressed)",
+                uncompressed_throughput_mb, compressed_throughput_mb
             ));
         }
-        
+
         eprintln!("{}", parts.join(" "));
     }
 
@@ -355,7 +379,7 @@ fn format_bundle_range(bundles: &[u32]) -> String {
     }
 
     let result = ranges.join(", ");
-    
+
     // If the formatted string is too long, fall back to min-max
     if result.len() > 200 {
         let min = bundles.iter().min().copied().unwrap_or(0);
@@ -380,14 +404,14 @@ impl OperationFilter {
     /// This is much more efficient for large ranges like "0-10000000"
     fn parse(spec: &str, max_operation: u64) -> Result<Self> {
         use anyhow::Context;
-        
+
         if max_operation == 0 {
             anyhow::bail!("No operations available");
         }
 
         let mut ranges = Vec::new();
         let mut individual = HashSet::new();
-        
+
         for part in spec.split(',') {
             let part = part.trim();
             if part.is_empty() {
@@ -435,20 +459,20 @@ impl OperationFilter {
                 individual.insert(num);
             }
         }
-        
+
         // Sort ranges for efficient lookup
         ranges.sort_unstable();
-        
+
         Ok(OperationFilter { ranges, individual })
     }
-    
+
     /// Check if a global operation position is included in the filter
     fn contains(&self, global_pos: u64) -> bool {
         // Check individual operations first (O(1))
         if self.individual.contains(&global_pos) {
             return true;
         }
-        
+
         // Check ranges (O(log n) with binary search, but we use linear for simplicity)
         // For small number of ranges, linear is fine
         for &(start, end) in &self.ranges {
@@ -456,27 +480,27 @@ impl OperationFilter {
                 return true;
             }
         }
-        
+
         false
     }
-    
+
     /// Get bundle numbers that contain operations in this filter
     /// This calculates bundles from range bounds without materializing all operations
     fn get_bundle_numbers(&self, max_bundle: u32) -> Vec<u32> {
         let mut bundle_set = HashSet::new();
-        
+
         // Process ranges
         for &(start, end) in &self.ranges {
             // Convert start and end to bundle numbers
             let (start_bundle, _) = global_to_bundle_position(start);
             let (end_bundle, _) = global_to_bundle_position(end);
-            
+
             // Add all bundles in the range
             for bundle in start_bundle..=end_bundle.min(max_bundle) {
                 bundle_set.insert(bundle);
             }
         }
-        
+
         // Process individual operations
         for &op in &self.individual {
             let (bundle, _) = global_to_bundle_position(op);
@@ -484,15 +508,17 @@ impl OperationFilter {
                 bundle_set.insert(bundle);
             }
         }
-        
+
         let mut bundles: Vec<u32> = bundle_set.into_iter().collect();
         bundles.sort_unstable();
         bundles
     }
-    
+
     /// Estimate the number of operations (for display purposes)
     fn estimated_count(&self) -> u64 {
-        let range_count: u64 = self.ranges.iter()
+        let range_count: u64 = self
+            .ranges
+            .iter()
             .map(|&(start, end)| end.saturating_sub(start).saturating_add(1))
             .sum();
         let individual_count = self.individual.len() as u64;

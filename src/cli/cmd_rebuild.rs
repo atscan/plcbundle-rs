@@ -1,6 +1,6 @@
 // Rebuild plc_bundles.json from existing bundle files
 use super::progress::ProgressBar;
-use super::utils::{format_bytes, HasGlobalFlags};
+use super::utils::{HasGlobalFlags, format_bytes};
 use anyhow::Result;
 use clap::{Args, ValueHint};
 use plcbundle::BundleManager;
@@ -47,12 +47,19 @@ pub struct RebuildCommand {
 }
 
 impl HasGlobalFlags for RebuildCommand {
-    fn verbose(&self) -> bool { false }
-    fn quiet(&self) -> bool { false }
+    fn verbose(&self) -> bool {
+        false
+    }
+    fn quiet(&self) -> bool {
+        false
+    }
 }
 
 pub fn run(cmd: RebuildCommand, dir: PathBuf, _global_verbose: bool) -> Result<()> {
-    eprintln!("Rebuilding bundle index from: {}\n", super::utils::display_path(&dir).display());
+    eprintln!(
+        "Rebuilding bundle index from: {}\n",
+        super::utils::display_path(&dir).display()
+    );
 
     let start = Instant::now();
 
@@ -90,13 +97,20 @@ pub fn run(cmd: RebuildCommand, dir: PathBuf, _global_verbose: bool) -> Result<(
     eprintln!("Rebuild Summary");
     eprintln!("═══════════════");
     eprintln!("  Bundles:           {}", index.bundles.len());
-    eprintln!("  Range:             {} - {}",
+    eprintln!(
+        "  Range:             {} - {}",
         index.bundles.first().map(|b| b.bundle_number).unwrap_or(0),
         index.last_bundle
     );
     eprintln!("  Origin:            {}", index.origin);
-    eprintln!("  Compressed size:   {}", format_bytes(index.total_size_bytes));
-    eprintln!("  Uncompressed size: {}", format_bytes(index.total_uncompressed_size_bytes));
+    eprintln!(
+        "  Compressed size:   {}",
+        format_bytes(index.total_size_bytes)
+    );
+    eprintln!(
+        "  Uncompressed size: {}",
+        format_bytes(index.total_uncompressed_size_bytes)
+    );
     eprintln!("  Scan time:         {:?}", elapsed);
     eprintln!();
 

@@ -1,7 +1,7 @@
 // Completions command - generate shell completion scripts
 use anyhow::Result;
 use clap::{Args, CommandFactory, ValueEnum};
-use clap_complete::{generate, Shell};
+use clap_complete::{Shell, generate};
 use plcbundle::constants;
 use std::io;
 
@@ -84,22 +84,25 @@ pub fn run(cmd: CompletionsCommand) -> Result<()> {
         let shell: Shell = shell_arg.into();
         let mut app = super::Cli::command();
         let bin_name = app.get_name().to_string();
-        
+
         generate(shell, &mut app, bin_name, &mut io::stdout());
     } else {
         // Show instructions
         show_instructions();
     }
-    
+
     Ok(())
 }
 
 fn show_instructions() {
     let bin_name = constants::BINARY_NAME;
-    
+
     println!("Shell Completion Setup Instructions");
     println!("════════════════════════════════════\n");
-    println!("Generate completion scripts for your shell to enable tab completion for {}.\n", bin_name);
+    println!(
+        "Generate completion scripts for your shell to enable tab completion for {}.\n",
+        bin_name
+    );
     println!("Usage:");
     println!("  {} completions <SHELL>\n", bin_name);
     println!("Supported shells:");
@@ -108,32 +111,44 @@ fn show_instructions() {
     println!("  fish       - Fish completion script");
     println!("  powershell - PowerShell completion script\n");
     println!("Examples:\n");
-    
+
     // Bash
     println!("Bash:");
     println!("  # Generate completion script");
-    println!("  {} completions bash > ~/.bash_completion.d/{}", bin_name, bin_name);
+    println!(
+        "  {} completions bash > ~/.bash_completion.d/{}",
+        bin_name, bin_name
+    );
     println!("  # Add to ~/.bashrc:");
-    println!("  echo 'source ~/.bash_completion.d/{}' >> ~/.bashrc", bin_name);
+    println!(
+        "  echo 'source ~/.bash_completion.d/{}' >> ~/.bashrc",
+        bin_name
+    );
     println!("  source ~/.bashrc\n");
-    
+
     // Zsh
     println!("Zsh:");
     println!("  # Generate completion script");
     println!("  mkdir -p ~/.zsh/completions");
-    println!("  {} completions zsh > ~/.zsh/completions/_{}", bin_name, bin_name);
+    println!(
+        "  {} completions zsh > ~/.zsh/completions/_{}",
+        bin_name, bin_name
+    );
     println!("  # Add to ~/.zshrc:");
     println!("  echo 'fpath=(~/.zsh/completions $fpath)' >> ~/.zshrc");
     println!("  echo 'autoload -U compinit && compinit' >> ~/.zshrc");
     println!("  source ~/.zshrc\n");
-    
+
     // Fish
     println!("Fish:");
     println!("  # Generate completion script");
     println!("  mkdir -p ~/.config/fish/completions");
-    println!("  {} completions fish > ~/.config/fish/completions/{}.fish", bin_name, bin_name);
+    println!(
+        "  {} completions fish > ~/.config/fish/completions/{}.fish",
+        bin_name, bin_name
+    );
     println!("  # Fish will automatically load completions from this directory\n");
-    
+
     // PowerShell
     println!("PowerShell:");
     println!("  # Generate completion script");
@@ -143,7 +158,10 @@ fn show_instructions() {
     println!("  # Or add to your PowerShell profile:");
     println!("  . $PROFILE  # if it exists, or create it");
     println!("  echo '. ./{}.ps1' >> $PROFILE\n", bin_name);
-    
+
     println!("After installation, restart your shell or source the configuration file.");
-    println!("Then you can use tab completion for {} commands and arguments!", bin_name);
+    println!(
+        "Then you can use tab completion for {} commands and arguments!",
+        bin_name
+    );
 }

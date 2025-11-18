@@ -226,24 +226,51 @@ mod tests {
     fn test_format_std_duration_verbose() {
         assert_eq!(format_std_duration_verbose(StdDuration::from_secs(0)), "0s");
         assert_eq!(format_std_duration_verbose(StdDuration::from_secs(5)), "5s");
-        assert_eq!(format_std_duration_verbose(StdDuration::from_secs(65)), "1m 5s");
-        assert_eq!(format_std_duration_verbose(StdDuration::from_secs(3665)), "1h 1m 5s");
-        assert_eq!(format_std_duration_verbose(StdDuration::from_secs(90065)), "1d 1h 1m 5s");
+        assert_eq!(
+            format_std_duration_verbose(StdDuration::from_secs(65)),
+            "1m 5s"
+        );
+        assert_eq!(
+            format_std_duration_verbose(StdDuration::from_secs(3665)),
+            "1h 1m 5s"
+        );
+        assert_eq!(
+            format_std_duration_verbose(StdDuration::from_secs(90065)),
+            "1d 1h 1m 5s"
+        );
     }
 
     #[test]
     fn test_format_std_duration_ms() {
-        assert_eq!(format_std_duration_ms(StdDuration::from_millis(0)), "0.000ms");
-        assert_eq!(format_std_duration_ms(StdDuration::from_millis(50)), "50.000ms");
-        assert_eq!(format_std_duration_ms(StdDuration::from_millis(100)), "100ms");
-        assert_eq!(format_std_duration_ms(StdDuration::from_millis(1234)), "1234ms");
+        assert_eq!(
+            format_std_duration_ms(StdDuration::from_millis(0)),
+            "0.000ms"
+        );
+        assert_eq!(
+            format_std_duration_ms(StdDuration::from_millis(50)),
+            "50.000ms"
+        );
+        assert_eq!(
+            format_std_duration_ms(StdDuration::from_millis(100)),
+            "100ms"
+        );
+        assert_eq!(
+            format_std_duration_ms(StdDuration::from_millis(1234)),
+            "1234ms"
+        );
     }
 
     #[test]
     fn test_format_duration_verbose() {
         assert_eq!(format_duration_verbose(ChronoDuration::seconds(0)), "0s");
-        assert_eq!(format_duration_verbose(ChronoDuration::seconds(65)), "1m 5s");
-        assert_eq!(format_duration_verbose(ChronoDuration::seconds(-65)), "-1m 5s");
+        assert_eq!(
+            format_duration_verbose(ChronoDuration::seconds(65)),
+            "1m 5s"
+        );
+        assert_eq!(
+            format_duration_verbose(ChronoDuration::seconds(-65)),
+            "-1m 5s"
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
-use plcbundle::*;
 use plcbundle::index::Index;
+use plcbundle::*;
 use std::path::{Path, PathBuf};
 
 use super::utils;
@@ -65,7 +65,7 @@ fn print_human_status(
     manager: &BundleManager,
     index: &Index,
     dir: &Path,
-    detailed: bool
+    detailed: bool,
 ) -> Result<()> {
     let dir_display = utils::display_path(dir);
 
@@ -96,17 +96,33 @@ fn print_human_status(
         let total_bundles = index.last_bundle;
         let total_operations = plcbundle::constants::total_operations_from_bundles(total_bundles);
 
-        println!("  Total Bundles:   {}", utils::format_number(total_bundles as u64));
-        println!("  Operations:      ~{}", utils::format_number(total_operations));
-        println!("  Unique DIDs:     {}", utils::format_number(calculate_total_dids(index) as u64));
+        println!(
+            "  Total Bundles:   {}",
+            utils::format_number(total_bundles as u64)
+        );
+        println!(
+            "  Operations:      ~{}",
+            utils::format_number(total_operations)
+        );
+        println!(
+            "  Unique DIDs:     {}",
+            utils::format_number(calculate_total_dids(index) as u64)
+        );
         println!();
 
         // Storage
-        println!("  Compressed:      {}", utils::format_bytes(index.total_size_bytes));
-        println!("  Uncompressed:    {}", utils::format_bytes(index.total_uncompressed_size_bytes));
+        println!(
+            "  Compressed:      {}",
+            utils::format_bytes(index.total_size_bytes)
+        );
+        println!(
+            "  Uncompressed:    {}",
+            utils::format_bytes(index.total_uncompressed_size_bytes)
+        );
 
         let compression_ratio = if index.total_uncompressed_size_bytes > 0 {
-            (1.0 - index.total_size_bytes as f64 / index.total_uncompressed_size_bytes as f64) * 100.0
+            (1.0 - index.total_size_bytes as f64 / index.total_uncompressed_size_bytes as f64)
+                * 100.0
         } else {
             0.0
         };
@@ -121,7 +137,8 @@ fn print_human_status(
 
             println!("  Recent Bundles:");
             for meta in recent_bundles {
-                println!("    #{:<6} {} → {} ({} ops, {} DIDs)",
+                println!(
+                    "    #{:<6} {} → {} ({} ops, {} DIDs)",
                     meta.bundle_number,
                     &meta.start_time[..19], // Just date and time without timezone
                     &meta.end_time[..19],
@@ -144,7 +161,10 @@ fn print_human_status(
 
         let stats = manager.get_did_index_stats_struct();
         if stats.total_dids > 0 {
-            println!("  Indexed DIDs:    {}", utils::format_number(stats.total_dids as u64));
+            println!(
+                "  Indexed DIDs:    {}",
+                utils::format_number(stats.total_dids as u64)
+            );
         }
     } else {
         println!("  Status:          ✗ Not built");
@@ -158,9 +178,19 @@ fn print_human_status(
 
     if let Ok(mempool_stats) = manager.get_mempool_stats() {
         if mempool_stats.count > 0 {
-            println!("  Operations:      {}", utils::format_number(mempool_stats.count as u64));
+            println!(
+                "  Operations:      {}",
+                utils::format_number(mempool_stats.count as u64)
+            );
             println!("  Target Bundle:   #{}", mempool_stats.target_bundle);
-            println!("  Can Bundle:      {}", if mempool_stats.can_create_bundle { "Yes" } else { "No" });
+            println!(
+                "  Can Bundle:      {}",
+                if mempool_stats.can_create_bundle {
+                    "Yes"
+                } else {
+                    "No"
+                }
+            );
 
             if let Some(first) = mempool_stats.first_time {
                 println!("  First Op:        {}", first);
@@ -189,8 +219,9 @@ fn print_human_status(
         }
 
         if let Ok(mempool_stats) = manager.get_mempool_stats()
-            && mempool_stats.count >= plcbundle::constants::BUNDLE_SIZE {
-                suggestions.push("Mempool ready to create new bundle: plcbundle sync");
+            && mempool_stats.count >= plcbundle::constants::BUNDLE_SIZE
+        {
+            suggestions.push("Mempool ready to create new bundle: plcbundle sync");
         }
 
         // Add general hints
@@ -228,11 +259,7 @@ fn print_human_status(
     Ok(())
 }
 
-fn print_json_status(
-    manager: &BundleManager,
-    index: &Index,
-    dir: &Path,
-) -> Result<()> {
+fn print_json_status(manager: &BundleManager, index: &Index, dir: &Path) -> Result<()> {
     use serde_json::json;
 
     let dir_display = utils::display_path(dir);
@@ -291,8 +318,9 @@ fn print_json_status(
         health.push("did_index_not_built");
     }
     if let Ok(mempool_stats) = manager.get_mempool_stats()
-        && mempool_stats.count >= plcbundle::constants::BUNDLE_SIZE {
-            health.push("mempool_ready_to_bundle");
+        && mempool_stats.count >= plcbundle::constants::BUNDLE_SIZE
+    {
+        health.push("mempool_ready_to_bundle");
     }
     status["health"] = json!(health);
 
@@ -302,7 +330,9 @@ fn print_json_status(
 }
 
 fn check_did_index_exists(dir: &Path) -> bool {
-    let did_index_dir = dir.join(plcbundle::constants::DID_INDEX_DIR).join(plcbundle::constants::DID_INDEX_SHARDS);
+    let did_index_dir = dir
+        .join(plcbundle::constants::DID_INDEX_DIR)
+        .join(plcbundle::constants::DID_INDEX_SHARDS);
     did_index_dir.exists() && did_index_dir.is_dir()
 }
 

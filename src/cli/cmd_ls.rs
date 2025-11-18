@@ -163,12 +163,24 @@ fn get_field_header(field: &str) -> String {
     .to_string()
 }
 
-fn print_bundle_fields(meta: &plcbundle::index::BundleMetadata, fields: &[String], sep: &str, human_readable: bool) {
-    let values: Vec<String> = fields.iter().map(|f| get_field_value(meta, f, human_readable)).collect();
+fn print_bundle_fields(
+    meta: &plcbundle::index::BundleMetadata,
+    fields: &[String],
+    sep: &str,
+    human_readable: bool,
+) {
+    let values: Vec<String> = fields
+        .iter()
+        .map(|f| get_field_value(meta, f, human_readable))
+        .collect();
     println!("{}", values.join(sep));
 }
 
-fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str, human_readable: bool) -> String {
+fn get_field_value(
+    meta: &plcbundle::index::BundleMetadata,
+    field: &str,
+    human_readable: bool,
+) -> String {
     match field {
         "bundle" => format!("{}", meta.bundle_number),
 
@@ -250,7 +262,7 @@ fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str, human_r
             } else {
                 format!("{}", meta.compressed_size)
             }
-        },
+        }
         "size_mb" => format!("{:.2}", meta.compressed_size as f64 / (1024.0 * 1024.0)),
         "size_h" | "size_human" => format_bytes_compact(meta.compressed_size),
 
@@ -260,7 +272,7 @@ fn get_field_value(meta: &plcbundle::index::BundleMetadata, field: &str, human_r
             } else {
                 format!("{}", meta.uncompressed_size)
             }
-        },
+        }
         "uncompressed_mb" => format!("{:.2}", meta.uncompressed_size as f64 / (1024.0 * 1024.0)),
         "uncompressed_h" | "uncompressed_human" => format_bytes_compact(meta.uncompressed_size),
 

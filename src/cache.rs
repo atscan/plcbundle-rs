@@ -23,7 +23,9 @@ impl BundleCache {
 
     pub fn insert(&self, bundle: u32, ops: Vec<Operation>) {
         let mut cache = self.cache.write().unwrap();
-        if cache.len() >= self.capacity && let Some(&key) = cache.keys().next() {
+        if cache.len() >= self.capacity
+            && let Some(&key) = cache.keys().next()
+        {
             cache.remove(&key);
         }
         cache.insert(bundle, ops);
@@ -76,7 +78,7 @@ mod tests {
 
         cache.insert(1, ops.clone());
         assert!(cache.contains(1));
-        
+
         let retrieved = cache.get(1);
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().len(), 2);
@@ -86,7 +88,7 @@ mod tests {
     fn test_cache_contains() {
         let cache = BundleCache::new(10);
         assert!(!cache.contains(1));
-        
+
         cache.insert(1, vec![create_test_operation("did:plc:test1")]);
         assert!(cache.contains(1));
         assert!(!cache.contains(2));
@@ -97,7 +99,7 @@ mod tests {
         let cache = BundleCache::new(10);
         cache.insert(1, vec![create_test_operation("did:plc:test1")]);
         assert!(cache.contains(1));
-        
+
         cache.remove(1);
         assert!(!cache.contains(1));
     }
@@ -109,7 +111,7 @@ mod tests {
         cache.insert(2, vec![create_test_operation("did:plc:test2")]);
         assert!(cache.contains(1));
         assert!(cache.contains(2));
-        
+
         cache.clear();
         assert!(!cache.contains(1));
         assert!(!cache.contains(2));
@@ -118,13 +120,13 @@ mod tests {
     #[test]
     fn test_cache_capacity_eviction() {
         let cache = BundleCache::new(2);
-        
+
         // Fill cache to capacity
         cache.insert(1, vec![create_test_operation("did:plc:test1")]);
         cache.insert(2, vec![create_test_operation("did:plc:test2")]);
         assert!(cache.contains(1));
         assert!(cache.contains(2));
-        
+
         // Adding third should evict one (HashMap iteration order is not guaranteed)
         cache.insert(3, vec![create_test_operation("did:plc:test3")]);
         // One of the first two should be evicted, and 3 should be present
@@ -140,11 +142,14 @@ mod tests {
     #[test]
     fn test_cache_multiple_bundles() {
         let cache = BundleCache::new(10);
-        
+
         for i in 1..=5 {
-            cache.insert(i, vec![create_test_operation(&format!("did:plc:test{}", i))]);
+            cache.insert(
+                i,
+                vec![create_test_operation(&format!("did:plc:test{}", i))],
+            );
         }
-        
+
         for i in 1..=5 {
             assert!(cache.contains(i));
             let ops = cache.get(i).unwrap();
@@ -157,7 +162,7 @@ mod tests {
     fn test_cache_empty_operations() {
         let cache = BundleCache::new(10);
         cache.insert(1, vec![]);
-        
+
         let ops = cache.get(1);
         assert!(ops.is_some());
         assert_eq!(ops.unwrap().len(), 0);

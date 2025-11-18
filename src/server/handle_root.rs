@@ -82,46 +82,48 @@ pub async fn handle_root(
         }
     }
 
-    if state.config.sync_mode && let Ok(mempool_stats) = state.manager.get_mempool_stats() {
-            response.push_str("\nMempool\n");
-            response.push_str("━━━━━━━\n");
-            response.push_str(&format!(
-                "  Target bundle:     {}\n",
-                mempool_stats.target_bundle
-            ));
-            response.push_str(&format!(
-                "  Operations:        {} / {}\n",
-                mempool_stats.count,
-                constants::BUNDLE_SIZE
-            ));
+    if state.config.sync_mode
+        && let Ok(mempool_stats) = state.manager.get_mempool_stats()
+    {
+        response.push_str("\nMempool\n");
+        response.push_str("━━━━━━━\n");
+        response.push_str(&format!(
+            "  Target bundle:     {}\n",
+            mempool_stats.target_bundle
+        ));
+        response.push_str(&format!(
+            "  Operations:        {} / {}\n",
+            mempool_stats.count,
+            constants::BUNDLE_SIZE
+        ));
 
-            if mempool_stats.count > 0 {
-                let progress = (mempool_stats.count as f64 / constants::BUNDLE_SIZE as f64) * 100.0;
-                response.push_str(&format!("  Progress:          {:.1}%\n", progress));
+        if mempool_stats.count > 0 {
+            let progress = (mempool_stats.count as f64 / constants::BUNDLE_SIZE as f64) * 100.0;
+            response.push_str(&format!("  Progress:          {:.1}%\n", progress));
 
-                let bar_width = 50;
-                let filled = ((bar_width as f64)
-                    * (mempool_stats.count as f64 / constants::BUNDLE_SIZE as f64))
-                    as usize;
-                let bar = "█".repeat(filled.min(bar_width))
-                    + &"░".repeat(bar_width.saturating_sub(filled));
-                response.push_str(&format!("  [{}]\n", bar));
+            let bar_width = 50;
+            let filled = ((bar_width as f64)
+                * (mempool_stats.count as f64 / constants::BUNDLE_SIZE as f64))
+                as usize;
+            let bar =
+                "█".repeat(filled.min(bar_width)) + &"░".repeat(bar_width.saturating_sub(filled));
+            response.push_str(&format!("  [{}]\n", bar));
 
-                if let Some(first_time) = mempool_stats.first_time {
-                    response.push_str(&format!(
-                        "  First op:          {}\n",
-                        first_time.format("%Y-%m-%d %H:%M:%S")
-                    ));
-                }
-                if let Some(last_time) = mempool_stats.last_time {
-                    response.push_str(&format!(
-                        "  Last op:           {}\n",
-                        last_time.format("%Y-%m-%d %H:%M:%S")
-                    ));
-                }
-            } else {
-                response.push_str("  (empty)\n");
+            if let Some(first_time) = mempool_stats.first_time {
+                response.push_str(&format!(
+                    "  First op:          {}\n",
+                    first_time.format("%Y-%m-%d %H:%M:%S")
+                ));
             }
+            if let Some(last_time) = mempool_stats.last_time {
+                response.push_str(&format!(
+                    "  Last op:           {}\n",
+                    last_time.format("%Y-%m-%d %H:%M:%S")
+                ));
+            }
+        } else {
+            response.push_str("  (empty)\n");
+        }
     }
 
     if state.config.enable_resolver {
@@ -162,12 +164,15 @@ pub async fn handle_root(
                 ));
             }
         }
-                response.push('\n');
+        response.push('\n');
     }
 
     response.push_str("Server Stats\n");
     response.push_str("━━━━━━━━━━━━\n");
-    response.push_str(&format!("  Version:           v{} (rust)\n", state.config.version));
+    response.push_str(&format!(
+        "  Version:           v{} (rust)\n",
+        state.config.version
+    ));
     response.push_str(&format!(
         "  Sync mode:         {}\n",
         state.config.sync_mode
@@ -181,7 +186,10 @@ pub async fn handle_root(
     } else {
         response.push_str("  Handle Resolver:   (not configured)\n");
     }
-    response.push_str(&format!("  Uptime:            {}\n", format_std_duration_verbose(uptime)));
+    response.push_str(&format!(
+        "  Uptime:            {}\n",
+        format_std_duration_verbose(uptime)
+    ));
 
     // Get base URL from request
     let base_url = extract_base_url(&headers, &uri);
@@ -249,4 +257,3 @@ pub async fn handle_root(
     );
     (StatusCode::OK, headers, response).into_response()
 }
-

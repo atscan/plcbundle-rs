@@ -39,8 +39,13 @@ pub struct BundleMetadata {
 impl Index {
     pub fn load<P: AsRef<Path>>(directory: P) -> Result<Self> {
         let index_path = directory.as_ref().join("plc_bundles.json");
-        let display_path = index_path.canonicalize().unwrap_or_else(|_| index_path.clone());
-        log::debug!("[BundleManager] Loading index from: {}", display_path.display());
+        let display_path = index_path
+            .canonicalize()
+            .unwrap_or_else(|_| index_path.clone());
+        log::debug!(
+            "[BundleManager] Loading index from: {}",
+            display_path.display()
+        );
         let start = std::time::Instant::now();
         let file = File::open(&index_path)?;
         let index: Index = sonic_rs::from_reader(file)?;
@@ -114,8 +119,7 @@ impl Index {
         let index_path = directory.as_ref().join("plc_bundles.json");
         let temp_path = index_path.with_extension("json.tmp");
 
-        let json = sonic_rs::to_string_pretty(self)
-            .context("Failed to serialize index")?;
+        let json = sonic_rs::to_string_pretty(self).context("Failed to serialize index")?;
 
         std::fs::write(&temp_path, json)
             .with_context(|| format!("Failed to write temp index: {}", temp_path.display()))?;
@@ -159,8 +163,12 @@ impl Index {
         // Create .plcbundle directory for DID index
         let plcbundle_dir = dir.join(crate::constants::DID_INDEX_DIR);
         if !plcbundle_dir.exists() {
-            std::fs::create_dir_all(&plcbundle_dir)
-                .with_context(|| format!("Failed to create DID index directory: {}", plcbundle_dir.display()))?;
+            std::fs::create_dir_all(&plcbundle_dir).with_context(|| {
+                format!(
+                    "Failed to create DID index directory: {}",
+                    plcbundle_dir.display()
+                )
+            })?;
         }
 
         // Create and save empty index
@@ -216,13 +224,13 @@ impl Index {
                 continue;
             }
 
-            let filename = path.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
+            let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
             // Match pattern: NNNNNN.jsonl.zst (16 chars: 6 digits + 10 chars for .jsonl.zst)
-            if filename.ends_with(".jsonl.zst") && filename.len() == 16
-                && let Ok(bundle_num) = filename[0..6].parse::<u32>() {
+            if filename.ends_with(".jsonl.zst")
+                && filename.len() == 16
+                && let Ok(bundle_num) = filename[0..6].parse::<u32>()
+            {
                 bundle_files.push((bundle_num, path));
             }
         }
@@ -264,14 +272,14 @@ impl Index {
             .sum();
 
         // Extract metadata from each bundle in parallel
+        use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
         use std::sync::{Arc, Mutex};
-        use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
-        
+
         let detected_origin: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(origin));
         let progress_cb_arc: Arc<Mutex<Option<F>>> = Arc::new(Mutex::new(progress_cb));
         let count_atomic = Arc::new(AtomicUsize::new(0));
         let bytes_atomic = Arc::new(AtomicU64::new(0));
-        
+
         // Update progress bar less frequently to reduce contention
         let update_interval = (rayon::current_num_threads().max(1) * 4).max(10);
 
@@ -283,19 +291,25 @@ impl Index {
                 // Get file size
                 let metadata = std::fs::metadata(bundle_path)?;
                 let compressed_size = metadata.len();
-                let bytes_processed = bytes_atomic.fetch_add(compressed_size, Ordering::Relaxed) + compressed_size;
+                let bytes_processed =
+                    bytes_atomic.fetch_add(compressed_size, Ordering::Relaxed) + compressed_size;
                 let current_count = count_atomic.fetch_add(1, Ordering::Relaxed) + 1;
 
                 // Update progress periodically
-                if (current_count.is_multiple_of(update_interval) || current_count == 1 || current_count == bundle_count)
+                if (current_count.is_multiple_of(update_interval)
+                    || current_count == 1
+                    || current_count == bundle_count)
                     && let Ok(cb_guard) = progress_cb_arc.lock()
-                    && let Some(ref cb) = *cb_guard {
+                    && let Some(ref cb) = *cb_guard
+                {
                     cb(current_count, bundle_count, bytes_processed, total_bytes);
                 }
 
                 // Extract embedded metadata from bundle file
                 let embedded = crate::bundle_format::extract_metadata_from_file(bundle_path)
-                    .with_context(|| format!("Failed to extract metadata from bundle {}", bundle_num))?;
+                    .with_context(|| {
+                        format!("Failed to extract metadata from bundle {}", bundle_num)
+                    })?;
 
                 // Auto-detect origin from first bundle if not provided
                 {
@@ -309,7 +323,8 @@ impl Index {
                 {
                     let origin_guard = detected_origin.lock().unwrap();
                     if let Some(ref expected_origin) = *origin_guard
-                        && embedded.origin != *expected_origin {
+                        && embedded.origin != *expected_origin
+                    {
                         anyhow::bail!(
                             "Bundle {:06}: origin mismatch (expected '{}', got '{}')",
                             bundle_num,
@@ -359,7 +374,8 @@ impl Index {
 
         // Calculate total uncompressed size
         // Note: For legacy bundles without uncompressed_size in metadata, it will be 0
-        let total_uncompressed_size: u64 = bundles_metadata.iter().map(|b| b.uncompressed_size).sum();
+        let total_uncompressed_size: u64 =
+            bundles_metadata.iter().map(|b| b.uncompressed_size).sum();
 
         // Calculate chain hashes sequentially (depends on previous bundles)
         for i in 0..bundles_metadata.len() {
@@ -390,7 +406,8 @@ impl Index {
         }
 
         let last_bundle = bundles_metadata.last().unwrap().bundle_number;
-        let origin_str = detected_origin.unwrap_or_else(|| crate::constants::DEFAULT_ORIGIN.to_string());
+        let origin_str =
+            detected_origin.unwrap_or_else(|| crate::constants::DEFAULT_ORIGIN.to_string());
 
         Ok(Index {
             version: "1.0".to_string(),
@@ -432,7 +449,8 @@ impl Index {
             bundle_numbers
                 .iter()
                 .filter_map(|bundle_num| {
-                    self.get_bundle(*bundle_num).map(|meta| meta.uncompressed_size)
+                    self.get_bundle(*bundle_num)
+                        .map(|meta| meta.uncompressed_size)
                 })
                 .sum()
         }
@@ -515,7 +533,12 @@ mod tests {
 
         let result = index.validate_bundle_sequence();
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("first bundle is 2 but must be 1"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("first bundle is 2 but must be 1")
+        );
     }
 
     #[test]
@@ -563,7 +586,12 @@ mod tests {
 
         let result = index.validate_bundle_sequence();
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("expected bundle 2, found bundle 3"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("expected bundle 2, found bundle 3")
+        );
     }
 
     #[test]
@@ -823,7 +851,10 @@ mod tests {
 
         // Test subset - should sum individual bundles
         let subset = vec![1, 3];
-        assert_eq!(index.total_uncompressed_size_for_bundles(&subset), 200 + 400);
+        assert_eq!(
+            index.total_uncompressed_size_for_bundles(&subset),
+            200 + 400
+        );
 
         // Test single bundle
         let single = vec![2];
@@ -890,7 +921,10 @@ mod tests {
 
         // Requesting non-existent bundle should be ignored
         let with_missing = vec![1, 3, 2];
-        assert_eq!(index.total_uncompressed_size_for_bundles(&with_missing), 200 + 200);
+        assert_eq!(
+            index.total_uncompressed_size_for_bundles(&with_missing),
+            200 + 200
+        );
     }
 
     #[test]
@@ -938,6 +972,11 @@ mod tests {
 
         let result = index.validate_bundle_sequence();
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("last_bundle: index says 5, but last bundle in array is 2"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("last_bundle: index says 5, but last bundle in array is 2")
+        );
     }
 }

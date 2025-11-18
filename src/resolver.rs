@@ -377,7 +377,12 @@ mod tests {
     fn test_validate_did_format_wrong_method() {
         let result = validate_did_format("did:web:example.com");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("invalid DID method"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("invalid DID method")
+        );
     }
 
     #[test]
@@ -385,7 +390,12 @@ mod tests {
         // Too short
         let result = validate_did_format("did:plc:short");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("invalid DID length"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("invalid DID length")
+        );
 
         // Too long
         let result = validate_did_format("did:plc:abcdefghijklmnopqrstuvwxyz");

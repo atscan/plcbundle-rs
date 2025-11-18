@@ -310,7 +310,6 @@ pub fn compress_operations_to_frames_parallel(
     })
 }
 
-
 /// Serialize operations to JSONL (uncompressed)
 ///
 /// CRITICAL: This function implements the V1 specification requirement (docs/specification.md § 4.2)
@@ -349,8 +348,6 @@ pub fn calculate_content_hash(
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-
-
 /// Create bundle metadata structure
 #[allow(clippy::too_many_arguments)]
 pub fn create_bundle_metadata(
@@ -359,7 +356,7 @@ pub fn create_bundle_metadata(
     content_hash: &str,
     parent_hash: Option<&str>,
     uncompressed_size: Option<u64>,
-    compressed_size: Option<u64>,            
+    compressed_size: Option<u64>,
     operation_count: usize,
     did_count: usize,
     start_time: &str,
@@ -375,9 +372,9 @@ pub fn create_bundle_metadata(
         content_hash: content_hash.to_string(),
         parent_hash: parent_hash.map(|s| s.to_string()),
         uncompressed_size,
-        compressed_size,              
+        compressed_size,
         operation_count,
-        did_count,  
+        did_count,
         start_time: start_time.to_string(),
         end_time: end_time.to_string(),
         created_at: chrono::Utc::now().to_rfc3339(),
@@ -462,10 +459,7 @@ mod tests {
         let mut operations = Vec::new();
         for i in 0..250 {
             // Multiple frames (250 ops = 3 frames with FRAME_SIZE=100)
-            let operation_json = format!(
-                r#"{{"type":"create","data":"test data {}"}}"#,
-                i
-            );
+            let operation_json = format!(r#"{{"type":"create","data":"test data {}"}}"#, i);
             let operation_value: Value = from_str(&operation_json).unwrap();
             let extra_value: Value = from_str("{}").unwrap_or_else(|_| Value::new());
             operations.push(Operation {
@@ -599,13 +593,20 @@ mod tests {
 
         // Write with invalid magic (not in skippable range)
         buffer.write_all(&0x12345678u32.to_le_bytes()).unwrap();
-        buffer.write_all(&(data.len() as u32).to_le_bytes()).unwrap();
+        buffer
+            .write_all(&(data.len() as u32).to_le_bytes())
+            .unwrap();
         buffer.write_all(data).unwrap();
 
         let mut cursor = std::io::Cursor::new(&buffer);
         let result = read_skippable_frame(&mut cursor);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Not a skippable frame"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Not a skippable frame")
+        );
     }
 
     #[test]
@@ -682,7 +683,12 @@ mod tests {
 
         let mut buffer = Vec::new();
         // Write with wrong magic
-        write_skippable_frame(&mut buffer, 0x184D2A51, &sonic_rs::to_vec(&metadata).unwrap()).unwrap();
+        write_skippable_frame(
+            &mut buffer,
+            0x184D2A51,
+            &sonic_rs::to_vec(&metadata).unwrap(),
+        )
+        .unwrap();
 
         let mut cursor = std::io::Cursor::new(&buffer);
         let result = read_metadata_frame(&mut cursor);

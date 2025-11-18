@@ -1,5 +1,5 @@
-use plcbundle::format::format_bytes_per_sec;
 use indicatif::{ProgressBar as IndicatifProgressBar, ProgressStyle};
+use plcbundle::format::format_bytes_per_sec;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -24,7 +24,7 @@ impl ProgressBar {
                 .unwrap()
                 .progress_chars("█▓▒░ "),
         );
-        
+
         Self {
             pb,
             show_bytes: false,
@@ -35,7 +35,7 @@ impl ProgressBar {
     /// Create a progress bar with byte tracking
     pub fn with_bytes(total: usize, _total_bytes: u64) -> Self {
         let pb = IndicatifProgressBar::new(total as u64);
-        
+
         // Custom template that shows data rate calculated from our tracked bytes
         // We'll calculate bytes/sec manually and include it in the message
         pb.set_style(
@@ -44,7 +44,7 @@ impl ProgressBar {
                 .unwrap()
                 .progress_chars("█▓▒░ "),
         );
-        
+
         Self {
             pb,
             show_bytes: true,
@@ -64,26 +64,26 @@ impl ProgressBar {
         *bytes_guard = bytes;
         let current_msg = self.pb.message().to_string();
         drop(bytes_guard);
-        
+
         // Update message to include data rate, preserving user message if present
         let elapsed = self.pb.elapsed().as_secs_f64();
         let bytes_guard = self.current_bytes.lock().unwrap();
         let bytes = *bytes_guard;
         drop(bytes_guard);
-        
+
         let bytes_per_sec = if elapsed > 0.0 {
             bytes as f64 / elapsed
         } else {
             0.0
         };
-        
+
         // Extract user message (everything after " | " if present)
         let user_msg = if let Some(pos) = current_msg.find(" | ") {
             &current_msg[pos + 3..]
         } else {
             ""
         };
-        
+
         let new_msg = if user_msg.is_empty() {
             format_bytes_per_sec(bytes_per_sec)
         } else {
@@ -100,13 +100,13 @@ impl ProgressBar {
             let bytes_guard = self.current_bytes.lock().unwrap();
             let bytes = *bytes_guard;
             drop(bytes_guard);
-            
+
             let bytes_per_sec = if elapsed > 0.0 {
                 bytes as f64 / elapsed
             } else {
                 0.0
             };
-            
+
             let new_msg = if msg_str.is_empty() {
                 format_bytes_per_sec(bytes_per_sec)
             } else {
@@ -138,15 +138,18 @@ pub struct TwoStageProgress {
 
 impl TwoStageProgress {
     /// Create a new two-stage progress bar
-    /// 
+    ///
     /// # Arguments
     /// * `last_bundle` - Total number of bundles to process in stage 1
     /// * `total_bytes` - Total uncompressed bytes to process in stage 1
     pub fn new(last_bundle: u32, total_bytes: u64) -> Self {
         use std::sync::atomic::AtomicBool;
-        
+
         Self {
-            stage1_progress: Arc::new(Mutex::new(Some(ProgressBar::with_bytes(last_bundle as usize, total_bytes)))),
+            stage1_progress: Arc::new(Mutex::new(Some(ProgressBar::with_bytes(
+                last_bundle as usize,
+                total_bytes,
+            )))),
             stage2_progress: Arc::new(Mutex::new(None)),
             stage2_started: Arc::new(Mutex::new(false)),
             stage1_finished: Arc::new(Mutex::new(false)),
@@ -161,7 +164,9 @@ impl TwoStageProgress {
     }
 
     /// Create a callback function for build_did_index (signature: Fn(u32, u32, u64, u64))
-    pub fn callback_for_build_did_index(&self) -> impl Fn(u32, u32, u64, u64) + Send + Sync + 'static {
+    pub fn callback_for_build_did_index(
+        &self,
+    ) -> impl Fn(u32, u32, u64, u64) + Send + Sync + 'static {
         let progress = self.clone_for_callback();
         move |current, total, bytes_processed, _total_bytes| {
             progress.update_progress(current, total, bytes_processed);
@@ -206,22 +211,22 @@ struct TwoStageProgressCallback {
 impl TwoStageProgressCallback {
     fn update_progress(&self, current: u32, total: u32, bytes_processed: u64) {
         use std::sync::atomic::Ordering;
-        
+
         // Stop updating progress bar if interrupted
         if self.interrupted.load(Ordering::Relaxed) {
             return;
         }
-        
+
         // Detect stage change: if total changes from bundle count to shard count (256), we're in stage 2
         let is_stage_2 = total == 256 && current <= 256;
-        
+
         if is_stage_2 {
             // Check if this is the first time we're entering stage 2
             let mut started = self.stage2_started.lock().unwrap();
             if !*started {
                 *started = true;
                 drop(started);
-                
+
                 // Finish Stage 1 progress bar if not already finished
                 // (did_index.rs already printed empty line + Stage 2 header before this callback)
                 let mut finished = self.stage1_finished.lock().unwrap();
@@ -234,22 +239,23 @@ impl TwoStageProgressCallback {
                     // Add extra newline after Stage 1 (did_index.rs already printed one before Stage 2 header)
                     eprintln!();
                 }
-                
+
                 // Create new simple progress bar for Stage 2 (256 shards, no byte tracking)
                 let mut stage2_pb = self.stage2_progress.lock().unwrap();
                 *stage2_pb = Some(ProgressBar::new(256));
             }
-            
+
             // Update Stage 2 progress bar (pos/len already shows the count, no message needed)
             let mut stage2_pb_guard = self.stage2_progress.lock().unwrap();
             if let Some(ref pb) = *stage2_pb_guard {
                 pb.set(current as usize);
                 // Don't set message - progress bar template will show pos/len without extra message
-                
+
                 // Finish progress bar when stage 2 completes (256/256)
                 if current == 256
-                    && let Some(pb) = stage2_pb_guard.take() {
-                        pb.finish();
+                    && let Some(pb) = stage2_pb_guard.take()
+                {
+                    pb.finish();
                 }
             }
         } else {

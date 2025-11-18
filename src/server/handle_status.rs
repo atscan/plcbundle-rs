@@ -1,8 +1,8 @@
 // Status, mempool, and index handlers
 
 use crate::constants;
-use crate::server::error::{internal_error, not_found};
 use crate::server::ServerState;
+use crate::server::error::{internal_error, not_found};
 use axum::{
     extract::State,
     http::{HeaderMap, HeaderValue, StatusCode},
@@ -66,23 +66,23 @@ pub async fn handle_status(State(state): State<ServerState>) -> impl IntoRespons
         response["bundles"]["total_operations"] = json!(total_ops);
     }
 
-    if state.config.sync_mode && let Ok(mempool_stats) = state.manager.get_mempool_stats() {
-            response["mempool"] = json!({
-                "count": mempool_stats.count,
-                "target_bundle": mempool_stats.target_bundle,
-                "can_create_bundle": mempool_stats.count >= constants::BUNDLE_SIZE,
-                "progress_percent": (mempool_stats.count as f64 / constants::BUNDLE_SIZE as f64) * 100.0,
-                "bundle_size": constants::BUNDLE_SIZE,
-                "operations_needed": constants::BUNDLE_SIZE - mempool_stats.count,
-            });
+    if state.config.sync_mode
+        && let Ok(mempool_stats) = state.manager.get_mempool_stats()
+    {
+        response["mempool"] = json!({
+            "count": mempool_stats.count,
+            "target_bundle": mempool_stats.target_bundle,
+            "can_create_bundle": mempool_stats.count >= constants::BUNDLE_SIZE,
+            "progress_percent": (mempool_stats.count as f64 / constants::BUNDLE_SIZE as f64) * 100.0,
+            "bundle_size": constants::BUNDLE_SIZE,
+            "operations_needed": constants::BUNDLE_SIZE - mempool_stats.count,
+        });
     }
 
     // DID Index stats (get_stats is fast, but we should still avoid holding lock in async context)
     let did_stats = tokio::task::spawn_blocking({
         let manager = Arc::clone(&state.manager);
-        move || {
-            manager.get_did_index_stats()
-        }
+        move || manager.get_did_index_stats()
     })
     .await
     .unwrap_or_default();
@@ -143,4 +143,3 @@ pub async fn handle_mempool(State(state): State<ServerState>) -> impl IntoRespon
         Err(e) => internal_error(&e.to_string()).into_response(),
     }
 }
-

@@ -4,9 +4,9 @@ use super::utils::HasGlobalFlags;
 use anyhow::Result;
 use clap::{Args, Subcommand, ValueHint};
 use plcbundle::format::format_number;
-use std::path::Path;
 use plcbundle::{BundleManager, constants};
 use std::io::{self, Write};
+use std::path::Path;
 use std::path::PathBuf;
 
 #[derive(Args)]
@@ -75,8 +75,12 @@ pub enum MempoolSubcommand {
 }
 
 impl HasGlobalFlags for MempoolCommand {
-    fn verbose(&self) -> bool { false }
-    fn quiet(&self) -> bool { false }
+    fn verbose(&self) -> bool {
+        false
+    }
+    fn quiet(&self) -> bool {
+        false
+    }
 }
 
 pub fn run(cmd: MempoolCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
