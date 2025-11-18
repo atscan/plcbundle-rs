@@ -1,0 +1,33 @@
+# Build workflow - test compilation on pull requests
+
+when:
+  - event: ["push", "pull_request"]
+    branch: ["main", "develop"]
+
+engine: "nixery"
+
+dependencies:
+  nixpkgs:
+    - rust
+    - gcc
+    - git
+    - zstd
+
+environment:
+  # Example env vars; adjust if you need custom toolchain flags
+  RUST_BACKTRACE: "1"
+
+steps:
+  - name: "Download dependencies"
+    command: |
+      cargo fetch
+
+  - name: "Run tests"
+    command: |
+      # Run tests with all features to ensure feature-flag coverage
+      cargo test --all-features -- --nocapture
+
+  - name: "Build release"
+    command: |
+      cargo build --release --all-features
+      echo "Build successful"
