@@ -251,14 +251,11 @@ pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize, flush_interval
     let bundle_numbers: Vec<u32> = (1..=manager.get_last_bundle()).collect();
     let total_bytes = index.total_uncompressed_size_for_bundles(&bundle_numbers);
 
-    // Create progress bar with byte tracking
-    use super::progress::ProgressBar;
-    use std::sync::{Arc, Mutex};
+    // Create two-stage progress bar
+    use super::progress::TwoStageProgress;
+    use std::sync::Arc;
     let last_bundle = manager.get_last_bundle() as u32;
-    let progress = Arc::new(Mutex::new(Some(ProgressBar::with_bytes(last_bundle as usize, total_bytes))));
-    let stage2_progress = Arc::new(Mutex::new(None::<ProgressBar>));
-    let stage2_started = Arc::new(Mutex::new(false));
-    let stage1_finished = Arc::new(Mutex::new(false));
+    let progress = TwoStageProgress::new(last_bundle, total_bytes);
     
     // Set up cleanup guard to ensure temp files are deleted on CTRL+C or panic
     // Use Arc to share manager for cleanup
@@ -285,87 +282,13 @@ pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize, flush_interval
         manager: manager_for_cleanup.clone(),
     };
 
-    // Set up interrupted flag to stop progress bar updates
-    // The handler in did_index.rs will set this flag when CTRL+C is pressed
-    use std::sync::atomic::{AtomicBool, Ordering};
-    let interrupted = Arc::new(AtomicBool::new(false));
-
     // Wrap build call - cleanup guard will handle CTRL+C and panics
-    let build_result = manager_arc.build_did_index(flush_interval, Some({
-        let progress = progress.clone();
-        let stage2_progress = stage2_progress.clone();
-        let stage2_started = stage2_started.clone();
-        let stage1_finished = stage1_finished.clone();
-        let interrupted = interrupted.clone();
-        let last_bundle = last_bundle;
-        move |current, total, bytes_processed, _total_bytes| {
-            // Stop updating progress bar if interrupted
-            if interrupted.load(Ordering::Relaxed) {
-                return;
-            }
-            
-            // Detect stage change: if total changes from bundle count to shard count (256), we're in stage 2
-            let is_stage_2 = total == 256 && current <= 256;
-            
-            if is_stage_2 {
-                // Check if this is the first time we're entering stage 2
-                let mut started = stage2_started.lock().unwrap();
-                if !*started {
-                    *started = true;
-                    drop(started);
-                    
-                    // Finish Stage 1 progress bar if not already finished
-                    // (did_index.rs already printed empty line + Stage 2 header before this callback)
-                    let mut finished = stage1_finished.lock().unwrap();
-                    if !*finished {
-                        *finished = true;
-                        drop(finished);
-                        if let Some(pb) = progress.lock().unwrap().take() {
-                            pb.finish();
-                        }
-                        // Add extra newline after Stage 1 (did_index.rs already printed one before Stage 2 header)
-                        eprintln!();
-                    }
-                    
-                    // Create new simple progress bar for Stage 2 (256 shards, no byte tracking)
-                    let mut stage2_pb = stage2_progress.lock().unwrap();
-                    *stage2_pb = Some(ProgressBar::new(256));
-                }
-                
-                // Update Stage 2 progress bar (pos/len already shows the count, no message needed)
-                let mut stage2_pb_guard = stage2_progress.lock().unwrap();
-                if let Some(ref pb) = *stage2_pb_guard {
-                    pb.set(current as usize);
-                    // Don't set message - progress bar template will show pos/len without extra message
-                    
-                    // Finish progress bar when stage 2 completes (256/256)
-                    if current == 256 {
-                        if let Some(pb) = stage2_pb_guard.take() {
-                            pb.finish();
-                        }
-                    }
-                }
-            } else {
-                // Stage 1: use byte tracking, no stage message in progress bar
-                // Check if Stage 1 is complete (current == total and total == last_bundle)
-                if current == total && total == last_bundle {
-                    let mut finished = stage1_finished.lock().unwrap();
-                    if !*finished {
-                        *finished = true;
-                        drop(finished);
-                        // Finish Stage 1 progress bar and add extra newline
-                        if let Some(pb) = progress.lock().unwrap().take() {
-                            pb.finish();
-                        }
-                        eprintln!();
-                    }
-                } else if let Some(ref pb) = *progress.lock().unwrap() {
-                    pb.set_with_bytes(current as usize, bytes_processed);
-                    // Don't set stage message - just show bytes/sec
-                }
-            }
-        }
-    }), Some(num_threads), Some(interrupted.clone()));
+    let build_result = manager_arc.build_did_index(
+        flush_interval,
+        Some(progress.callback_for_build_did_index()),
+        Some(num_threads),
+        Some(progress.interrupted())
+    );
 
     // Handle build result - ensure cleanup happens on error
     match build_result {
@@ -384,13 +307,8 @@ pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize, flush_interval
         }
     }
 
-    // Finish the appropriate progress bar
-    if let Some(pb) = progress.lock().unwrap().take() {
-        pb.finish();
-    }
-    if let Some(pb) = stage2_progress.lock().unwrap().take() {
-        pb.finish();
-    }
+    // Finish the progress bars
+    progress.finish();
 
     eprintln!();
 
@@ -438,7 +356,37 @@ pub fn cmd_index_repair(dir: PathBuf, threads: usize, flush_interval: u32) -> Re
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
 
-    let needs_rebuild = index_last_bundle < last_bundle;
+    // Check for missing delta segment files
+    let did_index = manager.get_did_index();
+    let shard_details = did_index.read().unwrap().as_ref().unwrap().get_shard_details(None)?;
+    let mut missing_base_shards = 0;
+    let mut missing_delta_segments = 0;
+    
+    for detail in &shard_details {
+        let base_exists = detail
+            .get("base_exists")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let did_count = detail
+            .get("did_count")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        
+        if did_count > 0 && !base_exists {
+            missing_base_shards += 1;
+        }
+        
+        if let Some(segments) = detail.get("segments").and_then(|v| v.as_array()) {
+            for seg in segments {
+                let exists = seg.get("exists").and_then(|v| v.as_bool()).unwrap_or(false);
+                if !exists {
+                    missing_delta_segments += 1;
+                }
+            }
+        }
+    }
+
+    let needs_rebuild = index_last_bundle < last_bundle || missing_base_shards > 0 || missing_delta_segments > 0;
     let needs_compact = delta_segments > 50; // Threshold for compaction
 
     if !needs_rebuild && !needs_compact {
@@ -447,34 +395,61 @@ pub fn cmd_index_repair(dir: PathBuf, threads: usize, flush_interval: u32) -> Re
         log::info!("  Delta segments: {}", delta_segments);
         return Ok(());
     }
+    
+    // Report what needs fixing
+    if missing_base_shards > 0 {
+        log::info!("Found {} missing base shard(s) - rebuild required", missing_base_shards);
+    }
+    if missing_delta_segments > 0 {
+        log::info!("Found {} missing delta segment(s) - rebuild required", missing_delta_segments);
+    }
 
     let start = Instant::now();
 
-    // Case 1: Index is behind - do incremental update
+    // Case 1: Index is behind or has missing files - do rebuild
     if needs_rebuild {
-        let missing_bundles = last_bundle - index_last_bundle;
-        log::info!("Index is behind by {} bundles ({} → {})",
-            missing_bundles, index_last_bundle + 1, last_bundle);
+        // If there are missing files, always do full rebuild
+        let force_full_rebuild = missing_base_shards > 0 || missing_delta_segments > 0;
+        
+        let missing_bundles = if index_last_bundle < last_bundle {
+            last_bundle - index_last_bundle
+        } else {
+            0
+        };
+        
+        if missing_bundles > 0 {
+            log::info!("Index is behind by {} bundles ({} → {})",
+                missing_bundles, index_last_bundle + 1, last_bundle);
+        }
         if num_threads > 1 {
             log::info!("Using {} threads", num_threads);
         }
 
-        // If missing too many bundles, full rebuild is faster
-        if missing_bundles > 1000 {
-            log::info!("Too many missing bundles - performing full rebuild...\n");
+        // If missing too many bundles or missing files, full rebuild is required
+        if force_full_rebuild || missing_bundles > 1000 {
+            if force_full_rebuild {
+                log::info!("Missing index files detected - performing full rebuild...\n");
+            } else {
+                log::info!("Too many missing bundles - performing full rebuild...\n");
+            }
 
             // Get total uncompressed size for progress tracking
             let index = manager.get_index();
             let bundle_numbers: Vec<u32> = (1..=last_bundle).collect();
             let total_bytes = index.total_uncompressed_size_for_bundles(&bundle_numbers);
 
-            use super::progress::ProgressBar;
-            let progress = ProgressBar::with_bytes(last_bundle as usize, total_bytes);
+            // Create two-stage progress bar
+            use super::progress::TwoStageProgress;
+            let progress = TwoStageProgress::new(last_bundle, total_bytes);
 
-            manager.build_did_index(flush_interval, Some(|current, _total, bytes_processed, _total_bytes| {
-                progress.set_with_bytes(current as usize, bytes_processed);
-            }), Some(num_threads), None)?;
+            manager.build_did_index(
+                flush_interval,
+                Some(progress.callback_for_build_did_index()),
+                Some(num_threads),
+                Some(progress.interrupted())
+            )?;
 
+            // Finish the progress bars
             progress.finish();
         } else {
             // Incremental update is faster
@@ -543,15 +518,50 @@ pub fn cmd_index_repair(dir: PathBuf, threads: usize, flush_interval: u32) -> Re
         .get("delta_segments")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-
-    log::info!("\n✓ DID index repaired in {:?}", elapsed);
     let total_dids = stats
         .get("total_dids")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
-    log::info!("  Total DIDs: {}", total_dids);
-    log::info!("  Last bundle: {}", last_bundle);
-    log::info!("  Delta segments: {}", final_delta_segments);
+    let shard_count = stats
+        .get("shard_count")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+
+    // Print success message and summary
+    eprintln!();
+    eprintln!("✓ Index repair completed successfully in {:?}", elapsed);
+    eprintln!();
+    eprintln!("📊 Index Statistics:");
+    eprintln!("  Total DIDs:        {}", utils::format_number(total_dids as u64));
+    eprintln!("  Last bundle:       {}", last_bundle);
+    eprintln!("  Shards:            {}", shard_count);
+    eprintln!("  Delta segments:    {}", final_delta_segments);
+    
+    // Show what was fixed
+    if needs_rebuild || needs_compact {
+        eprintln!();
+        eprintln!("🔧 Repairs performed:");
+        if needs_rebuild {
+            if missing_base_shards > 0 {
+                eprintln!("  • Rebuilt {} missing base shard(s)", missing_base_shards);
+            }
+            if missing_delta_segments > 0 {
+                eprintln!("  • Rebuilt {} missing delta segment(s)", missing_delta_segments);
+            }
+            if index_last_bundle < last_bundle {
+                eprintln!("  • Updated index from bundle {} to {}", index_last_bundle, last_bundle);
+            }
+        }
+        if needs_compact {
+            eprintln!("  • Compacted {} delta segments", delta_segments);
+        }
+    }
+    
+    // Show compaction recommendation if needed
+    if final_delta_segments >= 50 && final_delta_segments < 100 {
+        eprintln!();
+        eprintln!("💡 Tip: Consider running '{} index compact' to optimize performance", constants::BINARY_NAME);
+    }
 
     Ok(())
 }
@@ -724,7 +734,6 @@ fn rebuild_and_compare_index(
     verbose: bool,
     flush_interval: u32,
 ) -> Result<RebuildResult> {
-    use super::progress::ProgressBar;
     use std::fs;
 
     // Create temporary directory for rebuilt index
@@ -762,104 +771,22 @@ fn rebuild_and_compare_index(
     let bundle_numbers: Vec<u32> = (1..=last_bundle).collect();
     let total_uncompressed_size = index.total_uncompressed_size_for_bundles(&bundle_numbers);
 
-    // Create progress bars for both stages (similar to cmd_index_build)
-    use std::sync::{Arc, Mutex};
-    let progress = Arc::new(Mutex::new(Some(ProgressBar::with_bytes(last_bundle as usize, total_uncompressed_size))));
-    let stage2_progress = Arc::new(Mutex::new(None::<ProgressBar>));
-    let stage2_started = Arc::new(Mutex::new(false));
-    let stage1_finished = Arc::new(Mutex::new(false));
-
-    // Set up interrupted flag to stop progress bar updates
-    // The handler in did_index.rs will set this flag when CTRL+C is pressed
-    use std::sync::atomic::{AtomicBool, Ordering};
-    let interrupted = Arc::new(AtomicBool::new(false));
+    // Create two-stage progress bar
+    use super::progress::TwoStageProgress;
+    let progress = TwoStageProgress::new(last_bundle, total_uncompressed_size);
 
     // Stream bundles directly from disk - memory efficient!
     let (_, _, _, _) = temp_did_index.build_from_scratch(
         manager.directory(),
         last_bundle,
         flush_interval,
-        Some({
-            let progress = progress.clone();
-            let stage2_progress = stage2_progress.clone();
-            let stage2_started = stage2_started.clone();
-            let stage1_finished = stage1_finished.clone();
-            let interrupted = interrupted.clone();
-            let last_bundle = last_bundle;
-            move |current, total, bytes_processed, _stage| {
-                // Stop updating progress bar if interrupted
-                if interrupted.load(Ordering::Relaxed) {
-                    return;
-                }
-                // Detect stage change: if total changes from bundle count to shard count (256), we're in stage 2
-                let is_stage_2 = total == 256 && current <= 256;
-                
-                if is_stage_2 {
-                    // Check if this is the first time we're entering stage 2
-                    let mut started = stage2_started.lock().unwrap();
-                    if !*started {
-                        *started = true;
-                        drop(started);
-                        
-                        // Finish Stage 1 progress bar if not already finished
-                        let mut finished = stage1_finished.lock().unwrap();
-                        if !*finished {
-                            *finished = true;
-                            drop(finished);
-                            if let Some(pb) = progress.lock().unwrap().take() {
-                                pb.finish();
-                            }
-                            eprintln!();
-                        }
-                        
-                        // Create new simple progress bar for Stage 2 (256 shards, no byte tracking)
-                        let mut stage2_pb = stage2_progress.lock().unwrap();
-                        *stage2_pb = Some(ProgressBar::new(256));
-                    }
-                    
-                    // Update Stage 2 progress bar
-                    let mut stage2_pb_guard = stage2_progress.lock().unwrap();
-                    if let Some(ref pb) = *stage2_pb_guard {
-                        pb.set(current as usize);
-                        
-                        // Finish progress bar when stage 2 completes (256/256)
-                        if current == 256 {
-                            if let Some(pb) = stage2_pb_guard.take() {
-                                pb.finish();
-                            }
-                        }
-                    }
-                } else {
-                    // Stage 1: use byte tracking
-                    // Check if Stage 1 is complete (current == total and total == last_bundle)
-                    if current == total && total == last_bundle {
-                        let mut finished = stage1_finished.lock().unwrap();
-                        if !*finished {
-                            *finished = true;
-                            drop(finished);
-                            // Finish Stage 1 progress bar and add extra newline
-                            if let Some(pb) = progress.lock().unwrap().take() {
-                                pb.finish();
-                            }
-                            eprintln!();
-                        }
-                    } else if let Some(ref pb) = *progress.lock().unwrap() {
-                        pb.set_with_bytes(current as usize, bytes_processed);
-                    }
-                }
-            }
-        }),
+        Some(progress.callback_for_build_from_scratch()),
         0, // num_threads: auto-detect
-        Some(interrupted.clone()) // interrupted flag
+        Some(progress.interrupted()) // interrupted flag
     )?;
 
     // Finish any remaining progress bars
-    if let Some(pb) = progress.lock().unwrap().take() {
-        pb.finish();
-    }
-    if let Some(pb) = stage2_progress.lock().unwrap().take() {
-        pb.finish();
-    }
+    progress.finish();
 
     // Compare shard files between temporary and existing index
     let existing_index_dir = manager.directory().join(crate::constants::DID_INDEX_DIR);
@@ -889,7 +816,7 @@ fn rebuild_and_compare_index(
     // Compare DID counts first (ultimate sanity check)
     if temp_total_dids != existing_total_dids {
         errors += 1;
-        log::error!(
+        log::info!(
             "  Total DID count mismatch: existing={}, rebuilt={}",
             existing_total_dids,
             temp_total_dids
@@ -1004,6 +931,9 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool, flush_interval: u32) -> Res
 
     let mut errors = 0;
     let mut warnings = 0;
+    
+    // Track error categories for detailed summary
+    let mut error_categories: Vec<(String, usize)> = Vec::new();
 
     // Check 1: Last bundle consistency
     log::info!("Checking bundle consistency...");
@@ -1030,6 +960,11 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool, flush_interval: u32) -> Res
     let mut missing_delta_segments = 0;
     let mut shards_checked = 0;
     let mut segments_checked = 0;
+    
+    // Collect details about missing segments for summary
+    let mut missing_segment_details: Vec<(String, String, Option<u32>, Option<u32>)> = Vec::new();
+    use std::collections::HashMap;
+    let mut missing_segments_by_shard: HashMap<String, u32> = HashMap::new();
 
     for detail in &shard_details {
         let shard_hex = detail
@@ -1053,10 +988,11 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool, flush_interval: u32) -> Res
 
             if !base_exists {
                 if verbose {
-                    log::error!("  ✗ Missing base shard: {}", shard_hex);
+                    log::info!("  ✗ Missing base shard: {}", shard_hex);
                 }
                 missing_base_shards += 1;
                 errors += 1;
+                // Tracked below in summary
             } else if verbose {
                 log::info!(
                     "  ✓ Shard {}: {} DIDs",
@@ -1071,18 +1007,37 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool, flush_interval: u32) -> Res
             for seg in segments {
                 let exists = seg.get("exists").and_then(|v| v.as_bool()).unwrap_or(false);
                 let file_name = seg.get("file_name").and_then(|v| v.as_str()).unwrap_or("?");
+                let bundle_start = seg.get("bundle_start").and_then(|v| v.as_u64()).map(|v| v as u32);
+                let bundle_end = seg.get("bundle_end").and_then(|v| v.as_u64()).map(|v| v as u32);
 
                 segments_checked += 1;
 
                 if !exists {
                     if verbose {
-                        log::error!(
-                            "  ✗ Missing delta segment: {} (shard {})",
-                            file_name,
-                            shard_hex
-                        );
+                        if let (Some(start), Some(end)) = (bundle_start, bundle_end) {
+                            log::info!(
+                                "  ✗ Missing delta segment: {} (shard {}, bundles {}-{})",
+                                file_name,
+                                shard_hex,
+                                start,
+                                end
+                            );
+                        } else {
+                            log::info!(
+                                "  ✗ Missing delta segment: {} (shard {})",
+                                file_name,
+                                shard_hex
+                            );
+                        }
                     }
                     missing_delta_segments += 1;
+                    missing_segment_details.push((
+                        shard_hex.to_string(),
+                        file_name.to_string(),
+                        bundle_start,
+                        bundle_end,
+                    ));
+                    *missing_segments_by_shard.entry(shard_hex.to_string()).or_insert(0) += 1;
                     errors += 1;
                 }
             }
@@ -1091,10 +1046,51 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool, flush_interval: u32) -> Res
 
     if !verbose {
         if missing_base_shards > 0 {
-            log::error!("  ✗ Missing {} base shard(s)", missing_base_shards);
+            log::info!("  ✗ Missing {} base shard(s)", missing_base_shards);
         }
         if missing_delta_segments > 0 {
-            log::error!("  ✗ Missing {} delta segment(s)", missing_delta_segments);
+            log::info!("  ✗ Missing {} delta segment(s)", missing_delta_segments);
+            
+            // Show shard distribution
+            if missing_segments_by_shard.len() > 0 {
+                let mut shard_counts: Vec<_> = missing_segments_by_shard.iter().collect();
+                shard_counts.sort_by_key(|&(_, count)| std::cmp::Reverse(count));
+                
+                let total_shards_affected = shard_counts.len();
+                let max_shards_to_show = 10;
+                
+                if total_shards_affected <= max_shards_to_show {
+                    log::info!("    Affected shards: {}", 
+                        shard_counts.iter()
+                            .map(|(shard, count)| format!("{} ({} missing)", shard, count))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                } else {
+                    let top_shards: Vec<_> = shard_counts.iter().take(max_shards_to_show)
+                        .map(|(shard, count)| format!("{} ({} missing)", shard, count))
+                        .collect();
+                    log::info!("    Top affected shards: {}", top_shards.join(", "));
+                    log::info!("    ... and {} more shard(s)", total_shards_affected - max_shards_to_show);
+                }
+            }
+            
+            // Show bundle range if available
+            let bundle_ranges: Vec<_> = missing_segment_details.iter()
+                .filter_map(|(_, _, start, end)| {
+                    if let (Some(s), Some(e)) = (start, end) {
+                        Some((*s, *e))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            
+            if !bundle_ranges.is_empty() {
+                let min_bundle = bundle_ranges.iter().map(|(s, _)| s).min().unwrap();
+                let max_bundle = bundle_ranges.iter().map(|(_, e)| e).max().unwrap();
+                log::info!("    Bundle range: {}-{}", min_bundle, max_bundle);
+            }
         }
         if missing_base_shards == 0 && missing_delta_segments == 0 {
             log::info!(
@@ -1142,12 +1138,13 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool, flush_interval: u32) -> Res
     const SEGMENT_ERROR_THRESHOLD: u64 = 100;
 
     if delta_segments >= SEGMENT_ERROR_THRESHOLD {
-        log::error!(
+        log::info!(
             "  ✗ Too many delta segments: {} (performance will degrade)",
             delta_segments
         );
         log::info!("      Run: {} index compact", constants::BINARY_NAME);
         errors += 1;
+        error_categories.push(("Too many delta segments".to_string(), 1));
     } else if delta_segments >= SEGMENT_WARNING_THRESHOLD {
         log::warn!(
             "  ⚠️  Many delta segments: {} (consider compacting)",
@@ -1173,27 +1170,37 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool, flush_interval: u32) -> Res
 
     if rebuild_result.errors > 0 {
         errors += rebuild_result.errors;
-        log::error!(
+        log::info!(
             "  ✗ Index rebuild comparison failed with {} errors",
             rebuild_result.errors
         );
         if rebuild_result.missing_in_index > 0 {
-            log::error!(
+            log::info!(
                 "    - {} DIDs missing from existing index",
                 rebuild_result.missing_in_index
             );
+            error_categories.push(("DIDs missing from index".to_string(), rebuild_result.missing_in_index));
         }
         if rebuild_result.extra_in_index > 0 {
-            log::error!(
+            log::info!(
                 "    - {} DIDs in index but not in bundles",
                 rebuild_result.extra_in_index
             );
+            error_categories.push(("DIDs in index but not in bundles".to_string(), rebuild_result.extra_in_index));
         }
         if rebuild_result.location_mismatches > 0 {
-            log::error!(
+            log::info!(
                 "    - {} DIDs with location mismatches",
                 rebuild_result.location_mismatches
             );
+            error_categories.push(("DIDs with location mismatches".to_string(), rebuild_result.location_mismatches));
+        }
+        // Track DID count mismatch if present
+        if rebuild_result.errors > (rebuild_result.missing_in_index + rebuild_result.extra_in_index + rebuild_result.location_mismatches) {
+            let other_errors = rebuild_result.errors - (rebuild_result.missing_in_index + rebuild_result.extra_in_index + rebuild_result.location_mismatches);
+            if other_errors > 0 {
+                error_categories.push(("Index rebuild comparison errors".to_string(), other_errors));
+            }
         }
     } else if verbose {
         log::info!("  ✓ Index rebuild verification passed");
@@ -1202,26 +1209,82 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool, flush_interval: u32) -> Res
     }
 
     // Summary
-    println!();
+    eprintln!();
+    eprintln!();
     if errors > 0 {
-        log::error!("✗ Index verification failed");
-        log::error!("  Errors:   {}", errors);
-        log::error!("  Warnings: {}", warnings);
-        log::info!("\n  Run: {} index repair", constants::BINARY_NAME);
+        eprintln!("✗ Index verification failed");
+        eprintln!("  Errors:   {}", errors);
+        eprintln!("  Warnings: {}", warnings);
+        
+        // Print error breakdown
+        if missing_base_shards > 0 {
+            eprintln!("  • Missing base shards: {}", missing_base_shards);
+        }
+        if missing_delta_segments > 0 {
+            eprintln!("  • Missing delta segments: {}", missing_delta_segments);
+            
+            // Show shard distribution
+            if missing_segments_by_shard.len() > 0 {
+                let mut shard_counts: Vec<_> = missing_segments_by_shard.iter().collect();
+                shard_counts.sort_by_key(|&(_, count)| std::cmp::Reverse(count));
+                
+                let total_shards_affected = shard_counts.len();
+                let max_shards_to_show = 10;
+                
+                if total_shards_affected <= max_shards_to_show {
+                    eprintln!("    Affected shards: {}", 
+                        shard_counts.iter()
+                            .map(|(shard, count)| format!("{} ({} missing)", shard, count))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                } else {
+                    let top_shards: Vec<_> = shard_counts.iter().take(max_shards_to_show)
+                        .map(|(shard, count)| format!("{} ({} missing)", shard, count))
+                        .collect();
+                    eprintln!("    Top affected shards: {}", top_shards.join(", "));
+                    eprintln!("    ... and {} more shard(s)", total_shards_affected - max_shards_to_show);
+                }
+            }
+            
+            // Show bundle range if available
+            let bundle_ranges: Vec<_> = missing_segment_details.iter()
+                .filter_map(|(_, _, start, end)| {
+                    if let (Some(s), Some(e)) = (start, end) {
+                        Some((*s, *e))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            
+            if !bundle_ranges.is_empty() {
+                let min_bundle = bundle_ranges.iter().map(|(s, _)| s).min().unwrap();
+                let max_bundle = bundle_ranges.iter().map(|(_, e)| e).max().unwrap();
+                eprintln!("    Bundle range: {}-{}", min_bundle, max_bundle);
+            }
+        }
+        
+        // Print other error categories
+        for (category, count) in &error_categories {
+            eprintln!("  • {}: {}", category, count);
+        }
+        
+        eprintln!("\n  Run: {} index repair", constants::BINARY_NAME);
         std::process::exit(1);
     } else if warnings > 0 {
-        log::warn!("⚠️  Index verification passed with warnings");
-        log::info!("  Warnings: {}", warnings);
-        log::info!("  Total DIDs:  {}", total_dids);
-        log::info!("  Last bundle: {}", last_bundle);
+        eprintln!("⚠️  Index verification passed with warnings");
+        eprintln!("  Warnings: {}", warnings);
+        eprintln!("  Total DIDs:  {}", total_dids);
+        eprintln!("  Last bundle: {}", last_bundle);
     } else {
-        log::info!("✓ DID index is valid");
-        log::info!("  Total DIDs:    {}", total_dids);
-        log::info!("  Last bundle:   {}", last_bundle);
-        log::info!("  Shards:        {}", shards_checked);
-        log::info!("  Delta segments: {}", delta_segments);
+        eprintln!("✓ DID index is valid");
+        eprintln!("  Total DIDs:    {}", total_dids);
+        eprintln!("  Last bundle:   {}", last_bundle);
+        eprintln!("  Shards:        {}", shards_checked);
+        eprintln!("  Delta segments: {}", delta_segments);
         if delta_segments > 0 && delta_segments < SEGMENT_WARNING_THRESHOLD {
-            log::info!("  (compaction not needed)");
+            eprintln!("  (compaction not needed)");
         }
     }
 

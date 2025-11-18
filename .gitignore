@@ -5,3 +5,4 @@ plcbundle
 test_bundles
 test_bundles*
 .claude
+.DS_Store
