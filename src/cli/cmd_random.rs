@@ -44,7 +44,7 @@ pub struct RandomCommand {
 }
 
 pub fn run(cmd: RandomCommand, dir: PathBuf) -> Result<()> {
-    let manager = super::utils::create_manager(dir, false, false)?;
+    let manager = super::utils::create_manager(dir, false, false, false)?;
     let count = cmd.count.max(1);
     let dids = manager.sample_random_dids(count, cmd.seed)?;
 

@@ -200,7 +200,7 @@ pub fn cmd_index_build(dir: PathBuf, force: bool, threads: usize, flush_interval
         .build_global()
         .ok(); // Ignore error if already initialized
 
-    let manager = super::utils::create_manager(dir.clone(), false, false)?;
+    let manager = super::utils::create_manager(dir.clone(), false, false, false)?;
 
     // Check if index exists
     let did_index = manager.get_did_index_stats();
@@ -327,7 +327,7 @@ pub fn cmd_index_repair(dir: PathBuf, threads: usize, flush_interval: u32) -> Re
         .build_global()
         .ok(); // Ignore error if already initialized
 
-    let manager = super::utils::create_manager(dir.clone(), false, false)?;
+    let manager = super::utils::create_manager(dir.clone(), false, false, false)?;
 
     // Check if index config exists (even if corrupted)
     let stats_map = manager.get_did_index_stats();
@@ -447,7 +447,7 @@ pub fn cmd_index_repair(dir: PathBuf, threads: usize, flush_interval: u32) -> Re
 }
 
 pub fn cmd_index_stats(dir: PathBuf, json: bool) -> Result<()> {
-    let manager = super::utils::create_manager(dir.clone(), false, false)?;
+    let manager = super::utils::create_manager(dir.clone(), false, false, false)?;
 
     // Get raw stats from did_index
     let stats_map = manager.get_did_index_stats();
@@ -600,7 +600,7 @@ pub fn cmd_index_stats(dir: PathBuf, json: bool) -> Result<()> {
 
 
 pub fn cmd_index_verify(dir: PathBuf, verbose: bool, flush_interval: u32, full: bool) -> Result<()> {
-    let manager = super::utils::create_manager(dir.clone(), false, false)?;
+    let manager = super::utils::create_manager(dir.clone(), false, false, false)?;
 
     let stats_map = manager.get_did_index_stats();
 
@@ -1277,7 +1277,12 @@ fn cmd_index_debug_did_lookup(dir: PathBuf, input: String, json: bool) -> Result
 
     // Initialize manager with handle resolver
     let resolver_url = Some(constants::DEFAULT_HANDLE_RESOLVER_URL.to_string());
-    let manager = BundleManager::with_handle_resolver(dir.clone(), resolver_url)?;
+    let options = plcbundle::ManagerOptions {
+        handle_resolver_url: resolver_url,
+        preload_mempool: false,
+        verbose: false,
+    };
+    let manager = BundleManager::new(dir.clone(), options)?;
 
     // Resolve handle to DID if needed
     let (did, handle_resolve_time) = manager.resolve_handle_or_did(&input)?;
@@ -1451,7 +1456,7 @@ fn cmd_index_debug_did_lookup(dir: PathBuf, input: String, json: bool) -> Result
 }
 
 pub fn cmd_index_debug(dir: PathBuf, shard: Option<u8>, did: Option<String>, json: bool) -> Result<()> {
-    let manager = super::utils::create_manager(dir.clone(), false, false)?;
+    let manager = super::utils::create_manager(dir.clone(), false, false, false)?;
 
     let stats_map = manager.get_did_index_stats();
 
@@ -1739,7 +1744,7 @@ pub fn cmd_index_debug(dir: PathBuf, shard: Option<u8>, did: Option<String>, jso
 }
 
 pub fn cmd_index_compact(dir: PathBuf, shards: Option<Vec<u8>>) -> Result<()> {
-    let manager = super::utils::create_manager(dir.clone(), false, false)?;
+    let manager = super::utils::create_manager(dir.clone(), false, false, false)?;
 
     let stats_map = manager.get_did_index_stats();
 
@@ -1748,8 +1753,8 @@ pub fn cmd_index_compact(dir: PathBuf, shards: Option<Vec<u8>>) -> Result<()> {
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
     {
-        log::error!("DID index does not exist");
-        log::info!("Run: {} index build", constants::BINARY_NAME);
+        eprintln!("Error: DID index does not exist");
+        eprintln!("Run: {} index build", constants::BINARY_NAME);
         return Ok(());
     }
 
@@ -1759,15 +1764,15 @@ pub fn cmd_index_compact(dir: PathBuf, shards: Option<Vec<u8>>) -> Result<()> {
         .unwrap_or(0);
 
     if delta_segments_before == 0 {
-        log::info!("No pending delta segments to compact");
+        eprintln!("No pending delta segments to compact");
         return Ok(());
     }
 
-    log::info!("Compacting delta segments...");
+    eprintln!("Compacting delta segments...");
     if let Some(ref shard_list) = shards {
-        log::info!("  Targeting {} specific shard(s)", shard_list.len());
+        eprintln!("  Targeting {} specific shard(s)", shard_list.len());
     } else {
-        log::info!("  Compacting all shards");
+        eprintln!("  Compacting all shards");
     }
 
     let did_index = manager.get_did_index();
@@ -1786,13 +1791,12 @@ pub fn cmd_index_compact(dir: PathBuf, shards: Option<Vec<u8>>) -> Result<()> {
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
 
-    log::info!("\n✓ Compaction complete in {:?}", elapsed);
-    log::info!("  Delta segments before: {}", delta_segments_before);
-    log::info!("  Delta segments after:  {}", delta_segments_after);
-    log::info!(
-        "  Segments compacted:    {}",
-        delta_segments_before.saturating_sub(delta_segments_after)
-    );
+    let segments_compacted = delta_segments_before.saturating_sub(delta_segments_after);
+
+    eprintln!("\n✓ Compaction complete in {:?}", elapsed);
+    eprintln!("  Delta segments before: {}", delta_segments_before);
+    eprintln!("  Delta segments after:  {}", delta_segments_after);
+    eprintln!("  Segments compacted:    {}", segments_compacted);
 
     Ok(())
 }

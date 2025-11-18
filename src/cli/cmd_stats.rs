@@ -75,7 +75,7 @@ pub enum StatType {
 }
 
 pub fn run(cmd: StatsCommand, dir: PathBuf) -> Result<()> {
-    let manager = utils::create_manager(dir.clone(), false, false)?;
+    let manager = utils::create_manager(dir.clone(), false, false, false)?;
     let index = manager.get_index();
 
     if utils::is_repository_empty(&manager) {

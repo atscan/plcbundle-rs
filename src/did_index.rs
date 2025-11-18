@@ -778,7 +778,7 @@ impl Manager {
                         let identifier = &did[DID_PREFIX.len()..DID_PREFIX.len() + DID_IDENTIFIER_LEN];
                         let identifier = identifier.to_string();
                         
-                        let global_pos = ((bundle_num as u32).saturating_sub(1)) * constants::BUNDLE_SIZE as u32 + (position as u32);
+                        let global_pos = crate::constants::bundle_position_to_global(bundle_num as u32, position as usize) as u32;
                         let loc = OpLocation::new(global_pos, nullified);
 
                         shard_entries
@@ -1271,7 +1271,7 @@ impl Manager {
 
             valid_dids += 1;
             let shard_num = self.calculate_shard(&identifier);
-            let global_pos = ((bundle_num as u32).saturating_sub(1)) * constants::BUNDLE_SIZE as u32 + (position as u32);
+            let global_pos = crate::constants::bundle_position_to_global(bundle_num as u32, position as usize) as u32;
             let loc = OpLocation::new(global_pos, *nullified);
 
             shard_ops

@@ -5,7 +5,7 @@ use clap::{Args, ValueHint};
 use plcbundle::{
     constants,
     plc_client::PLCClient,
-    sync::{CliLogger, ServerLogger, SyncConfig, SyncManager},
+    sync::{SyncLoggerImpl, SyncConfig, SyncManager},
     BundleRuntime,
 };
 use std::path::PathBuf;
@@ -95,7 +95,7 @@ pub fn run(cmd: SyncCommand, dir: PathBuf, global_quiet: bool, global_verbose: b
         }
 
         let client = PLCClient::new(&cmd.plc)?;
-        let manager = Arc::new(super::utils::create_manager(dir.clone(), global_verbose, global_quiet)?);
+        let manager = Arc::new(super::utils::create_manager(dir.clone(), global_verbose, global_quiet, false)?);
 
         let config = SyncConfig {
             plc_url: cmd.plc.clone(),
@@ -110,7 +110,7 @@ pub fn run(cmd: SyncCommand, dir: PathBuf, global_quiet: bool, global_verbose: b
         let quiet = global_quiet;
 
         if cmd.continuous {
-            // For continuous mode, use run_continuous() with ServerLogger and BundleRuntime for graceful shutdown
+            // For continuous mode, use run_continuous() with SyncLoggerImpl and BundleRuntime for graceful shutdown
             let runtime = BundleRuntime::new();
             let shutdown_signal = runtime.shutdown_signal();
             let shutdown_sender = runtime.shutdown_sender();
@@ -125,7 +125,7 @@ pub fn run(cmd: SyncCommand, dir: PathBuf, global_quiet: bool, global_verbose: b
                 shutdown_tx: Some(shutdown_sender),
             };
 
-            let logger = ServerLogger::new(global_verbose, cmd.interval);
+            let logger = SyncLoggerImpl::new_server(global_verbose, cmd.interval);
             let sync_manager = SyncManager::new(manager, client, config).with_logger(logger);
 
             // Run sync with graceful shutdown handling
@@ -150,7 +150,7 @@ pub fn run(cmd: SyncCommand, dir: PathBuf, global_quiet: bool, global_verbose: b
             Ok(())
         } else {
             // For one-time sync, use run_once() with logger
-            let logger = CliLogger::new(quiet);
+            let logger = SyncLoggerImpl::new_cli();
             let sync_manager = SyncManager::new(manager, client, config).with_logger(logger);
 
             let max_bundles = if cmd.max_bundles > 0 {

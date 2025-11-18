@@ -120,3 +120,45 @@ pub const ZSTD_COMPRESSION_LEVEL: i32 = 1;
 /// Default flush interval for DID index building (number of bundles before flushing to disk)
 /// A value of 0 means flush only at the end (maximum memory usage)
 pub const DID_INDEX_FLUSH_INTERVAL: u32 = 64;
+
+// ============================================================================
+// Position Calculation Helpers
+// ============================================================================
+
+/// Calculate global position from bundle number and position within bundle
+/// Global position = ((bundle_number - 1) * BUNDLE_SIZE) + position
+/// 
+/// # Examples
+/// - Bundle 1, position 0 → global 0
+/// - Bundle 1, position 9999 → global 9999
+/// - Bundle 2, position 0 → global 10000
+/// - Bundle 2, position 500 → global 10500
+pub fn bundle_position_to_global(bundle_number: u32, position: usize) -> u64 {
+    ((bundle_number.saturating_sub(1)) as u64 * BUNDLE_SIZE as u64) + position as u64
+}
+
+/// Calculate total number of operations from all bundles
+/// Total = last_bundle * BUNDLE_SIZE
+pub fn total_operations_from_bundles(last_bundle: u32) -> u64 {
+    last_bundle as u64 * BUNDLE_SIZE as u64
+}
+
+/// Calculate global position for a mempool operation
+/// Global position = total_operations_from_bundles + mempool_position
+pub fn mempool_position_to_global(last_bundle: u32, mempool_position: usize) -> u64 {
+    total_operations_from_bundles(last_bundle) + mempool_position as u64
+}
+
+/// Convert global position to bundle number and position
+/// Returns (bundle_number, position) where bundle_number is 1-indexed and position is 0-indexed
+/// 
+/// # Examples
+/// - Global 0 → bundle 1, position 0
+/// - Global 9999 → bundle 1, position 9999
+/// - Global 10000 → bundle 2, position 0
+/// - Global 10500 → bundle 2, position 500
+pub fn global_to_bundle_position(global_pos: u64) -> (u32, usize) {
+    let bundle_num = ((global_pos / BUNDLE_SIZE as u64) + 1) as u32;
+    let position = (global_pos % BUNDLE_SIZE as u64) as usize;
+    (bundle_num, position)
+}

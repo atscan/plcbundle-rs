@@ -125,7 +125,7 @@ pub unsafe extern "C" fn bundle_manager_new(bundle_dir: *const c_char) -> *mut C
         }
     };
 
-    match BundleManager::new(bundle_dir) {
+    match BundleManager::new(bundle_dir, ()) {
         Ok(manager) => Box::into_raw(Box::new(CBundleManager {
             manager: Arc::new(manager),
         })),
@@ -263,10 +263,10 @@ pub unsafe extern "C" fn bundle_manager_get_did_operations(
         }
     };
 
-    match manager.manager.get_did_operations(did) {
-        Ok(operations) => {
+    match manager.manager.get_did_operations(did, false, false) {
+        Ok(result) => {
             let mut c_ops = Vec::new();
-            for op in operations {
+            for op in result.operations {
                 c_ops.push(operation_to_c(op));
             }
 

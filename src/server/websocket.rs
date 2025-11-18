@@ -1,6 +1,5 @@
 // WebSocket handler for streaming operations
 
-use crate::constants;
 use crate::server::ServerState;
 use axum::extract::ws::Message;
 use axum::{
@@ -80,8 +79,8 @@ async fn stream_live_operations(
 
     // Stream existing bundles
     if !bundles.is_empty() {
-        let start_bundle_idx = (start_cursor / constants::BUNDLE_SIZE as u64) as usize;
-        let start_position = (start_cursor % constants::BUNDLE_SIZE as u64) as usize;
+        let (start_bundle_num, start_position) = crate::constants::global_to_bundle_position(start_cursor);
+        let start_bundle_idx = (start_bundle_num - 1) as usize;
 
         if start_bundle_idx < bundles.len() {
             for i in start_bundle_idx..bundles.len() {
@@ -100,7 +99,7 @@ async fn stream_live_operations(
     }
 
     // Stream mempool operations
-    let bundle_record_base = (bundles.len() as u64) * constants::BUNDLE_SIZE as u64;
+    let bundle_record_base = crate::constants::total_operations_from_bundles(bundles.len() as u32);
     let mut last_seen_mempool_count = 0;
 
     stream_mempool(
@@ -126,7 +125,7 @@ async fn stream_live_operations(
 
         if bundles.len() > last_bundle_count {
             let new_bundle_count = bundles.len() - last_bundle_count;
-            current_record += (new_bundle_count as u64) * constants::BUNDLE_SIZE as u64;
+            current_record += crate::constants::total_operations_from_bundles(new_bundle_count as u32);
             last_bundle_count = bundles.len();
             last_seen_mempool_count = 0;
         }

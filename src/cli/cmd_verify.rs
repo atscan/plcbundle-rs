@@ -74,7 +74,7 @@ impl HasGlobalFlags for VerifyCommand {
 }
 
 pub fn run(cmd: VerifyCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
-    let manager = super::utils::create_manager_from_cmd(dir.clone(), &cmd)?;
+    let manager = super::utils::create_manager_from_cmd(dir.clone(), &cmd, false)?;
 
     // Determine number of threads
     let num_threads = if cmd.threads == 0 {

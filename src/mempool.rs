@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 /// Operations must be strictly chronological
 pub struct Mempool {
     operations: Vec<Operation>,
+    // Index by DID for fast lookups (maintained in sync with operations)
+    did_index: HashMap<String, Vec<usize>>, // DID -> indices in operations vec
     target_bundle: u32,
     min_timestamp: DateTime<Utc>,
     file: PathBuf,
@@ -45,6 +47,7 @@ impl Mempool {
 
         let mut mempool = Self {
             operations: Vec::new(),
+            did_index: HashMap::new(),
             target_bundle,
             min_timestamp,
             file,
@@ -142,8 +145,16 @@ impl Mempool {
 
         let added = new_ops.len();
 
-        // Add new operations
+        // Add new operations and update DID index
+        let start_idx = self.operations.len();
         self.operations.extend(new_ops);
+        
+        // Update DID index for new operations
+        for (offset, op) in self.operations[start_idx..].iter().enumerate() {
+            let idx = start_idx + offset;
+            self.did_index.entry(op.did.clone()).or_insert_with(Vec::new).push(idx);
+        }
+        
         self.validated = true;
         self.dirty = true;
 
@@ -241,6 +252,9 @@ impl Mempool {
 
         let result: Vec<Operation> = self.operations.drain(..take_count).collect();
 
+        // Rebuild DID index after removing operations (indices have shifted)
+        self.rebuild_did_index();
+
         // ALWAYS reset tracking after Take
         // Take() means we're consuming these ops for a bundle
         // Any remaining ops are "new" and unsaved
@@ -293,6 +307,7 @@ impl Mempool {
     pub fn clear(&mut self) {
         let prev = self.operations.len();
         self.operations.clear();
+        self.did_index.clear();
         self.validated = false;
         self.dirty = true;
         if self.verbose {
@@ -417,6 +432,7 @@ impl Mempool {
         let reader = BufReader::new(file);
 
         self.operations.clear();
+        self.did_index.clear();
 
         for line in reader.lines() {
             let line = line?;
@@ -430,7 +446,12 @@ impl Mempool {
             // Without this, re-serialization would change the hash.
             // Use Operation::from_json (sonic_rs) instead of serde deserialization
             let op = Operation::from_json(&line)?;
+            let idx = self.operations.len();
             self.operations.push(op);
+            
+            // Update DID index
+            let did = self.operations[idx].did.clone();
+            self.did_index.entry(did).or_insert_with(Vec::new).push(idx);
         }
 
         // Validate loaded data
@@ -536,22 +557,46 @@ impl Mempool {
     }
 
     /// FindDIDOperations searches for operations matching a DID
+    /// Uses DID index for O(1) lookup instead of linear scan
     pub fn find_did_operations(&self, did: &str) -> Vec<Operation> {
-        self.operations
-            .iter()
-            .filter(|op| op.did == did)
-            .cloned()
-            .collect()
+        if let Some(indices) = self.did_index.get(did) {
+            // Fast path: use index
+            indices.iter().map(|&idx| self.operations[idx].clone()).collect()
+        } else {
+            // DID not in index (shouldn't happen if index is maintained correctly)
+            Vec::new()
+        }
+    }
+    
+    /// Rebuild DID index from operations (used after take/clear)
+    fn rebuild_did_index(&mut self) {
+        self.did_index.clear();
+        for (idx, op) in self.operations.iter().enumerate() {
+            self.did_index.entry(op.did.clone()).or_insert_with(Vec::new).push(idx);
+        }
     }
 
     /// FindLatestDIDOperation finds the most recent non-nullified operation for a DID
-    pub fn find_latest_did_operation(&self, did: &str) -> Option<Operation> {
-        // Search backwards from most recent
-        self.operations
-            .iter()
-            .rev()
-            .find(|op| op.did == did && !op.nullified)
-            .cloned()
+    /// Returns the operation and its position/index in the mempool
+    /// Uses DID index for O(1) lookup, then finds latest by index (operations are chronologically sorted)
+    pub fn find_latest_did_operation(&self, did: &str) -> Option<(Operation, usize)> {
+        if let Some(indices) = self.did_index.get(did) {
+            // Operations are in chronological order, so highest index = latest
+            // Find the highest index that's not nullified
+            indices
+                .iter()
+                .rev()
+                .find_map(|&idx| {
+                    let op = &self.operations[idx];
+                    if !op.nullified {
+                        Some((op.clone(), idx))
+                    } else {
+                        None
+                    }
+                })
+        } else {
+            None
+        }
     }
 
     /// Get all operations (for dump command)

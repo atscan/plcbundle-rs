@@ -73,7 +73,7 @@ struct RollbackPlan {
 
 pub fn run(cmd: RollbackCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
     // Step 1: Validate options and calculate plan
-    let mut manager = super::utils::create_manager(dir.clone(), global_verbose, false)?;
+    let mut manager = super::utils::create_manager(dir.clone(), global_verbose, false, false)?;
     let plan = calculate_rollback_plan(&manager, &cmd)?;
 
     // Step 2: Display plan and get confirmation

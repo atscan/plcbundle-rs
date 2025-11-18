@@ -1,7 +1,7 @@
 // DID Resolution and Query commands
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueHint};
-use plcbundle::{BundleManager, DIDLookupStats, DIDLookupTimings};
+use plcbundle::BundleManager;
 use sonic_rs::{JsonContainerTrait, JsonValueTrait};
 use std::path::PathBuf;
 
@@ -147,6 +147,10 @@ pub enum DIDCommands {
         /// Field separator (default: tab)
         #[arg(long, default_value = "\t")]
         separator: String,
+
+        /// Reverse order (show newest first)
+        #[arg(long)]
+        reverse: bool,
     },
 
     /// Process multiple DIDs from file or stdin (TODO)
@@ -199,8 +203,8 @@ pub fn run_did(cmd: DidCommand, dir: PathBuf, global_verbose: bool) -> Result<()
         } => {
             cmd_did_resolve(dir, did, handle_resolver, global_verbose, query, raw, compare)?;
         }
-        DIDCommands::Log { did, json, format, no_header, separator } => {
-            cmd_did_lookup(dir, did, global_verbose, json, format, no_header, separator)?;
+        DIDCommands::Log { did, json, format, no_header, separator, reverse } => {
+            cmd_did_lookup(dir, did, global_verbose, json, format, no_header, separator, reverse)?;
         }
         DIDCommands::Batch {
             action,
@@ -245,8 +249,13 @@ pub fn cmd_did_resolve(
     let resolver_url =
         handle_resolver_url.or_else(|| Some(constants::DEFAULT_HANDLE_RESOLVER_URL.to_string()));
 
-    // Initialize manager with handle resolver (default or provided)
-    let manager = BundleManager::with_handle_resolver(dir, resolver_url)?;
+    // Initialize manager with handle resolver and preload mempool (for resolve command)
+    let options = plcbundle::ManagerOptions {
+        handle_resolver_url: resolver_url,
+        preload_mempool: true,
+        verbose: false,
+    };
+    let manager = BundleManager::new(dir, options)?;
 
     // Resolve handle to DID if needed
     let (did, handle_resolve_time) = manager.resolve_handle_or_did(&input)?;
@@ -263,7 +272,7 @@ pub fn cmd_did_resolve(
     }
 
     // Get resolve result with stats
-    let result = manager.resolve_did_with_stats(&did)?;
+    let result = manager.resolve_did(&did)?;
 
     // If compare is enabled, fetch remote document and compare
     if let Some(maybe_url) = compare {
@@ -382,8 +391,12 @@ pub fn cmd_did_resolve(
             log::info!("Handle resolution: {:?}", handle_resolve_duration);
         }
 
+        // Show mempool lookup time
+        log::info!("Mempool check: {:?}", result.mempool_time);
+
         // Show detailed index lookup timings if available
         if let Some(ref timings) = result.lookup_timings {
+            log::info!("");
             log::info!("Index Lookup Breakdown:");
             log::info!("  Extract ID:    {:?}", timings.extract_identifier);
             log::info!("  Calc shard:    {:?}", timings.calculate_shard);
@@ -438,23 +451,42 @@ pub fn cmd_did_resolve(
         log::info!("Load operation: {:?}", result.load_time);
 
         // Calculate true total including handle resolution
+        // Note: result.total_time already includes mempool_time + index_time + load_time
         let true_total = handle_resolve_duration + result.total_time;
+        let did_resolve_time = result.mempool_time + result.index_time + result.load_time;
         log::info!(
             "Total:          {:?} (handle: {:?} + did: {:?})",
             true_total,
             handle_resolve_duration,
-            result.total_time
+            did_resolve_time
+        );
+        log::info!(
+            "  DID resolve breakdown: mempool: {:?} + index: {:?} + load: {:?}",
+            result.mempool_time,
+            result.index_time,
+            result.load_time
         );
 
-        // Calculate global position: ((bundle - 1) * BUNDLE_SIZE) + position
-        let global_pos = ((result.bundle_number - 1) as u64 * plcbundle::constants::BUNDLE_SIZE as u64)
-            + result.position as u64;
-        log::info!(
-            "Source: bundle {}, position {} (global: {})\n",
-            result.bundle_number,
-            result.position,
-            global_pos
-        );
+        // Calculate global position and display source
+        if result.bundle_number == 0 {
+            // Operation from mempool
+            let index = manager.get_index();
+            let global_pos = plcbundle::mempool_position_to_global(index.last_bundle, result.position);
+            log::info!(
+                "Source: mempool position {} (global: {})\n",
+                result.position,
+                global_pos
+            );
+        } else {
+            // Operation from bundle
+            let global_pos = plcbundle::bundle_position_to_global(result.bundle_number, result.position);
+            log::info!(
+                "Source: bundle {}, position {} (global: {})\n",
+                result.bundle_number,
+                result.position,
+                global_pos
+            );
+        }
     }
 
     // Convert document to JSON string
@@ -677,8 +709,13 @@ pub fn cmd_did_handle(
     let resolver_url =
         handle_resolver_url.or_else(|| Some(constants::DEFAULT_HANDLE_RESOLVER_URL.to_string()));
 
-    // Initialize manager with handle resolver (default or provided)
-    let manager = BundleManager::with_handle_resolver(dir, resolver_url)?;
+    // Initialize manager with handle resolver and preload mempool (for resolve command)
+    let options = plcbundle::ManagerOptions {
+        handle_resolver_url: resolver_url,
+        preload_mempool: true,
+        verbose: false,
+    };
+    let manager = BundleManager::new(dir, options)?;
 
     // Resolve handle to DID
     let (did, resolve_time) = manager.resolve_handle_or_did(&handle)?;
@@ -703,6 +740,7 @@ pub fn cmd_did_lookup(
     format: String,
     no_header: bool,
     separator: String,
+    reverse: bool,
 ) -> Result<()> {
     use plcbundle::constants;
     use std::time::Instant;
@@ -710,8 +748,13 @@ pub fn cmd_did_lookup(
     // Use default resolver if none provided (same pattern as cmd_did_resolve)
     let resolver_url = Some(constants::DEFAULT_HANDLE_RESOLVER_URL.to_string());
 
-    // Initialize manager with handle resolver (default or provided)
-    let manager = BundleManager::with_handle_resolver(dir, resolver_url)?;
+    // Initialize manager with handle resolver and preload mempool (for resolve command)
+    let options = plcbundle::ManagerOptions {
+        handle_resolver_url: resolver_url,
+        preload_mempool: true,
+        verbose: false,
+    };
+    let manager = BundleManager::new(dir, options)?;
 
     // Resolve handle to DID if needed
     let (did, handle_resolve_time) = manager.resolve_handle_or_did(&input)?;
@@ -742,20 +785,12 @@ pub fn cmd_did_lookup(
     let total_start = Instant::now();
 
     // Lookup operations with locations and stats (for verbose mode)
-    let (ops_with_loc, shard_stats, shard_num, lookup_timings, load_time) = if verbose {
-        manager.get_did_operations_with_locations_and_stats(&did)?
-    } else {
-        let lookup_start = Instant::now();
-        let ops = manager.get_did_operations_with_locations(&did)?;
-        let lookup_elapsed = lookup_start.elapsed();
-        (
-            ops,
-            DIDLookupStats::default(),
-            0,
-            DIDLookupTimings::default(),
-            lookup_elapsed,
-        )
-    };
+    let result = manager.get_did_operations(&did, true, verbose)?;
+    let ops_with_loc = result.operations_with_locations.unwrap_or_default();
+    let shard_stats = result.stats.unwrap_or_default();
+    let shard_num = result.shard_num.unwrap_or(0);
+    let lookup_timings = result.lookup_timings.unwrap_or_default();
+    let load_time = result.load_time.unwrap_or_default();
 
     let index_time = lookup_timings.extract_identifier
         + lookup_timings.calculate_shard
@@ -791,11 +826,6 @@ pub fn cmd_did_lookup(
             shard_stats.binary_search_attempts
         );
     }
-
-    // Check mempool
-    let mempool_start = Instant::now();
-    let mempool_ops = manager.get_did_operations_from_mempool(&did)?;
-    let mempool_elapsed = mempool_start.elapsed();
 
     let total_elapsed = total_start.elapsed();
 
@@ -861,8 +891,6 @@ pub fn cmd_did_lookup(
             load_time,
             ops_with_loc.len()
         );
-        log::info!("  Mempool check: {:?}", mempool_elapsed);
-
         // Calculate true total including handle resolution
         let true_total = handle_resolve_duration + total_elapsed;
         log::info!(
@@ -874,7 +902,18 @@ pub fn cmd_did_lookup(
         log::info!("");
     }
 
-    if ops_with_loc.is_empty() && mempool_ops.is_empty() {
+    // Separate bundled and mempool operations (mempool ops have bundle=0)
+    let mut bundled_ops = Vec::new();
+    let mut mempool_ops = Vec::new();
+    for owl in ops_with_loc.iter() {
+        if owl.bundle != 0 {
+            bundled_ops.push(owl.clone());
+        } else {
+            mempool_ops.push(&owl.operation);
+        }
+    }
+
+    if bundled_ops.is_empty() && mempool_ops.is_empty() {
         if json {
             println!("{{\"found\": false, \"operations\": []}}");
         } else {
@@ -886,40 +925,40 @@ pub fn cmd_did_lookup(
     if json {
         return output_lookup_json(
             &did,
-            &ops_with_loc,
+            &bundled_ops,
             &mempool_ops,
             total_elapsed,
             lookup_elapsed,
-            mempool_elapsed,
+            reverse,
         );
     }
 
     display_lookup_results(
         &did,
-        &ops_with_loc,
+        &bundled_ops,
         &mempool_ops,
         total_elapsed,
         lookup_elapsed,
-        mempool_elapsed,
         verbose,
         &format,
         no_header,
         &separator,
+        reverse,
     )
 }
 
 fn output_lookup_json(
     did: &str,
-    ops_with_loc: &[plcbundle::OperationWithLocation],
-    mempool_ops: &[plcbundle::Operation],
+    bundled_ops: &[plcbundle::OperationWithLocation],
+    mempool_ops: &[&plcbundle::Operation],
     total_elapsed: std::time::Duration,
     lookup_elapsed: std::time::Duration,
-    mempool_elapsed: std::time::Duration,
+    reverse: bool,
 ) -> Result<()> {
     use serde_json::json;
 
     let mut bundled = Vec::new();
-    for owl in ops_with_loc {
+    for owl in bundled_ops {
         bundled.push(json!({
             "bundle": owl.bundle,
             "position": owl.position,
@@ -938,13 +977,17 @@ fn output_lookup_json(
         }));
     }
 
+    if reverse {
+        bundled.reverse();
+        mempool.reverse();
+    }
+
     let output = json!({
         "found": true,
         "did": did,
         "timing": {
             "total_ms": total_elapsed.as_millis(),
             "lookup_ms": lookup_elapsed.as_millis(),
-            "mempool_ms": mempool_elapsed.as_millis(),
         },
         "bundled": bundled,
         "mempool": mempool,
@@ -956,19 +999,19 @@ fn output_lookup_json(
 
 fn display_lookup_results(
     did: &str,
-    ops_with_loc: &[plcbundle::OperationWithLocation],
-    mempool_ops: &[plcbundle::Operation],
+    bundled_ops: &[plcbundle::OperationWithLocation],
+    mempool_ops: &[&plcbundle::Operation],
     _total_elapsed: std::time::Duration,
     _lookup_elapsed: std::time::Duration,
-    _mempool_elapsed: std::time::Duration,
     verbose: bool,
     format: &str,
     no_header: bool,
     separator: &str,
+    reverse: bool,
 ) -> Result<()> {
-    let nullified_count = ops_with_loc.iter().filter(|owl| owl.nullified).count();
-    let total_ops = ops_with_loc.len() + mempool_ops.len();
-    let active_ops = ops_with_loc.len() - nullified_count + mempool_ops.len();
+    let nullified_count = bundled_ops.iter().filter(|owl| owl.nullified).count();
+    let total_ops = bundled_ops.len() + mempool_ops.len();
+    let active_ops = bundled_ops.len() - nullified_count + mempool_ops.len();
 
     // Parse format string
     let fields = parse_format_string(format);
@@ -992,7 +1035,7 @@ fn display_lookup_results(
     }
     
     // Check data widths
-    for owl in ops_with_loc.iter() {
+    for owl in bundled_ops.iter() {
         for (i, field) in fields.iter().enumerate() {
             let value = get_lookup_field_value(owl, None, field);
             column_widths[i] = column_widths[i].max(value.len());
@@ -1024,7 +1067,13 @@ fn display_lookup_results(
     }
 
     // Show operations - one per line
-    for owl in ops_with_loc.iter() {
+    let bundled_iter: Box<dyn Iterator<Item = &plcbundle::OperationWithLocation>> = if reverse {
+        Box::new(bundled_ops.iter().rev())
+    } else {
+        Box::new(bundled_ops.iter())
+    };
+
+    for owl in bundled_iter {
         let values: Vec<String> = fields.iter()
             .enumerate()
             .map(|(i, f)| {
@@ -1058,7 +1107,13 @@ fn display_lookup_results(
     }
 
     // Show mempool operations
-    for op in mempool_ops.iter() {
+    let mempool_iter: Box<dyn Iterator<Item = &&plcbundle::Operation>> = if reverse {
+        Box::new(mempool_ops.iter().rev())
+    } else {
+        Box::new(mempool_ops.iter())
+    };
+
+    for op in mempool_iter {
         let values: Vec<String> = fields.iter()
             .enumerate()
             .map(|(i, f)| {
@@ -1110,7 +1165,7 @@ fn get_lookup_field_value(
         "bundle" => format!("{}", owl.bundle),
         "position" | "pos" => format!("{:04}", owl.position),
         "global" | "global_pos" => {
-            let global_pos = ((owl.bundle - 1) as u64 * plcbundle::constants::BUNDLE_SIZE as u64) + owl.position as u64;
+            let global_pos = plcbundle::bundle_position_to_global(owl.bundle, owl.position);
             format!("{}", global_pos)
         },
         "status" => {
@@ -1267,7 +1322,12 @@ pub fn cmd_did_validate(
 
     // Initialize manager
     let resolver_url = Some(constants::DEFAULT_HANDLE_RESOLVER_URL.to_string());
-    let manager = BundleManager::with_handle_resolver(dir, resolver_url)?;
+    let options = plcbundle::ManagerOptions {
+        handle_resolver_url: resolver_url,
+        preload_mempool: false,
+        verbose: false,
+    };
+    let manager = BundleManager::new(dir, options)?;
 
     // Resolve handle to DID if needed (same pattern as other did commands)
     let (did_str, handle_resolve_time) = manager.resolve_handle_or_did(&did_input)?;
@@ -1296,8 +1356,9 @@ pub fn cmd_did_validate(
         println!();
     }
 
-    // Fetch operations from local bundles
-    let ops_with_loc = manager.get_did_operations_with_locations(&did_str)?;
+    // Fetch operations from local bundles and mempool
+    let result = manager.get_did_operations(&did_str, true, false)?;
+    let ops_with_loc = result.operations_with_locations.unwrap_or_default();
 
     if ops_with_loc.is_empty() {
         eprintln!("❌ Error: No operations found for DID: {}", did_str);

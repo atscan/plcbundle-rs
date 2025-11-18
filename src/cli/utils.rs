@@ -109,7 +109,13 @@ pub fn is_repository_empty(manager: &BundleManager) -> bool {
 ///
 /// This is the standard way to create a BundleManager from CLI commands.
 /// It respects the verbose and quiet flags for logging.
-pub fn create_manager(dir: PathBuf, verbose: bool, _quiet: bool) -> Result<BundleManager> {
+/// 
+/// # Arguments
+/// * `dir` - Directory path
+/// * `verbose` - Enable verbose logging
+/// * `_quiet` - Quiet mode (currently unused)
+/// * `preload_mempool` - If true, preload mempool at initialization (for commands that need it)
+pub fn create_manager(dir: PathBuf, verbose: bool, _quiet: bool, preload_mempool: bool) -> Result<BundleManager> {
     use anyhow::Context;
     
     // Check if directory exists
@@ -134,22 +140,23 @@ pub fn create_manager(dir: PathBuf, verbose: bool, _quiet: bool) -> Result<Bundl
     }
     
     let display_dir = display_path(&dir);
-    let manager = BundleManager::new(dir)
+    let options = plcbundle::ManagerOptions {
+        handle_resolver_url: None,
+        preload_mempool,
+        verbose,
+    };
+    let manager = BundleManager::new(dir, options)
         .with_context(|| format!("Failed to load bundle repository from: {}", display_dir.display()))?;
 
-    if verbose {
-        Ok(manager.with_verbose(true))
-    } else {
-        Ok(manager)
-    }
+    Ok(manager)
 }
 
 /// Create BundleManager with global flags extracted from command
 ///
 /// Convenience function for commands that implement `HasGlobalFlags`.
 /// The global flags (verbose, quiet) are automatically extracted from the command.
-pub fn create_manager_from_cmd<C: HasGlobalFlags>(dir: PathBuf, cmd: &C) -> Result<BundleManager> {
-    create_manager(dir, cmd.verbose(), cmd.quiet())
+pub fn create_manager_from_cmd<C: HasGlobalFlags>(dir: PathBuf, cmd: &C, preload_mempool: bool) -> Result<BundleManager> {
+    create_manager(dir, cmd.verbose(), cmd.quiet(), preload_mempool)
 }
 
 /// Resolve a target string (bundle number or path) into a bundle number and canonical path.

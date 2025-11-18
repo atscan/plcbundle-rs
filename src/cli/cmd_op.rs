@@ -170,8 +170,7 @@ pub fn parse_op_position(bundle: u32, position: Option<usize>) -> (u32, usize) {
                 // op get 10000 → bundle 2, position 0
                 // op get 88410345 → bundle 8842, position 345
                 let global_pos = bundle as u64;
-                let bundle_num = ((global_pos / constants::BUNDLE_SIZE as u64) + 1) as u32;
-                let op_pos = (global_pos % constants::BUNDLE_SIZE as u64) as usize;
+                let (bundle_num, op_pos) = plcbundle::global_to_bundle_position(global_pos);
                 (bundle_num, op_pos)
             }
         }
@@ -181,7 +180,7 @@ pub fn parse_op_position(bundle: u32, position: Option<usize>) -> (u32, usize) {
 pub fn cmd_op_get(dir: PathBuf, bundle: u32, position: Option<usize>, query: Option<String>, raw: bool, quiet: bool) -> Result<()> {
     let (bundle_num, op_index) = parse_op_position(bundle, position);
 
-    let manager = super::utils::create_manager(dir, false, quiet)?;
+    let manager = super::utils::create_manager(dir, false, quiet, false)?;
 
     // Get the operation JSON
     let json = if quiet {
@@ -189,7 +188,7 @@ pub fn cmd_op_get(dir: PathBuf, bundle: u32, position: Option<usize>, query: Opt
     } else {
         let result = manager.get_operation_with_stats(bundle_num, op_index)?;
         let global_pos =
-            ((bundle_num - 1) as u64 * constants::BUNDLE_SIZE as u64) + op_index as u64;
+            plcbundle::bundle_position_to_global(bundle_num, op_index);
 
         log::info!(
             "[Load] Bundle {}:{:04} (pos={}) in {:?} | {} bytes",
@@ -269,7 +268,7 @@ pub fn cmd_op_get(dir: PathBuf, bundle: u32, position: Option<usize>, query: Opt
 pub fn cmd_op_show(dir: PathBuf, bundle: u32, position: Option<usize>, quiet: bool) -> Result<()> {
     let (bundle_num, op_index) = parse_op_position(bundle, position);
 
-    let manager = super::utils::create_manager(dir, false, quiet)?;
+    let manager = super::utils::create_manager(dir, false, quiet, false)?;
 
     // Use the new get_operation API instead of loading entire bundle
     let load_start = Instant::now();
@@ -280,7 +279,7 @@ pub fn cmd_op_show(dir: PathBuf, bundle: u32, position: Option<usize>, quiet: bo
     // Operation is already parsed by get_operation
     let parse_duration = parse_start.elapsed();
 
-    let global_pos = ((bundle_num - 1) as u64 * constants::BUNDLE_SIZE as u64) + op_index as u64;
+    let global_pos = plcbundle::bundle_position_to_global(bundle_num, op_index);
 
     // Extract operation details
     let op_type = op
@@ -393,7 +392,7 @@ pub fn cmd_op_show(dir: PathBuf, bundle: u32, position: Option<usize>, quiet: bo
 }
 
 pub fn cmd_op_find(dir: PathBuf, cid: String, quiet: bool) -> Result<()> {
-    let manager = super::utils::create_manager(dir, false, quiet)?;
+    let manager = super::utils::create_manager(dir, false, quiet, false)?;
     let last_bundle = manager.get_last_bundle();
 
     if !quiet {
@@ -411,7 +410,7 @@ pub fn cmd_op_find(dir: PathBuf, cid: String, quiet: bool) -> Result<()> {
 
             if cid_matches {
                 let global_pos =
-                    ((bundle_num - 1) as u64 * constants::BUNDLE_SIZE as u64) + i as u64;
+                    plcbundle::bundle_position_to_global(bundle_num, i);
 
                 println!("Found: bundle {}, position {}", bundle_num, i);
                 println!("Global position: {}\n", global_pos);

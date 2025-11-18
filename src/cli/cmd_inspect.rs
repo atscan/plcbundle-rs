@@ -185,7 +185,7 @@ struct TimeDistribution {
 }
 
 pub fn run(cmd: InspectCommand, dir: PathBuf) -> Result<()> {
-    let manager = super::utils::create_manager(dir.clone(), false, false)?;
+    let manager = super::utils::create_manager(dir.clone(), false, false, false)?;
 
     // Resolve target to bundle number or file path
     let (bundle_num, file_path) = super::utils::resolve_bundle_target(&manager, &cmd.target, &dir)?;

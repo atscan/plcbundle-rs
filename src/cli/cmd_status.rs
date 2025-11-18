@@ -48,7 +48,7 @@ pub struct StatusCommand {
 }
 
 pub fn run(cmd: StatusCommand, dir: PathBuf) -> Result<()> {
-    let manager = utils::create_manager(dir.clone(), false, false)?;
+    let manager = utils::create_manager(dir.clone(), false, false, false)?;
     let index = manager.get_index();
 
     if cmd.json {
@@ -93,7 +93,7 @@ fn print_human_status(
         println!();
     } else {
         let total_bundles = index.last_bundle;
-        let total_operations = total_bundles as u64 * constants::BUNDLE_SIZE as u64;
+        let total_operations = plcbundle::total_operations_from_bundles(total_bundles);
 
         println!("  Total Bundles:   {}", utils::format_number(total_bundles as u64));
         println!("  Operations:      ~{}", utils::format_number(total_operations));

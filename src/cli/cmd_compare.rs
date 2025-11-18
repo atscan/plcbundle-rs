@@ -63,7 +63,7 @@ pub struct CompareCommand {
 }
 
 pub fn run(cmd: CompareCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
-    let manager = super::utils::create_manager(dir.clone(), global_verbose, false)?;
+    let manager = super::utils::create_manager(dir.clone(), global_verbose, false, false)?;
 
     let rt = Runtime::new()?;
 
@@ -106,13 +106,13 @@ async fn diff_indexes(
     // Resolve "." to actual path (rule: always resolve dot to full path)
     let local_path = display_path(dir);
 
-    // Resolve target "." as well (if it's a local path, not URL)
-    let target_display =
-        if target == "." && !target.starts_with("http://") && !target.starts_with("https://") {
-            display_path(&PathBuf::from(target)).display().to_string()
-        } else {
-            target.to_string()
-        };
+    // Resolve target to full path if it's a local path (not URL)
+    let target_display = if target.starts_with("http://") || target.starts_with("https://") {
+        target.to_string()
+    } else {
+        // Local path - resolve to full path
+        display_path(&PathBuf::from(target)).display().to_string()
+    };
 
     eprintln!("\n🔍 Comparing repositories");
     eprintln!("   Local:  {}", local_path.display());
@@ -269,7 +269,7 @@ async fn diff_specific_bundle(
         };
 
         // Try to load bundle from target directory
-        let target_manager = super::utils::create_manager(target_dir.to_path_buf(), false, false)?;
+        let target_manager = super::utils::create_manager(target_dir.to_path_buf(), false, false, false)?;
         let target_result = target_manager
             .load_bundle(bundle_num, plcbundle::LoadOptions::default())
             .context("Failed to load bundle from target directory")?;
@@ -1123,8 +1123,7 @@ fn display_operation_comparison(
                 } else {
                     target
                 };
-                let global_pos =
-                    (bundle_num as u64 - 1) * constants::BUNDLE_SIZE as u64 + *first_pos as u64;
+                let global_pos = plcbundle::bundle_position_to_global(bundle_num, *first_pos);
                 eprintln!("  💡 To explore missing operations:");
                 eprintln!(
                     "     • Global position: {} (bundle {} position {})",
@@ -1170,7 +1169,7 @@ fn display_operation_comparison(
         // Add hints for exploring missing operations
         if let Some((_first_cid, first_pos)) = missing_in_remote.first() {
             let global_pos =
-                (bundle_num as u64 - 1) * constants::BUNDLE_SIZE as u64 + *first_pos as u64;
+                plcbundle::bundle_position_to_global(bundle_num, *first_pos);
             eprintln!("  💡 To explore missing operations:");
             eprintln!(
                 "     • Global position: {} (bundle {} position {})",

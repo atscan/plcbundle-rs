@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Args, ValueHint};
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
@@ -10,9 +10,8 @@ use std::time::Instant;
 
 use super::progress::ProgressBar;
 use super::utils;
-use plcbundle::constants::BUNDLE_SIZE;
+use plcbundle::{global_to_bundle_position, total_operations_from_bundles, bundle_position_to_global};
 use plcbundle::format_std_duration_auto;
-use plcbundle::parse_operation_range;
 
 #[derive(Args)]
 #[command(
@@ -76,39 +75,23 @@ pub struct ExportCommand {
 }
 
 
-/// Convert global operation number (0-indexed) to (bundle, position) pair
-/// Bundle is 1-indexed, position is 0-indexed within bundle
-/// Global positions are 0-indexed: 0 = bundle 1 position 0, 1 = bundle 1 position 1, etc.
-fn global_op_to_bundle_position(global_op: u64) -> (u32, usize) {
-    // Global positions are 0-indexed: bundle = (global_pos / BUNDLE_SIZE) + 1
-    let bundle_num = ((global_op / BUNDLE_SIZE as u64) + 1) as u32;
-    let position = (global_op % BUNDLE_SIZE as u64) as usize;
-    (bundle_num, position)
-}
-
 pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Result<()> {
     let output = cmd.output;
     let count = cmd.count;
     let reverse = cmd.reverse;
     // Create BundleManager (follows RULES.md - NO direct file access from CLI)
-    let manager = super::utils::create_manager(dir.clone(), verbose, quiet)?;
+    let manager = super::utils::create_manager(dir.clone(), verbose, quiet, false)?;
     let index = manager.get_index();
     let max_bundle = index.last_bundle;
 
     // Determine what to export: bundles or specific operations
-    let ops_to_export: Option<HashMap<(u32, usize), bool>> = if let Some(ops_str) = cmd.ops {
+    // Use a more efficient representation: store ranges and individual ops separately
+    // to avoid materializing millions of operations
+    let ops_to_export: Option<OperationFilter> = if let Some(ops_str) = cmd.ops {
         // Calculate max operation number (0-indexed: (max_bundle * BUNDLE_SIZE) - 1)
         // This is an upper bound; actual last operation may be lower if last bundle isn't full
-        let max_operation = (max_bundle as u64 * BUNDLE_SIZE as u64).saturating_sub(1);
-        let global_ops = parse_operation_range(&ops_str, max_operation)?;
-        
-        // Convert to (bundle, position) pairs and create a lookup map
-        let mut ops_map = HashMap::new();
-        for global_op in global_ops {
-            let (bundle, position) = global_op_to_bundle_position(global_op);
-            ops_map.insert((bundle, position), true);
-        }
-        Some(ops_map)
+        let max_operation = total_operations_from_bundles(max_bundle).saturating_sub(1);
+        Some(OperationFilter::parse(&ops_str, max_operation)?)
     } else {
         None
     };
@@ -118,17 +101,10 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
         utils::parse_bundle_spec(Some(bundles_str), max_bundle)?
     } else if cmd.all {
         (1..=max_bundle).collect()
-    } else if ops_to_export.is_some() {
-        // When exporting specific operations, collect unique bundle numbers
-        let mut bundles: Vec<u32> = ops_to_export
-            .as_ref()
-            .unwrap()
-            .keys()
-            .map(|(bundle, _)| *bundle)
-            .collect();
-        bundles.sort_unstable();
-        bundles.dedup();
-        bundles
+    } else if let Some(ref filter) = ops_to_export {
+        // When exporting specific operations, calculate which bundles are needed
+        // from the operation ranges without materializing all operations
+        filter.get_bundle_numbers(max_bundle)
     } else {
         anyhow::bail!("Must specify either --bundles, --all, or --ops");
     };
@@ -151,9 +127,9 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
 
     // Display what is being exported (always visible unless quiet)
     if !quiet {
-        if let Some(ref ops_map) = ops_to_export {
-            let op_count = ops_map.len();
-            eprintln!("Exporting {} operations", utils::format_number(op_count as u64));
+        if let Some(ref filter) = ops_to_export {
+            let op_count = filter.estimated_count();
+            eprintln!("Exporting {} operations", utils::format_number(op_count));
         } else {
             let bundle_range_str = format_bundle_range(&bundle_numbers);
             eprintln!("Exporting bundles: {} ({})", bundle_range_str, bundle_numbers.len());
@@ -242,8 +218,9 @@ pub fn run(cmd: ExportCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resu
         // Write lines (filtering by operation position if --ops is specified)
         for (pos, line) in bundle_lines {
             // Check if this operation should be exported
-            if let Some(ref ops_map) = ops_to_export {
-                if !ops_map.contains_key(&(bundle_num, pos)) {
+            if let Some(ref filter) = ops_to_export {
+                let global_pos = bundle_position_to_global(bundle_num, pos);
+                if !filter.contains(global_pos) {
                     continue;
                 }
             }
@@ -389,5 +366,139 @@ fn format_bundle_range(bundles: &[u32]) -> String {
         format!("{}-{}", min, max)
     } else {
         result
+    }
+}
+
+/// Efficient filter for operation ranges that avoids materializing large lists
+/// Stores ranges and individual operations separately for O(1) or O(log n) lookups
+struct OperationFilter {
+    /// Ranges of operations (inclusive start, inclusive end)
+    ranges: Vec<(u64, u64)>,
+    /// Individual operations (for non-range specs)
+    individual: HashSet<u64>,
+}
+
+impl OperationFilter {
+    /// Parse operation range specification without materializing all values
+    /// This is much more efficient for large ranges like "0-10000000"
+    fn parse(spec: &str, max_operation: u64) -> Result<Self> {
+        use anyhow::Context;
+        
+        if max_operation == 0 {
+            anyhow::bail!("No operations available");
+        }
+
+        let mut ranges = Vec::new();
+        let mut individual = HashSet::new();
+        
+        for part in spec.split(',') {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+
+            if part.contains('-') {
+                let range: Vec<&str> = part.split('-').collect();
+                if range.len() != 2 {
+                    anyhow::bail!("Invalid range format: {}", part);
+                }
+                let start_str = range[0].trim();
+                let end_str = range[1].trim();
+
+                let start: u64 = start_str
+                    .parse()
+                    .with_context(|| format!("Invalid operation number: {}", start_str))?;
+                let end: u64 = end_str
+                    .parse()
+                    .with_context(|| format!("Invalid operation number: {}", end_str))?;
+
+                if start > end {
+                    anyhow::bail!("Invalid range: {} > {} (start must be <= end)", start, end);
+                }
+                if start > max_operation || end > max_operation {
+                    anyhow::bail!(
+                        "Invalid range: {}-{} (exceeds maximum operation {})",
+                        start,
+                        end,
+                        max_operation
+                    );
+                }
+                ranges.push((start, end));
+            } else {
+                let num: u64 = part
+                    .parse()
+                    .with_context(|| format!("Invalid operation number: {}", part))?;
+                if num > max_operation {
+                    anyhow::bail!(
+                        "Operation number {} out of range (max: {})",
+                        num,
+                        max_operation
+                    );
+                }
+                individual.insert(num);
+            }
+        }
+        
+        // Sort ranges for efficient lookup
+        ranges.sort_unstable();
+        
+        Ok(OperationFilter { ranges, individual })
+    }
+    
+    /// Check if a global operation position is included in the filter
+    fn contains(&self, global_pos: u64) -> bool {
+        // Check individual operations first (O(1))
+        if self.individual.contains(&global_pos) {
+            return true;
+        }
+        
+        // Check ranges (O(log n) with binary search, but we use linear for simplicity)
+        // For small number of ranges, linear is fine
+        for &(start, end) in &self.ranges {
+            if global_pos >= start && global_pos <= end {
+                return true;
+            }
+        }
+        
+        false
+    }
+    
+    /// Get bundle numbers that contain operations in this filter
+    /// This calculates bundles from range bounds without materializing all operations
+    fn get_bundle_numbers(&self, max_bundle: u32) -> Vec<u32> {
+        let mut bundle_set = HashSet::new();
+        
+        // Process ranges
+        for &(start, end) in &self.ranges {
+            // Convert start and end to bundle numbers
+            let (start_bundle, _) = global_to_bundle_position(start);
+            let (end_bundle, _) = global_to_bundle_position(end);
+            
+            // Add all bundles in the range
+            for bundle in start_bundle..=end_bundle.min(max_bundle) {
+                bundle_set.insert(bundle);
+            }
+        }
+        
+        // Process individual operations
+        for &op in &self.individual {
+            let (bundle, _) = global_to_bundle_position(op);
+            if bundle <= max_bundle {
+                bundle_set.insert(bundle);
+            }
+        }
+        
+        let mut bundles: Vec<u32> = bundle_set.into_iter().collect();
+        bundles.sort_unstable();
+        bundles
+    }
+    
+    /// Estimate the number of operations (for display purposes)
+    fn estimated_count(&self) -> u64 {
+        let range_count: u64 = self.ranges.iter()
+            .map(|&(start, end)| end.saturating_sub(start).saturating_add(1))
+            .sum();
+        let individual_count = self.individual.len() as u64;
+        range_count.saturating_add(individual_count)
     }
 }

@@ -44,7 +44,7 @@ pub struct CleanCommand {
 
 pub fn run(cmd: CleanCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
     let verbose = cmd.verbose || global_verbose;
-    let manager = utils::create_manager(dir.clone(), verbose, false)?;
+    let manager = utils::create_manager(dir.clone(), verbose, false, false)?;
 
     // Step 1: Preview what will be cleaned
     let preview = manager.clean_preview()?;

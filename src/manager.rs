@@ -1,5 +1,5 @@
 // src/manager.rs
-use crate::constants;
+use crate::constants::{self, bundle_position_to_global, total_operations_from_bundles};
 use crate::index::{BundleMetadata, Index};
 use crate::iterators::{ExportIterator, QueryIterator, RangeIterator};
 use crate::operations::{Operation, OperationFilter, OperationRequest, OperationWithLocation};
@@ -46,6 +46,7 @@ pub struct BundleManager {
     did_index: Arc<RwLock<Option<did_index::Manager>>>,
     stats: Arc<RwLock<ManagerStats>>,
     mempool: Arc<RwLock<Option<mempool::Mempool>>>,
+    mempool_checked: Arc<RwLock<bool>>, // Cache whether we've checked for mempool (to avoid repeated file checks)
     handle_resolver: Option<Arc<handle_resolver::HandleResolver>>,
     verbose: Arc<Mutex<bool>>,
 }
@@ -62,8 +63,11 @@ pub struct ManagerStats {
 #[derive(Debug, Clone)]
 pub struct ResolveResult {
     pub document: crate::resolver::DIDDocument,
+    pub operation: Operation, // The operation used for resolution
     pub bundle_number: u32,
     pub position: usize,
+    pub mempool_time: std::time::Duration,
+    pub mempool_load_time: std::time::Duration,
     pub index_time: std::time::Duration,
     pub load_time: std::time::Duration,
     pub total_time: std::time::Duration,
@@ -71,6 +75,16 @@ pub struct ResolveResult {
     pub shard_num: u8,
     pub shard_stats: Option<did_index::DIDLookupStats>,
     pub lookup_timings: Option<did_index::DIDLookupTimings>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DIDOperationsResult {
+    pub operations: Vec<Operation>,
+    pub operations_with_locations: Option<Vec<OperationWithLocation>>,
+    pub stats: Option<did_index::DIDLookupStats>,
+    pub shard_num: Option<u8>,
+    pub lookup_timings: Option<did_index::DIDLookupTimings>,
+    pub load_time: Option<std::time::Duration>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -107,40 +121,128 @@ pub struct CleanPreviewFile {
     pub size: u64,
 }
 
-impl BundleManager {
-    pub fn new(directory: PathBuf) -> Result<Self> {
-        Self::with_handle_resolver(directory, None)
-    }
+/// Options for configuring BundleManager initialization
+#[derive(Debug, Clone)]
+pub struct ManagerOptions {
+    /// Optional handle resolver URL for resolving @handle.did identifiers
+    pub handle_resolver_url: Option<String>,
+    /// Whether to preload the mempool at initialization (for server use)
+    pub preload_mempool: bool,
+    /// Whether to enable verbose logging
+    pub verbose: bool,
+}
 
-    pub fn with_handle_resolver(
-        directory: PathBuf,
-        handle_resolver_url: Option<String>,
-    ) -> Result<Self> {
+impl Default for ManagerOptions {
+    fn default() -> Self {
+        Self {
+            handle_resolver_url: None,
+            preload_mempool: false,
+            verbose: false,
+        }
+    }
+}
+
+/// Trait to allow passing ManagerOptions or using defaults
+pub trait IntoManagerOptions {
+    fn into_options(self) -> ManagerOptions;
+}
+
+impl IntoManagerOptions for ManagerOptions {
+    fn into_options(self) -> ManagerOptions {
+        self
+    }
+}
+
+impl IntoManagerOptions for () {
+    fn into_options(self) -> ManagerOptions {
+        ManagerOptions::default()
+    }
+}
+
+// Convenience: allow creating from individual components
+impl IntoManagerOptions for (Option<String>, bool, bool) {
+    fn into_options(self) -> ManagerOptions {
+        ManagerOptions {
+            handle_resolver_url: self.0,
+            preload_mempool: self.1,
+            verbose: self.2,
+        }
+    }
+}
+
+impl BundleManager {
+    /// Create a new BundleManager
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use plcbundle::{BundleManager, ManagerOptions};
+    /// use std::path::PathBuf;
+    ///
+    /// // With default options
+    /// let manager = BundleManager::new(PathBuf::from("."), ())?;
+    ///
+    /// // With custom options
+    /// let options = ManagerOptions {
+    ///     handle_resolver_url: Some("https://example.com".to_string()),
+    ///     preload_mempool: true,
+    ///     verbose: true,
+    /// };
+    /// let manager = BundleManager::new(PathBuf::from("."), options)?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn new<O: IntoManagerOptions>(directory: PathBuf, options: O) -> Result<Self> {
+        let options = options.into_options();
         let init_start = std::time::Instant::now();
         let display_dir = directory.canonicalize().unwrap_or_else(|_| directory.clone());
         log::debug!("[BundleManager] Initializing BundleManager from: {}", display_dir.display());
         let index = Index::load(&directory)?;
 
-        let handle_resolver =
-            handle_resolver_url.map(|url| Arc::new(handle_resolver::HandleResolver::new(url)));
+        let handle_resolver = options
+            .handle_resolver_url
+            .map(|url| Arc::new(handle_resolver::HandleResolver::new(url)));
 
         if handle_resolver.is_some() {
             log::debug!("[BundleManager] Handle resolver configured");
         }
 
-        let total_elapsed = init_start.elapsed();
-        let total_elapsed_ms = total_elapsed.as_secs_f64() * 1000.0;
-        log::debug!("[BundleManager] BundleManager initialized successfully ({:.3}ms total)", total_elapsed_ms);
-        Ok(Self {
+        let manager = Self {
             directory: directory.clone(),
             index: Arc::new(RwLock::new(index)),
             cache: Arc::new(cache::BundleCache::new(100)),
             did_index: Arc::new(RwLock::new(None)),
             stats: Arc::new(RwLock::new(ManagerStats::default())),
             mempool: Arc::new(RwLock::new(None)),
+            mempool_checked: Arc::new(RwLock::new(false)),
             handle_resolver,
-            verbose: Arc::new(Mutex::new(false)),
-        })
+            verbose: Arc::new(Mutex::new(options.verbose)),
+        };
+
+        // Pre-initialize mempool if requested (for server use)
+        if options.preload_mempool {
+            let mempool_preload_start = std::time::Instant::now();
+            if let Err(e) = manager.load_mempool() {
+                log::debug!("[BundleManager] Mempool preload failed: {}", e);
+            } else {
+                let mempool_preload_time = mempool_preload_start.elapsed();
+                let mempool_preload_ms = mempool_preload_time.as_secs_f64() * 1000.0;
+                if let Ok(stats) = manager.get_mempool_stats() {
+                    if stats.count > 0 {
+                        log::debug!(
+                            "[BundleManager] Pre-loaded mempool: {} operations for bundle {} ({:.3}ms)",
+                            stats.count,
+                            stats.target_bundle,
+                            mempool_preload_ms
+                        );
+                    }
+                }
+            }
+        }
+
+        let total_elapsed = init_start.elapsed();
+        let total_elapsed_ms = total_elapsed.as_secs_f64() * 1000.0;
+        log::debug!("[BundleManager] BundleManager initialized successfully ({:.3}ms total)", total_elapsed_ms);
+        Ok(manager)
     }
 
     /// Ensure DID index is loaded (lazy initialization)
@@ -156,11 +258,6 @@ impl BundleManager {
             *did_index_guard = Some(did_index);
         }
         Ok(())
-    }
-
-    pub fn with_verbose(self, verbose: bool) -> Self {
-        *self.verbose.lock().unwrap() = verbose;
-        self
     }
 
     /// Get a clone of the verbose state Arc for external access
@@ -354,75 +451,91 @@ impl BundleManager {
     }
 
     // === DID Operations ===
-    pub fn get_did_operations(&self, did: &str) -> Result<Vec<Operation>> {
-        self.ensure_did_index()?;
-        let did_index = self.did_index.read().unwrap();
-        let bundle_refs = did_index.as_ref().unwrap().get_bundles_for_did(did)?;
-
-        let mut operations = Vec::new();
-        for bundle_num in bundle_refs {
-            let result = self.load_bundle(
-                bundle_num,
-                LoadOptions {
-                    filter: Some(OperationFilter {
-                        did: Some(did.to_string()),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-            )?;
-            operations.extend(result.operations);
-        }
-
-        Ok(operations)
-    }
-
-    /// Get DID operations with location information (bundle number and position)
-    pub fn get_did_operations_with_locations(
+    /// Get all operations for a DID from both bundles and mempool
+    /// 
+    /// # Arguments
+    /// * `did` - The DID to look up
+    /// * `include_locations` - If true, also return operations with location information
+    /// * `include_stats` - If true, include detailed lookup statistics
+    pub fn get_did_operations(
         &self,
         did: &str,
-    ) -> Result<Vec<OperationWithLocation>> {
-        self.ensure_did_index()?;
-        let locations = {
-            let did_index = self.did_index.read().unwrap();
-            did_index.as_ref().unwrap().get_did_locations(did)?
-        };
-
-        let (ops_with_loc, _) = self.collect_operations_for_locations(&locations)?;
-        Ok(ops_with_loc)
-    }
-
-    /// Get DID operations with locations and detailed statistics (for verbose logging)
-    pub fn get_did_operations_with_locations_and_stats(
-        &self,
-        did: &str,
-    ) -> Result<(
-        Vec<OperationWithLocation>,
-        did_index::DIDLookupStats,
-        u8,
-        did_index::DIDLookupTimings,
-        std::time::Duration,
-    )> {
+        include_locations: bool,
+        include_stats: bool,
+    ) -> Result<DIDOperationsResult> {
         use std::time::Instant;
+        use chrono::DateTime;
 
         self.ensure_did_index()?;
+
         let index_start = Instant::now();
-        let (locations, shard_stats, shard_num, lookup_timings) = {
+        let (locations, shard_stats, shard_num, lookup_timings) = if include_stats {
             let did_index = self.did_index.read().unwrap();
             did_index.as_ref().unwrap().get_did_locations_with_stats(did)?
+        } else {
+            let did_index = self.did_index.read().unwrap();
+            let locs = did_index.as_ref().unwrap().get_did_locations(did)?;
+            (locs, did_index::DIDLookupStats::default(), 0, did_index::DIDLookupTimings::default())
         };
         let _index_time = index_start.elapsed();
 
-        let (ops_with_loc, load_time) = self.collect_operations_for_locations(&locations)?;
+        // Get operations from bundles
+        let (bundle_ops_with_loc, load_time) = self.collect_operations_for_locations(&locations)?;
+        let mut bundle_operations: Vec<Operation> = bundle_ops_with_loc.iter().map(|owl| owl.operation.clone()).collect();
 
-        Ok((
-            ops_with_loc,
-            shard_stats,
-            shard_num,
-            lookup_timings,
-            load_time,
-        ))
+        // Get operations from mempool (only once)
+        let (mempool_ops, _mempool_load_time) = self.get_did_operations_from_mempool(did)?;
+
+        // Merge bundle and mempool operations
+        bundle_operations.extend(mempool_ops.clone());
+
+        // Sort by created_at timestamp
+        bundle_operations.sort_by(|a, b| {
+            let time_a = DateTime::parse_from_rfc3339(&a.created_at)
+                .unwrap_or_else(|_| DateTime::parse_from_rfc3339("1970-01-01T00:00:00Z").unwrap());
+            let time_b = DateTime::parse_from_rfc3339(&b.created_at)
+                .unwrap_or_else(|_| DateTime::parse_from_rfc3339("1970-01-01T00:00:00Z").unwrap());
+            time_a.cmp(&time_b)
+        });
+
+        // Build operations_with_locations if requested
+        let operations_with_locations = if include_locations {
+            let mut ops_with_loc = bundle_ops_with_loc;
+
+            // Add mempool operations with bundle=0
+            for (idx, op) in mempool_ops.iter().enumerate() {
+                ops_with_loc.push(OperationWithLocation {
+                    operation: op.clone(),
+                    bundle: 0, // Use 0 to indicate mempool
+                    position: idx,
+                    nullified: op.nullified,
+                });
+            }
+
+            // Sort all operations by timestamp
+            ops_with_loc.sort_by(|a, b| {
+                let time_a = DateTime::parse_from_rfc3339(&a.operation.created_at)
+                    .unwrap_or_else(|_| DateTime::parse_from_rfc3339("1970-01-01T00:00:00Z").unwrap());
+                let time_b = DateTime::parse_from_rfc3339(&b.operation.created_at)
+                    .unwrap_or_else(|_| DateTime::parse_from_rfc3339("1970-01-01T00:00:00Z").unwrap());
+                time_a.cmp(&time_b)
+            });
+
+            Some(ops_with_loc)
+        } else {
+            None
+        };
+
+        Ok(DIDOperationsResult {
+            operations: bundle_operations,
+            operations_with_locations,
+            stats: if include_stats { Some(shard_stats) } else { None },
+            shard_num: if include_stats { Some(shard_num) } else { None },
+            lookup_timings: if include_stats { Some(lookup_timings) } else { None },
+            load_time: if include_stats { Some(load_time) } else { None },
+        })
     }
+
 
     /// Sample random DIDs directly from the DID index without reading bundles.
     pub fn sample_random_dids(&self, count: usize, seed: Option<u64>) -> Result<Vec<String>> {
@@ -431,61 +544,156 @@ impl BundleManager {
         did_index.as_ref().unwrap().sample_random_dids(count, seed)
     }
 
-    /// Get DID operations from mempool
-    pub fn get_did_operations_from_mempool(&self, did: &str) -> Result<Vec<Operation>> {
+    /// Get DID operations from mempool (internal helper)
+    /// Mempool should be preloaded at initialization, so this is just a fast in-memory lookup
+    /// Returns (operations, load_time) where load_time is always ZERO (no lazy loading)
+    fn get_did_operations_from_mempool(&self, did: &str) -> Result<(Vec<Operation>, std::time::Duration)> {
+        use std::time::Instant;
+        
+        let mempool_start = Instant::now();
+        
+        // Mempool should be preloaded at initialization (no lazy loading)
         let mempool_guard = self.mempool.read().unwrap();
         match mempool_guard.as_ref() {
-            Some(mp) => Ok(mp.find_did_operations(did)),
-            None => Ok(Vec::new()),
+            Some(mp) => {
+                // Mempool is initialized, use it directly (fast HashMap lookup)
+                let ops = mp.find_did_operations(did);
+                let mempool_elapsed = mempool_start.elapsed();
+                log::debug!(
+                    "[Mempool] Found {} operations for DID {} in {:?}",
+                    ops.len(),
+                    did,
+                    mempool_elapsed
+                );
+                Ok((ops, std::time::Duration::ZERO))
+            }
+            None => {
+                // Mempool not initialized (wasn't preloaded and doesn't exist)
+                let mempool_elapsed = mempool_start.elapsed();
+                log::debug!(
+                    "[Mempool] No mempool initialized (checked in {:?})",
+                    mempool_elapsed
+                );
+                Ok((Vec::new(), std::time::Duration::ZERO))
+            }
         }
     }
 
-    /// Resolve DID to current W3C DID Document
-    pub fn resolve_did(&self, did: &str) -> Result<crate::resolver::DIDDocument> {
-        let result = self.resolve_did_with_stats(did)?;
-        Ok(result.document)
+    fn get_latest_did_operation_from_mempool(&self, did: &str) -> Result<(Option<(Operation, usize)>, std::time::Duration)> {
+        use std::time::Instant;
+        
+        let mempool_start = Instant::now();
+        
+        // Mempool should be preloaded at initialization (no lazy loading)
+        let mempool_guard = self.mempool.read().unwrap();
+        let result = match mempool_guard.as_ref() {
+            Some(mp) => {
+                // Use mempool's method to find latest non-nullified operation (by index, operations are sorted)
+                mp.find_latest_did_operation(did)
+            }
+            None => {
+                // Mempool not initialized
+                None
+            }
+        };
+        
+        let mempool_elapsed = mempool_start.elapsed();
+        log::debug!(
+            "[Mempool] Latest operation lookup for DID {} in {:?}",
+            did,
+            mempool_elapsed
+        );
+        
+        Ok((result, std::time::Duration::ZERO))
     }
 
-    /// Resolve DID with detailed timing statistics
-    pub fn resolve_did_with_stats(&self, did: &str) -> Result<ResolveResult> {
+    /// Resolve DID to current W3C DID Document with detailed timing statistics
+    /// Returns the latest non-nullified DID document.
+    /// If mempool has operations, uses the latest from mempool and skips bundle/index lookup.
+    pub fn resolve_did(&self, did: &str) -> Result<ResolveResult> {
         use std::time::Instant;
+        use chrono::DateTime;
 
         let total_start = Instant::now();
 
         // Validate DID format
         crate::resolver::validate_did_format(did)?;
 
-        // Get all operations for this DID with timing
+        // Check mempool first (most recent operations)
+        log::debug!("[Resolve] Checking mempool first for DID: {}", did);
+        let mempool_start = Instant::now();
+        let (latest_mempool_op, mempool_load_time) = self.get_latest_did_operation_from_mempool(did)?;
+        let mempool_time = mempool_start.elapsed();
+        log::debug!("[Resolve] Mempool check: found latest operation in {:?} (load: {:?})", mempool_time, mempool_load_time);
+
+        // If mempool has a non-nullified operation, use it and skip bundle lookup
+        if let Some((operation, position)) = latest_mempool_op {
+            let load_start = Instant::now();
+            log::debug!("[Resolve] Found latest non-nullified operation in mempool, skipping bundle lookup");
+
+            // Build document from latest mempool operation
+            let document = crate::resolver::resolve_did_document(did, &[operation.clone()])?;
+            let load_time = load_start.elapsed();
+
+            return Ok(ResolveResult {
+                document,
+                operation,
+                bundle_number: 0, // bundle=0 for mempool
+                position,
+                mempool_time,
+                mempool_load_time,
+                index_time: std::time::Duration::ZERO,
+                load_time,
+                total_time: total_start.elapsed(),
+                locations_found: 1, // Found one operation in mempool
+                shard_num: 0, // No shard for mempool
+                shard_stats: None,
+                lookup_timings: None,
+            });
+        }
+
+        // Mempool is empty or all nullified - check bundles
+        log::debug!("[Resolve] No non-nullified operations in mempool, checking bundles for DID: {}", did);
         self.ensure_did_index()?;
         let index_start = Instant::now();
         let did_index = self.did_index.read().unwrap();
         let (locations, shard_stats, shard_num, lookup_timings) =
             did_index.as_ref().unwrap().get_did_locations_with_stats(did)?;
         let index_time = index_start.elapsed();
+        log::debug!("[Resolve] Bundle index lookup: {} locations found in {:?}", locations.len(), index_time);
 
-        if locations.is_empty() {
-            anyhow::bail!("DID not found: {}", did);
-        }
-
-        // Find latest non-nullified operation
-        let latest = locations
-            .iter()
-            .filter(|loc| !loc.nullified())
-            .max_by_key(|loc| loc.global_position())
-            .ok_or_else(|| anyhow::anyhow!("All operations nullified"))?;
-
-        // Load the operation
+        // Find latest non-nullified operation from bundles
         let load_start = Instant::now();
-        let operation = self.get_operation(latest.bundle() as u32, latest.position() as usize)?;
+        let mut latest_operation: Option<(Operation, u32, usize)> = None;
+        let mut latest_time = DateTime::parse_from_rfc3339("1970-01-01T00:00:00Z").unwrap();
+        
+        for loc in &locations {
+            if !loc.nullified() {
+                if let Ok(op) = self.get_operation(loc.bundle() as u32, loc.position() as usize) {
+                    if let Ok(op_time) = DateTime::parse_from_rfc3339(&op.created_at) {
+                        if op_time > latest_time {
+                            latest_time = op_time;
+                            latest_operation = Some((op, loc.bundle() as u32, loc.position() as usize));
+                        }
+                    }
+                }
+            }
+        }
         let load_time = load_start.elapsed();
 
-        // Build document
-        let document = crate::resolver::resolve_did_document(did, &[operation])?;
+        let (operation, bundle_number, position) = latest_operation
+            .ok_or_else(|| anyhow::anyhow!("DID not found: {} (checked bundles and mempool)", did))?;
+
+        // Build document from latest bundle operation
+        let document = crate::resolver::resolve_did_document(did, &[operation.clone()])?;
 
         Ok(ResolveResult {
             document,
-            bundle_number: latest.bundle() as u32,
-            position: latest.position() as usize,
+            operation: operation.clone(),
+            bundle_number,
+            position,
+            mempool_time,
+            mempool_load_time,
             index_time,
             load_time,
             total_time: total_start.elapsed(),
@@ -529,7 +737,7 @@ impl BundleManager {
         }
 
         ops_with_loc.sort_by_key(|owl| {
-            ((owl.bundle - 1) as u64) * constants::BUNDLE_SIZE as u64 + owl.position as u64
+            bundle_position_to_global(owl.bundle, owl.position)
         });
 
         Ok((ops_with_loc, load_start.elapsed()))
@@ -539,8 +747,8 @@ impl BundleManager {
         let mut results = HashMap::new();
 
         for did in dids {
-            let ops = self.get_did_operations(&did)?;
-            results.insert(did, ops);
+            let result = self.get_did_operations(&did, false, false)?;
+            results.insert(did, result.operations);
         }
 
         Ok(results)
@@ -940,25 +1148,67 @@ impl BundleManager {
 
     // === Mempool Management ===
 
-    /// Initialize or get existing mempool for the next bundle
+    /// Check if mempool is loaded (does not load it)
+    /// Returns Ok(()) if mempool is loaded, Err if not loaded
     pub fn get_mempool(&self) -> Result<()> {
+        let mempool_guard = self.mempool.read().unwrap();
+        if mempool_guard.is_some() {
+            Ok(())
+        } else {
+            anyhow::bail!("Mempool not loaded. Call load_mempool() first.")
+        }
+    }
+
+    /// Explicitly load mempool from disk (or create empty if file doesn't exist)
+    /// This should be called during initialization/preload, not lazily
+    pub fn load_mempool(&self) -> Result<()> {
+        // Check if already loaded
+        {
+            let mempool_guard = self.mempool.read().unwrap();
+            if mempool_guard.is_some() {
+                return Ok(()); // Already loaded
+            }
+        }
+
+        // Acquire write lock to load
         let mut mempool_guard = self.mempool.write().unwrap();
 
-        if mempool_guard.is_none() {
-            let last_bundle = self.get_last_bundle();
-            let target_bundle = last_bundle + 1;
+        // Double-check after acquiring write lock
+        if mempool_guard.is_some() {
+            return Ok(());
+        }
 
-            // Get min timestamp from last bundle's last operation
-            let min_timestamp = self.get_last_bundle_timestamp()?;
+        // Load mempool
+        let last_bundle = self.get_last_bundle();
+        let target_bundle = last_bundle + 1;
 
-            let mp = mempool::Mempool::new(
-                &self.directory,
-                target_bundle,
-                min_timestamp,
-                *self.verbose.lock().unwrap(),
-            )?;
+        // Get min timestamp from last bundle's last operation
+        let min_timestamp = self.get_last_bundle_timestamp()?;
 
-            *mempool_guard = Some(mp);
+        // Mempool::new will check if file exists and load it if it does
+        // If file doesn't exist, it creates an empty mempool
+        match mempool::Mempool::new(
+            &self.directory,
+            target_bundle,
+            min_timestamp,
+            *self.verbose.lock().unwrap(),
+        ) {
+            Ok(mp) => {
+                // Mempool loaded (either from file or empty)
+                *mempool_guard = Some(mp);
+                *self.mempool_checked.write().unwrap() = true;
+            }
+            Err(e) => {
+                // Mempool file doesn't exist or error loading
+                // Mark as checked so we don't try again
+                *self.mempool_checked.write().unwrap() = true;
+                // Return error only if it's not a "file not found" type error
+                if e.to_string().contains("No such file") || e.to_string().contains("not found") {
+                    // File doesn't exist, that's fine - just return Ok with None mempool
+                    return Ok(());
+                }
+                return Err(e);
+            }
         }
 
         Ok(())
@@ -1024,8 +1274,9 @@ impl BundleManager {
     }
 
     /// Add operations to mempool
+    /// Mempool must be loaded first (call load_mempool())
     pub fn add_to_mempool(&self, ops: Vec<Operation>) -> Result<usize> {
-        self.get_mempool()?;
+        self.get_mempool()?; // Check if loaded
 
         let mut mempool_guard = self.mempool.write().unwrap();
 
@@ -1413,8 +1664,8 @@ impl BundleManager {
             );
         }
 
-        // Ensure mempool is initialized
-        self.get_mempool()?;
+        // Ensure mempool is loaded (load if needed)
+        self.load_mempool()?;
 
         // Fetch until we have 10,000 operations
         let mut fetch_num = 0;
@@ -2886,7 +3137,7 @@ impl BundleManager {
     /// Cursor = (last_bundle * BUNDLE_SIZE) + mempool_ops_count
     pub fn get_current_cursor(&self) -> u64 {
         let index = self.index.read().unwrap();
-        let bundled_ops = index.last_bundle as u64 * constants::BUNDLE_SIZE as u64;
+        let bundled_ops = total_operations_from_bundles(index.last_bundle);
 
         // Add mempool operations if available
         let mempool_guard = self.mempool.read().unwrap();
@@ -3033,6 +3284,7 @@ impl BundleManager {
             did_index: Arc::clone(&self.did_index),
             stats: Arc::clone(&self.stats),
             mempool: Arc::clone(&self.mempool),
+            mempool_checked: Arc::clone(&self.mempool_checked),
             handle_resolver: self.handle_resolver.clone(),
             verbose: Arc::clone(&self.verbose),
         }

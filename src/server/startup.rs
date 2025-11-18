@@ -54,28 +54,35 @@ pub fn initialize_manager(config: &StartupConfig) -> Result<BundleManager> {
         config.handle_resolver_url.clone()
     };
 
+    // Preload mempool for server use (faster responses)
+    let preload_mempool = true;
+    
+    let options = crate::ManagerOptions {
+        handle_resolver_url: handle_resolver_url.clone(),
+        preload_mempool,
+        verbose: config.verbose,
+    };
+    
     let manager = if config.sync {
         // Sync mode can auto-init
-        match BundleManager::with_handle_resolver(config.dir.clone(), handle_resolver_url.clone()) {
+        match BundleManager::new(config.dir.clone(), options.clone()) {
             Ok(mgr) => mgr,
             Err(_) => {
                 // Repository doesn't exist, try to initialize
                 BundleManager::init_repository(&config.dir, config.plc_url.clone(), false)
                     .context("Failed to initialize repository")?;
                 // Try again after initialization
-                BundleManager::with_handle_resolver(config.dir.clone(), handle_resolver_url.clone())
+                BundleManager::new(config.dir.clone(), options)
                     .context("Failed to open repository after initialization")?
             }
         }
     } else {
         // Read-only mode cannot auto-init
-        BundleManager::with_handle_resolver(config.dir.clone(), handle_resolver_url).context(format!(
+        BundleManager::new(config.dir.clone(), options).context(format!(
             "Repository not found. Use '{} init' first or run with --sync",
             constants::BINARY_NAME
         ))?
     };
-
-    let manager = manager.with_verbose(config.verbose);
 
     // Log handle resolver configuration
     if config.verbose {
@@ -466,8 +473,8 @@ pub fn setup_sync_loop(
             shutdown_tx: Some(sync_runtime.shutdown_sender()),
         };
 
-        use crate::sync::ServerLogger;
-        let logger = ServerLogger::new(verbose, interval);
+        use crate::sync::SyncLoggerImpl;
+        let logger = SyncLoggerImpl::new_server(verbose, interval);
         let sync_manager = SyncManager::new(manager_clone, client, sync_config).with_logger(logger);
 
         if let Err(e) = sync_manager.run_continuous().await {
@@ -509,7 +516,7 @@ pub async fn start_server(
 ) -> Result<()> {
     use std::net::SocketAddr;
 
-    // Initialize manager
+    // Initialize manager (with mempool preload for server use)
     let mut manager = initialize_manager(&config)?;
 
     // Setup DID index if resolver is enabled

@@ -13,8 +13,7 @@ The `plcbundle-rs` library provides a unified, high-level API through the `Bundl
 
 ```rust
 // === Initialization ===
-BundleManager::new(directory: PathBuf) -> Result<Self>
-BundleManager::with_verbose(verbose: bool) -> Self
+BundleManager::new<O: IntoManagerOptions>(directory: PathBuf, options: O) -> Result<Self>
 
 // === Repository Setup ===
 init_repository(directory: PathBuf, origin: String) -> Result<()>  // Creates plc_bundles.json
@@ -248,10 +247,56 @@ pub struct BundleManager {
 }
 
 impl BundleManager {
-    pub fn new(directory: PathBuf) -> Result<Self>
-    pub fn with_cache_size(directory: PathBuf, cache_size: usize) -> Result<Self>
+    /// Create a new BundleManager with options
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use plcbundle::{BundleManager, ManagerOptions};
+    /// use std::path::PathBuf;
+    ///
+    /// // With default options
+    /// let manager = BundleManager::new(PathBuf::from("."), ())?;
+    ///
+    /// // With custom options
+    /// let options = ManagerOptions {
+    ///     handle_resolver_url: Some("https://example.com".to_string()),
+    ///     preload_mempool: true,
+    ///     verbose: true,
+    /// };
+    /// let manager = BundleManager::new(PathBuf::from("."), options)?;
+    /// ```
+    pub fn new<O: IntoManagerOptions>(directory: PathBuf, options: O) -> Result<Self>
 }
 ```
+
+#### ManagerOptions
+
+```rust
+/// Options for configuring BundleManager initialization
+pub struct ManagerOptions {
+    /// Optional handle resolver URL for resolving @handle.did identifiers
+    pub handle_resolver_url: Option<String>,
+    /// Whether to preload the mempool at initialization (for server use)
+    pub preload_mempool: bool,
+    /// Whether to enable verbose logging
+    pub verbose: bool,
+}
+
+impl Default for ManagerOptions {
+    fn default() -> Self {
+        Self {
+            handle_resolver_url: None,
+            preload_mempool: false,
+            verbose: false,
+        }
+    }
+}
+```
+
+**Usage:**
+- Pass `()` to use default options: `BundleManager::new(dir, ())`
+- Pass `ManagerOptions` for custom configuration (including verbose mode)
 
 ---
 
@@ -983,6 +1028,7 @@ The high-level API maps cleanly to C/Go:
 
 ```c
 // Direct 1:1 mapping
+// Note: C bindings use default options (equivalent to passing () in Rust)
 CBundleManager* bundle_manager_new(const char* path);
 int bundle_manager_load_bundle(CBundleManager* mgr, uint32_t num, CLoadOptions* opts, CLoadResult* result);
 int bundle_manager_get_operation(CBundleManager* mgr, uint32_t bundle, size_t pos, COperation* out);

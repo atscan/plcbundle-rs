@@ -27,7 +27,8 @@ pub use constants::{
     BINARY_NAME, BUNDLE_SIZE, DEFAULT_HANDLE_RESOLVER_URL, DEFAULT_ORIGIN,
     DEFAULT_PLC_DIRECTORY_URL, DEFAULT_RATE_LIMIT, DID_INDEX_CONFIG, DID_INDEX_DIR,
     DID_INDEX_SHARDS, FRAME_SIZE, MEMPOOL_FILE_PREFIX, VERSION, ZSTD_COMPRESSION_LEVEL, created_by,
-    user_agent,
+    user_agent, bundle_position_to_global, total_operations_from_bundles, mempool_position_to_global,
+    global_to_bundle_position,
 };
 pub use did_index::{DIDLookupStats, DIDLookupTimings};
 pub use format::{
@@ -41,9 +42,9 @@ pub use iterators::{ExportIterator, QueryIterator, RangeIterator};
 pub use manager::{
     BundleInfo, BundleManager, BundleRange, ChainVerifyResult, ChainVerifySpec, CleanPreview,
     CleanPreviewFile, CleanResult, CompressionType, DIDIndexStats, ExportFormat, ExportSpec,
-    InfoFlags, LoadOptions, LoadResult, ManagerStats, OperationResult, QuerySpec, RebuildStats,
-    ResolveResult, RollbackFileStats, RollbackPlan, RollbackResult, RollbackSpec, SyncResult,
-    VerifyResult, VerifySpec, WarmUpSpec, WarmUpStrategy,
+    InfoFlags, IntoManagerOptions, LoadOptions, LoadResult, ManagerOptions, ManagerStats,
+    OperationResult, QuerySpec, RebuildStats, ResolveResult, RollbackFileStats, RollbackPlan,
+    RollbackResult, RollbackSpec, SyncResult, VerifyResult, VerifySpec, WarmUpSpec, WarmUpStrategy,
 };
 pub use mempool::{Mempool, MempoolStats};
 pub use operations::{Operation, OperationFilter, OperationRequest, OperationWithLocation};
@@ -56,6 +57,6 @@ pub use resolver::{
 };
 pub use plc_client::PLCClient;
 pub use sync::{
-    CliLogger, ServerLogger, SyncConfig, SyncEvent, SyncLogger, SyncManager, SyncStats,
+    SyncLoggerImpl, SyncConfig, SyncEvent, SyncLogger, SyncManager, SyncStats,
 };
 pub use runtime::BundleRuntime;

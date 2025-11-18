@@ -49,11 +49,22 @@ pub struct InitCommand {
 
 pub fn run(cmd: InitCommand) -> Result<()> {
     // Get absolute path for display
+    // Normalize the path to avoid trailing dots or other artifacts
     let dir = if cmd.dir.is_absolute() {
-        cmd.dir.clone()
+        cmd.dir.canonicalize().unwrap_or_else(|_| cmd.dir.clone())
+    } else if cmd.dir == PathBuf::from(".") {
+        // Special case: if dir is ".", just use current directory directly
+        std::env::current_dir()?
     } else {
-        std::env::current_dir()?.join(&cmd.dir)
+        let joined = std::env::current_dir()?.join(&cmd.dir);
+        joined.canonicalize().unwrap_or(joined)
     };
+
+    // Check if directory is already initialized (unless --force is used)
+    let index_path = dir.join("plc_bundles.json");
+    if index_path.exists() && !cmd.force {
+        return Err(already_initialized_error(&dir));
+    }
 
     // Determine PLC Directory URL
     let plc_url = if let Some(plc) = cmd.plc {
@@ -71,9 +82,8 @@ pub fn run(cmd: InitCommand) -> Result<()> {
     let initialized = BundleManager::init_repository(&dir, plc_url.clone(), cmd.force)?;
 
     if !initialized {
-        eprintln!("Repository already initialized at: {}", dir.display());
-        eprintln!("Use --force to reinitialize");
-        return Ok(());
+        // This shouldn't happen since we checked above, but handle it just in case
+        return Err(already_initialized_error(&dir));
     }
 
     // Check if user needs to cd to the directory
@@ -106,6 +116,14 @@ pub fn run(cmd: InitCommand) -> Result<()> {
     );
 
     Ok(())
+}
+
+/// Create an error for when repository is already initialized
+fn already_initialized_error(dir: &PathBuf) -> anyhow::Error {
+    anyhow::anyhow!(
+        "Repository already initialized at: {}\n\nUse --force to reinitialize",
+        dir.display()
+    )
 }
 
 fn prompt_plc_directory_url() -> Result<String> {

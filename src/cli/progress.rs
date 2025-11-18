@@ -168,14 +168,6 @@ impl TwoStageProgress {
         }
     }
 
-    /// Create a callback function for build_from_scratch (signature: Fn(u32, u32, u64, Option<String>))
-    pub fn callback_for_build_from_scratch(&self) -> impl Fn(u32, u32, u64, Option<String>) + Send + Sync + 'static {
-        let progress = self.clone_for_callback();
-        move |current, total, bytes_processed, _stage| {
-            progress.update_progress(current, total, bytes_processed);
-        }
-    }
-
     /// Clone the necessary parts for use in callbacks
     fn clone_for_callback(&self) -> TwoStageProgressCallback {
         TwoStageProgressCallback {

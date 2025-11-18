@@ -79,7 +79,7 @@ impl HasGlobalFlags for MempoolCommand {
 }
 
 pub fn run(cmd: MempoolCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
-    let manager = utils::create_manager(dir.clone(), global_verbose, false)?;
+    let manager = utils::create_manager(dir.clone(), global_verbose, false, false)?;
 
     match cmd.command {
         Some(MempoolSubcommand::Status { verbose }) => {
@@ -95,12 +95,21 @@ pub fn run(cmd: MempoolCommand, dir: PathBuf, global_verbose: bool) -> Result<()
 }
 
 fn show_status(manager: &BundleManager, dir: &PathBuf, verbose: bool) -> Result<()> {
-    manager.get_mempool()?;
+    manager.load_mempool()?;
     let stats: plcbundle::MempoolStats = manager.get_mempool_stats()?;
+
+    // Show mempool file location
+    let mempool_filename = format!(
+        "{}{:06}.jsonl",
+        constants::MEMPOOL_FILE_PREFIX,
+        stats.target_bundle
+    );
+    let mempool_path: PathBuf = utils::display_path(dir).join(mempool_filename);
 
     println!("Mempool Status");
     println!("══════════════\n");
     println!("  Directory:      {}", utils::display_path(dir).display());
+    println!("  Mempool File:   {}", mempool_path.display());
     println!("  Target bundle:  {}", stats.target_bundle);
     println!(
         "  Operations:     {} / {}",
@@ -193,20 +202,11 @@ fn show_status(manager: &BundleManager, dir: &PathBuf, verbose: bool) -> Result<
         }
     }
 
-    // Show mempool file location
-    let mempool_filename = format!(
-        "{}{:06}.jsonl",
-        constants::MEMPOOL_FILE_PREFIX,
-        stats.target_bundle
-    );
-    let mempool_path = utils::display_path(dir).join(mempool_filename);
-    println!("File: {}", mempool_path.display());
-
     Ok(())
 }
 
 fn clear(manager: &BundleManager, dir: &PathBuf, force: bool) -> Result<()> {
-    manager.get_mempool()?;
+    manager.load_mempool()?;
     let stats = manager.get_mempool_stats()?;
     let count = stats.count;
 
@@ -240,7 +240,7 @@ fn clear(manager: &BundleManager, dir: &PathBuf, force: bool) -> Result<()> {
 }
 
 fn dump(manager: &BundleManager, output: Option<PathBuf>) -> Result<()> {
-    manager.get_mempool()?;
+    manager.load_mempool()?;
     let ops = manager.get_mempool_operations()?;
 
     if ops.is_empty() {

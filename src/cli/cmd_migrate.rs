@@ -70,7 +70,7 @@ impl HasGlobalFlags for MigrateCommand {
 }
 
 pub fn run(cmd: MigrateCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
-    let manager = super::utils::create_manager(dir.clone(), global_verbose, false)?;
+    let manager = super::utils::create_manager(dir.clone(), global_verbose, false, false)?;
 
     // Auto-detect number of threads if 0
     let workers = super::utils::get_worker_threads(cmd.threads, 4);

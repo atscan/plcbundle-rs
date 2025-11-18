@@ -117,7 +117,7 @@ struct BenchmarkResult {
 }
 
 pub fn run(cmd: BenchCommand, dir: PathBuf, global_verbose: bool) -> Result<()> {
-    let manager = super::utils::create_manager(dir.clone(), global_verbose, false)?;
+    let manager = super::utils::create_manager(dir.clone(), global_verbose, false, false)?;
 
     // Determine which benchmarks to run
     let run_all = cmd.all
@@ -549,7 +549,7 @@ fn bench_did_resolution(
 
     // Warmup
     for i in 0..warmup.min(10) {
-        let _ = manager.resolve_did(&dids[i % dids.len()])?;
+        let _ = manager.resolve_did(&dids[i % dids.len()])?.document;
     }
 
     // Benchmark - different DID each iteration
@@ -569,7 +569,7 @@ fn bench_did_resolution(
 
         let did = &dids[i % dids.len()];
         let start = Instant::now();
-        let _ = manager.resolve_did(did)?;
+        let _ = manager.resolve_did(did)?.document;
         timings.push(start.elapsed().as_secs_f64() * 1000.0);
     }
 

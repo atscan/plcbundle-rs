@@ -78,7 +78,7 @@ pub struct LsCommand {
 }
 
 pub fn run(cmd: LsCommand, dir: PathBuf, verbose: bool, quiet: bool) -> Result<()> {
-    let manager = super::utils::create_manager(dir, verbose, quiet)?;
+    let manager = super::utils::create_manager(dir, verbose, quiet, false)?;
 
     // Get all bundle metadata from the index
     let bundles = super::utils::get_all_bundle_metadata(&manager);

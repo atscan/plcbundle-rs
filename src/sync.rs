@@ -192,48 +192,64 @@ pub trait SyncLogger: Send + Sync {
     fn as_any(&self) -> &dyn Any;
 }
 
-/// Server-style logger (detailed output with timing info)
-pub struct ServerLogger {
-    verbose: Arc<Mutex<bool>>,
-    interval: Duration,
+/// Unified sync logger (used for both CLI and server)
+pub struct SyncLoggerImpl {
+    verbose: Option<Arc<Mutex<bool>>>,
+    interval: Option<Duration>,
 }
 
-impl ServerLogger {
-    pub fn new(verbose: bool, interval: Duration) -> Self {
+impl SyncLoggerImpl {
+    /// Create a new logger for server/continuous mode (with verbose and interval)
+    pub fn new_server(verbose: bool, interval: Duration) -> Self {
         Self {
-            verbose: Arc::new(Mutex::new(verbose)),
-            interval,
+            verbose: Some(Arc::new(Mutex::new(verbose))),
+            interval: Some(interval),
         }
     }
 
-    /// Get a clone of the verbose state Arc for external access
-    pub fn verbose_handle(&self) -> Arc<Mutex<bool>> {
+    /// Create a new logger for CLI/one-time mode
+    pub fn new_cli() -> Self {
+        Self {
+            verbose: None,
+            interval: None,
+        }
+    }
+
+    /// Get a clone of the verbose state Arc for external access (server mode only)
+    pub fn verbose_handle(&self) -> Option<Arc<Mutex<bool>>> {
         self.verbose.clone()
     }
 
-    /// Toggle verbose mode
-    pub fn toggle_verbose(&self) -> bool {
-        let mut verbose = self.verbose.lock().unwrap();
-        *verbose = !*verbose;
-        *verbose
+    /// Toggle verbose mode (server mode only)
+    pub fn toggle_verbose(&self) -> Option<bool> {
+        self.verbose.as_ref().map(|verbose| {
+            let mut v = verbose.lock().unwrap();
+            *v = !*v;
+            *v
+        })
     }
 
-    /// Set verbose mode
+    /// Set verbose mode (server mode only)
     pub fn set_verbose(&self, value: bool) {
-        let mut verbose = self.verbose.lock().unwrap();
-        *verbose = value;
+        if let Some(verbose) = &self.verbose {
+            let mut v = verbose.lock().unwrap();
+            *v = value;
+        }
     }
 }
 
-impl SyncLogger for ServerLogger {
+
+impl SyncLogger for SyncLoggerImpl {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn on_sync_start(&self, interval: Duration) {
         eprintln!("[Sync] Starting initial sync...");
-        if *self.verbose.lock().unwrap() {
-            eprintln!("[Sync] Sync loop interval: {:?}", interval);
+        if let Some(verbose) = &self.verbose {
+            if *verbose.lock().unwrap() {
+                eprintln!("[Sync] Sync loop interval: {:?}", interval);
+            }
         }
     }
 
@@ -282,12 +298,12 @@ impl SyncLogger for ServerLogger {
     ) {
         if new_ops > 0 {
             eprintln!(
-                "[Sync] ✓ Bundle {:06} | mempool: {} ({:+}) | fetch: {}ms",
+                "[Sync] ✓ Bundle {:06} (upcoming) | mempool: {} ({:+}) | fetch: {}ms",
                 next_bundle, mempool_count, new_ops as i32, fetch_duration_ms
             );
         } else {
             eprintln!(
-                "[Sync] ✓ Bundle {:06} | mempool: {} | fetch: {}ms",
+                "[Sync] ✓ Bundle {:06} (upcoming) | mempool: {} | fetch: {}ms",
                 next_bundle, mempool_count, fetch_duration_ms
             );
         }
@@ -297,7 +313,7 @@ impl SyncLogger for ServerLogger {
         &self,
         total_bundles: u32,
         mempool_count: usize,
-        _interval: Duration,
+        interval: Duration,
     ) {
         eprintln!(
             "[Sync] ✓ Initial sync complete ({} bundles synced)",
@@ -306,77 +322,17 @@ impl SyncLogger for ServerLogger {
         if mempool_count > 0 {
             eprintln!("[Sync] ✓ Mempool: {} operations", mempool_count);
         }
-        eprintln!(
-            "[Sync] Now monitoring for new operations (interval: {:?})...",
-            self.interval
-        );
+        // Only show monitoring message for continuous mode (when interval is stored)
+        if let Some(display_interval) = self.interval {
+            eprintln!(
+                "[Sync] Now monitoring for new operations (interval: {:?})...",
+                display_interval
+            );
+        }
     }
 
     fn on_error(&self, error: &str) {
         eprintln!("[Sync] Error during sync: {}", error);
-    }
-}
-
-/// CLI-style logger (minimal output, only shows summaries)
-pub struct CliLogger {
-    quiet: bool,
-}
-
-impl CliLogger {
-    pub fn new(quiet: bool) -> Self {
-        Self { quiet }
-    }
-}
-
-impl SyncLogger for CliLogger {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn on_sync_start(&self, _interval: Duration) {
-        // CLI doesn't show sync start message
-    }
-
-    fn on_bundle_created(
-        &self,
-        _bundle_num: u32,
-        _hash: &str,
-        _age: &str,
-        _fetch_duration_ms: u64,
-        _bundle_save_ms: u64,
-        _index_ms: u64,
-        _total_duration_ms: u64,
-        _fetch_requests: usize,
-        _did_index_compacted: bool,
-        _unique_dids: u32,
-        _size_bytes: u64,
-    ) {
-        // CLI doesn't show individual bundle creation
-    }
-
-    fn on_caught_up(
-        &self,
-        _next_bundle: u32,
-        _mempool_count: usize,
-        _new_ops: usize,
-        _fetch_duration_ms: u64,
-    ) {
-        // CLI doesn't show caught up events
-    }
-
-    fn on_initial_sync_complete(
-        &self,
-        _total_bundles: u32,
-        _mempool_count: usize,
-        _interval: Duration,
-    ) {
-        // CLI doesn't show initial sync complete
-    }
-
-    fn on_error(&self, error: &str) {
-        if !self.quiet {
-            eprintln!("Error: {}", error);
-        }
     }
 }
 
@@ -486,6 +442,30 @@ impl SyncManager {
         }
     }
 
+    /// Show compaction message if index was compacted during bundle sync
+    fn show_compaction_if_needed(
+        &self,
+        did_index_compacted: bool,
+        delta_segments_before: u64,
+        index_ms: u64,
+    ) {
+        if did_index_compacted {
+            let stats_after = self.manager.get_did_index_stats();
+            let delta_segments_after = stats_after
+                .get("delta_segments")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let segments_compacted = delta_segments_before.saturating_sub(delta_segments_after);
+            eprintln!(
+                "[Sync] ✓ Index compacted | segments: {} → {} ({} removed) | index: {}ms",
+                delta_segments_before,
+                delta_segments_after,
+                segments_compacted,
+                index_ms
+            );
+        }
+    }
+
     pub async fn run_once(&self, max_bundles: Option<usize>) -> Result<usize> {
         let mut synced = 0;
 
@@ -496,6 +476,13 @@ impl SyncManager {
                     break;
                 }
             }
+
+            // Get stats before sync to track compaction
+            let stats_before = self.manager.get_did_index_stats();
+            let delta_segments_before = stats_before
+                .get("delta_segments")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
 
             match self.manager.sync_next_bundle(&self.client).await {
                 Ok(crate::manager::SyncResult::BundleCreated {
@@ -527,6 +514,9 @@ impl SyncManager {
                         unique_dids,
                         size_bytes,
                     });
+
+                    // Show compaction message if index was compacted
+                    self.show_compaction_if_needed(did_index_compacted, delta_segments_before, index_ms);
 
                     // Check if we've reached the limit
                     if let Some(max) = max_bundles {
@@ -606,6 +596,13 @@ impl SyncManager {
             }
 
             // Update DID index on every bundle (now fast with delta segments)
+            // Get stats before sync to track compaction
+            let stats_before = self.manager.get_did_index_stats();
+            let delta_segments_before = stats_before
+                .get("delta_segments")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+
             let sync_result = self.manager.sync_next_bundle(&self.client).await;
 
             match sync_result {
@@ -643,6 +640,9 @@ impl SyncManager {
                         unique_dids,
                         size_bytes,
                     });
+
+                    // Show compaction message if index was compacted
+                    self.show_compaction_if_needed(did_index_compacted, delta_segments_before, index_ms);
 
                     // Check max bundles limit
                     if self.config.max_bundles > 0
