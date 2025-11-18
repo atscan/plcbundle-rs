@@ -37,7 +37,7 @@ pub struct DIDDocument {
     #[serde(rename = "@context")]
     pub context: Vec<String>,
     pub id: String,
-    #[serde(rename = "alsoKnownAs", skip_serializing_if = "Vec::is_empty")]
+    #[serde(rename = "alsoKnownAs")]
     pub also_known_as: Vec<String>,
     #[serde(rename = "verificationMethod")]
     pub verification_method: Vec<VerificationMethod>,
