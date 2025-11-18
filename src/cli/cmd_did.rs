@@ -301,7 +301,6 @@ pub fn cmd_did_resolve(
         };
 
         eprintln!("🔍 Comparing with remote PLC directory...");
-        eprintln!("   Using PLC client with rate limiting");
         
         if verbose {
             log::info!("Target PLC directory: {}", plc_url);
@@ -310,13 +309,16 @@ pub fn cmd_did_resolve(
         
         let fetch_start = Instant::now();
         let rt = Runtime::new().context("Failed to create tokio runtime")?;
-        let remote_doc = rt.block_on(async {
+        let (remote_doc, remote_json_raw): (plcbundle::DIDDocument, String) = rt.block_on(async {
             let client = PLCClient::new(&plc_url)
                 .context("Failed to create PLC client")?;
             if verbose {
                 log::info!("Created PLC client, fetching DID document...");
             }
-            client.fetch_did_document(&did).await
+            // Fetch both the parsed document and raw JSON for accurate comparison
+            let raw_json = client.fetch_did_document_raw(&did).await?;
+            let parsed_doc = client.fetch_did_document(&did).await?;
+            Ok::<(plcbundle::DIDDocument, String), anyhow::Error>((parsed_doc, raw_json))
         })
         .context("Failed to fetch DID document from remote PLC directory")?;
         let fetch_duration = fetch_start.elapsed();
@@ -329,7 +331,7 @@ pub fn cmd_did_resolve(
         eprintln!();
 
         // Compare documents and return early (don't show full document)
-        compare_did_documents(&result.document, &remote_doc, &did, &plc_url, fetch_duration)?;
+        compare_did_documents(&result.document, &remote_doc, &remote_json_raw, &did, &plc_url, fetch_duration)?;
         return Ok(());
     }
 
@@ -526,7 +528,8 @@ pub fn cmd_did_resolve(
 /// Compare two DID documents and show differences
 fn compare_did_documents(
     local: &plcbundle::DIDDocument,
-    remote: &plcbundle::DIDDocument,
+    _remote: &plcbundle::DIDDocument,
+    remote_json_raw: &str,
     _did: &str,
     remote_url: &str,
     fetch_duration: std::time::Duration,
@@ -542,19 +545,25 @@ fn compare_did_documents(
     eprintln!("   Fetch time: {:?}", fetch_duration);
     eprintln!();
 
-    // Serialize both documents with serde (respects skip_serializing_if attributes)
-    // This ensures consistent handling of empty arrays for both local and remote
+    // Serialize local document (respects skip_serializing_if attributes)
     let local_json = serde_json::to_string(local)?;
-    let remote_json = serde_json::to_string(remote)?;
 
-    // Calculate SHA256 hashes
+    // Normalize both JSON strings by parsing and re-serializing with consistent formatting
+    // This ensures we compare equivalent JSON structures, handling:
+    // - Key ordering differences
+    // - Whitespace differences
+    // - Empty array representation (preserved from raw remote JSON)
+    let local_normalized = normalize_json_for_comparison(&local_json)?;
+    let remote_normalized = normalize_json_for_comparison(remote_json_raw)?;
+
+    // Calculate SHA256 hashes of normalized JSON
     let mut local_hasher = Sha256::new();
-    local_hasher.update(local_json.as_bytes());
+    local_hasher.update(local_normalized.as_bytes());
     let local_hash = local_hasher.finalize();
     let local_hash_hex = format!("{:x}", local_hash);
 
     let mut remote_hasher = Sha256::new();
-    remote_hasher.update(remote_json.as_bytes());
+    remote_hasher.update(remote_normalized.as_bytes());
     let remote_hash = remote_hasher.finalize();
     let remote_hash_hex = format!("{:x}", remote_hash);
 
@@ -576,9 +585,9 @@ fn compare_did_documents(
     {
         use similar::{ChangeTag, TextDiff};
 
-        // Convert to pretty JSON for diff display
-        let local_json_pretty = serde_json::to_string_pretty(local)?;
-        let remote_json_pretty = serde_json::to_string_pretty(remote)?;
+        // Convert normalized JSON to pretty format for diff display
+        let local_json_pretty = json_to_pretty(&local_normalized)?;
+        let remote_json_pretty = json_to_pretty(&remote_normalized)?;
 
         // Use similar to compute and display colored diff
         let diff = TextDiff::from_lines(&local_json_pretty, &remote_json_pretty);
@@ -617,6 +626,32 @@ fn compare_did_documents(
     }
 
     Ok(())
+}
+
+/// Normalize JSON string for comparison by parsing and re-serializing
+/// This ensures consistent representation for hash comparison
+fn normalize_json_for_comparison(json: &str) -> Result<String> {
+    // Parse JSON using sonic_rs (faster than serde_json)
+    let value: sonic_rs::Value = sonic_rs::from_str(json)
+        .map_err(|e| anyhow::anyhow!("Failed to parse JSON for normalization: {}", e))?;
+    
+    // Re-serialize with consistent formatting (compact, no whitespace)
+    // This normalizes key ordering and whitespace differences
+    let normalized = sonic_rs::to_string(&value)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize normalized JSON: {}", e))?;
+    
+    Ok(normalized)
+}
+
+/// Convert JSON string to pretty-printed format for display
+fn json_to_pretty(json: &str) -> Result<String> {
+    let value: sonic_rs::Value = sonic_rs::from_str(json)
+        .map_err(|e| anyhow::anyhow!("Failed to parse JSON for pretty printing: {}", e))?;
+    
+    let pretty = sonic_rs::to_string_pretty(&value)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize pretty JSON: {}", e))?;
+    
+    Ok(pretty)
 }
 
 fn calculate_shard_for_display(identifier: &str) -> u8 {
