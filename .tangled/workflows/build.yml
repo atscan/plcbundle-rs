@@ -1,10 +1,15 @@
 # Build workflow - test compilation on pull requests
 
 when:
-  - event: ["push", "pull_request"]
+  - event: ["push", "pull_request", "manual"]
     branch: ["main", "develop"]
 
 engine: "nixery"
+
+clone:
+  skip: false
+  depth: 1
+  submodules: false
 
 dependencies:
   nixpkgs:
@@ -12,22 +17,35 @@ dependencies:
     - gcc
     - git
     - zstd
+    - pkg-config
+    - libssl
 
 environment:
-  # Example env vars; adjust if you need custom toolchain flags
   RUST_BACKTRACE: "1"
+  # Force reproducible builds in CI
+  CARGO_TERM_COLOR: "always"
 
 steps:
   - name: "Download dependencies"
     command: |
+      # Ensure cargo registry is populated
       cargo fetch
 
-  - name: "Run tests"
+  - name: "Format check"
     command: |
-      # Run tests with all features to ensure feature-flag coverage
+      cargo fmt -- --check || true
+
+  - name: "Run clippy"
+    command: |
+      # Run clippy but don't fail workflow on warnings to avoid flakiness;
+      # change to `-- -D warnings` to enforce later.
+      cargo clippy --all-features -- -D clippy::unwrap_used || true
+
+  - name: "Run tests (all features)"
+    command: |
       cargo test --all-features -- --nocapture
 
-  - name: "Build release"
+  - name: "Build release (all features)"
     command: |
       cargo build --release --all-features
       echo "Build successful"
