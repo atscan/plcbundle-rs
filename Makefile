@@ -29,7 +29,7 @@ clean: ## Clean build artifacts
 	cargo clean
 
 test: ## Run tests
-	cargo test
+	cargo test --all-features
 
 run: ## Run with example query
 	cargo run -- "did" -b "1" -j 1
