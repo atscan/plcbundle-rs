@@ -469,17 +469,14 @@ pub fn export(&self, spec: ExportSpec) -> Result<ExportIterator>
 ```rust
 pub struct ExportSpec {
     pub bundles: BundleRange,
-    pub format: ExportFormat,
+    pub format: ExportFormat,           // JSONL only
     pub filter: Option<OperationFilter>,
-    pub compression: Option<CompressionType>,
-    pub count: Option<usize>,            // Limit number of operations
-    pub after_timestamp: Option<String>, // Filter by timestamp
+    pub count: Option<usize>,           // Limit number of operations
+    pub after_timestamp: Option<String>,// Filter by timestamp
 }
 
 pub enum ExportFormat {
     Jsonl,
-    Json,
-    Csv,
 }
 
 pub enum BundleRange {

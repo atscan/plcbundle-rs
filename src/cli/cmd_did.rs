@@ -74,6 +74,15 @@ pub enum DIDCommands {
     #[command(
         alias = "doc",
         alias = "document",
+        long_about = "Resolve a DID or handle to its current W3C DID Document.\n\n\
+This command follows the chain of operations for a DID to construct the most\n\
+up-to-date version of its DID document. It supports resolving both DIDs\n\
+(e.g., did:plc:...) and handles (e.g., example.bsky.social).\n\n\
+When a handle is provided, it is first resolved to a DID using a handle resolver\n\
+service. The resulting DID is then used to construct the document.\n\n\
+The command checks the mempool for the most recent operations before falling back\n\
+to the main bundle index. This ensures that the resolved document is always\n\
+current, even if the latest operations have not yet been incorporated into a bundle.",
         help_template = crate::clap_help!(
             examples: "  # Resolve DID to full document\n  \
                        {bin} did resolve did:plc:524tuhdhh3m7li5gycdn6boe\n\n  \

@@ -39,6 +39,46 @@ pub enum SyncResult {
     },
 }
 
+/// High-level manager for PLC bundle repositories
+///
+/// Provides fast, memory-efficient access to operations stored in
+/// compressed JSONL bundle files, along with a DID index for quick lookups.
+///
+/// Key capabilities:
+/// - Smart loading with caching and frame-based random access
+/// - DID resolution and per-DID operation queries (bundles + mempool)
+/// - Batch operations, range iterators, query and export pipelines
+/// - Sync to fetch, deduplicate, and create new bundles with verified hashes
+/// - Maintenance utilities: warm-up, prefetch, rollback, migrate, clean
+///
+/// # Quickstart
+///
+/// ```no_run
+/// use plcbundle::{BundleManager, ManagerOptions, QuerySpec, BundleRange, QueryMode};
+/// use std::path::PathBuf;
+///
+/// // Create a manager for an existing repository
+/// let mgr = BundleManager::new(PathBuf::from("/data/plc"), ManagerOptions::default())?;
+///
+/// // Load a bundle
+/// let load = mgr.load_bundle(42, Default::default())?;
+/// let _count = load.operations.len();
+///
+/// // Get an operation (bundle number, position within bundle)
+/// let op = mgr.get_operation(42, 10)?;
+/// assert!(!op.did.is_empty());
+///
+/// // Resolve a DID to its latest document
+/// let resolved = mgr.resolve_did("did:plc:abcdef...")?;
+/// println!("Resolved to shard {}", resolved.shard_num);
+///
+/// // Query a range and export
+/// let spec = QuerySpec { bundles: BundleRange::Range(40, 45), filter: None, query: String::new(), mode: QueryMode::All };
+/// let mut count = 0u64;
+/// for item in mgr.query(spec) { count += 1; }
+/// assert!(count > 0);
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub struct BundleManager {
     directory: PathBuf,
     index: Arc<RwLock<Index>>,
@@ -254,6 +294,17 @@ impl BundleManager {
     }
 
     // === Smart Loading ===
+    /// Load a bundle's operations with optional caching and filtering
+    ///
+    /// Uses on-disk compressed JSONL and supports frame-based random access
+    /// when available, falling back to sequential scan for legacy bundles.
+    ///
+    /// # Arguments
+    /// - `num` Bundle number to load
+    /// - `options` Loading options (cache, decompress, filter, limit)
+    ///
+    /// # Returns
+    /// A `LoadResult` containing operations and optional metadata
     pub fn load_bundle(&self, num: u32, options: LoadOptions) -> Result<LoadResult> {
         self.stats.write().unwrap().bundles_loaded += 1;
 
@@ -407,6 +458,10 @@ impl BundleManager {
     }
 
     // === Batch Operations ===
+    /// Batch fetch operations across multiple bundles using match requests
+    ///
+    /// Groups requests by bundle for efficient loading and returns
+    /// operations that match each request's optional filter.
     pub fn get_operations_batch(&self, requests: Vec<OperationRequest>) -> Result<Vec<Operation>> {
         let mut results = Vec::new();
 
@@ -430,6 +485,10 @@ impl BundleManager {
         Ok(results)
     }
 
+    /// Create an iterator over operations across a bundle range
+    ///
+    /// Returns a `RangeIterator` that lazily loads bundles between
+    /// `start` and `end` and yields operations optionally filtered.
     pub fn get_operations_range(
         &self,
         start: u32,
@@ -730,6 +789,9 @@ impl BundleManager {
         Ok((ops_with_loc, load_start.elapsed()))
     }
 
+    /// Resolve multiple DIDs to their operations (bundles + mempool)
+    ///
+    /// Returns a map of DID → operations, without location metadata or stats.
     pub fn batch_resolve_dids(&self, dids: Vec<String>) -> Result<HashMap<String, Vec<Operation>>> {
         let mut results = HashMap::new();
 
@@ -742,15 +804,25 @@ impl BundleManager {
     }
 
     // === Query/Export ===
+    /// Execute a query over bundles with optional filters and modes
+    ///
+    /// Increments internal stats and returns a `QueryIterator` that yields
+    /// serialized records matching the query specification.
     pub fn query(&self, spec: QuerySpec) -> QueryIterator {
         self.stats.write().unwrap().queries_executed += 1;
         QueryIterator::new(Arc::new(self.clone_for_arc()), spec)
     }
 
+    /// Create an export iterator for streaming results to a sink
+    ///
+    /// Supports JSONL format.
     pub fn export(&self, spec: ExportSpec) -> ExportIterator {
         ExportIterator::new(Arc::new(self.clone_for_arc()), spec)
     }
 
+    /// Export results to a provided writer factory and return statistics
+    ///
+    /// The `writer_fn` is invoked to obtain a fresh `Write` for streaming.
     pub fn export_to_writer<F>(&self, spec: ExportSpec, mut writer_fn: F) -> Result<ExportStats>
     where
         F: FnMut() -> Box<dyn Write>,
@@ -770,6 +842,7 @@ impl BundleManager {
     }
 
     // === Verification ===
+    /// Verify a single bundle's integrity and metadata
     pub fn verify_bundle(&self, num: u32, spec: VerifySpec) -> Result<VerifyResult> {
         let index = self.index.read().unwrap();
         let metadata = index
@@ -779,11 +852,13 @@ impl BundleManager {
         verification::verify_bundle(&self.directory, metadata, spec)
     }
 
+    /// Verify chain linkage and optional parent relationships across bundles
     pub fn verify_chain(&self, spec: ChainVerifySpec) -> Result<ChainVerifyResult> {
         verification::verify_chain(&self.directory, &self.index.read().unwrap(), spec)
     }
 
     // === Multi-info ===
+    /// Get consolidated bundle information with optional operation and size details
     pub fn get_bundle_info(&self, num: u32, flags: InfoFlags) -> Result<BundleInfo> {
         let index = self.index.read().unwrap();
         let metadata = index
@@ -814,6 +889,7 @@ impl BundleManager {
     }
 
     // === Rollback ===
+    /// Plan a rollback to a target bundle and report estimated impact
     pub fn rollback_plan(&self, spec: RollbackSpec) -> Result<RollbackPlan> {
         let affected_bundles: Vec<u32> = (spec.target_bundle..=self.get_last_bundle()).collect();
 
@@ -838,6 +914,7 @@ impl BundleManager {
         })
     }
 
+    /// Execute a rollback to the target bundle, optionally as a dry run
     pub fn rollback(&self, spec: RollbackSpec) -> Result<RollbackResult> {
         let plan = self.rollback_plan(spec.clone())?;
 
@@ -874,6 +951,7 @@ impl BundleManager {
     }
 
     // === Cache Hints ===
+    /// Preload specified bundles into the cache for faster subsequent access
     pub fn prefetch_bundles(&self, nums: Vec<u32>) -> Result<()> {
         for num in nums {
             self.load_bundle(
@@ -887,6 +965,7 @@ impl BundleManager {
         Ok(())
     }
 
+    /// Warm up caches according to strategy (recent, range, all)
     pub fn warm_up(&self, spec: WarmUpSpec) -> Result<()> {
         let bundles: Vec<u32> = match spec.strategy {
             WarmUpStrategy::Recent(n) => {
@@ -1004,6 +1083,9 @@ impl BundleManager {
         Ok(stats)
     }
 
+    /// Get DID index statistics as a JSON-compatible map
+    ///
+    /// Returns keys like `exists`, `total_dids`, `last_bundle`, `delta_segments`, `shard_count` when available.
     pub fn get_did_index_stats(&self) -> HashMap<String, serde_json::Value> {
         self.ensure_did_index().ok(); // Stats might be called even if index doesn't exist
         self.did_index.read().unwrap().as_ref().map(|idx| idx.get_stats()).unwrap_or_default()
@@ -1135,8 +1217,9 @@ impl BundleManager {
 
     // === Mempool Management ===
 
-    /// Check if mempool is loaded (does not load it)
-    /// Returns Ok(()) if mempool is loaded, Err if not loaded
+    /// Check if the mempool is loaded (does not load it)
+    ///
+    /// Returns `Ok(())` if mempool is loaded, error otherwise.
     pub fn get_mempool(&self) -> Result<()> {
         let mempool_guard = self.mempool.read().unwrap();
         if mempool_guard.is_some() {
@@ -1147,7 +1230,8 @@ impl BundleManager {
     }
 
     /// Explicitly load mempool from disk (or create empty if file doesn't exist)
-    /// This should be called during initialization/preload, not lazily
+    ///
+    /// Intended for initialization/preload, not lazy loading.
     pub fn load_mempool(&self) -> Result<()> {
         // Check if already loaded
         {
@@ -1201,7 +1285,7 @@ impl BundleManager {
         Ok(())
     }
 
-    /// Get mempool statistics
+    /// Get mempool statistics including counts and time bounds
     pub fn get_mempool_stats(&self) -> Result<mempool::MempoolStats> {
         let mempool_guard = self.mempool.read().unwrap();
 
@@ -1226,7 +1310,7 @@ impl BundleManager {
         }
     }
 
-    /// Get all mempool operations
+    /// Get all operations currently in the mempool
     pub fn get_mempool_operations(&self) -> Result<Vec<Operation>> {
         let mempool_guard = self.mempool.read().unwrap();
 
@@ -1236,7 +1320,7 @@ impl BundleManager {
         }
     }
 
-    /// Clear mempool
+    /// Clear all mempool data and remove on-disk mempool files
     pub fn clear_mempool(&self) -> Result<()> {
         let mut mempool_guard = self.mempool.write().unwrap();
 
@@ -1259,8 +1343,9 @@ impl BundleManager {
         Ok(())
     }
 
-    /// Add operations to mempool
-    /// Mempool must be loaded first (call load_mempool())
+    /// Add operations to mempool, returning number added
+    ///
+    /// Mempool must be loaded first (call `load_mempool()`).
     pub fn add_to_mempool(&self, ops: Vec<Operation>) -> Result<usize> {
         self.get_mempool()?; // Check if loaded
 
@@ -3229,6 +3314,7 @@ impl BundleManager {
         self.handle_resolver.clone()
     }
 
+    /// Create a shallow clone suitable for `Arc` sharing
     pub fn clone_for_arc(&self) -> Self {
         Self {
             directory: self.directory.clone(),
@@ -3487,6 +3573,7 @@ impl BundleManager {
 }
 
 // Supporting types moved here
+/// Options controlling bundle loading behavior
 #[derive(Debug, Clone)]
 pub struct LoadOptions {
     pub cache: bool,
@@ -3506,6 +3593,7 @@ impl Default for LoadOptions {
     }
 }
 
+/// Result from a bundle load operation
 #[derive(Debug)]
 pub struct LoadResult {
     pub bundle_number: u32,
@@ -3513,6 +3601,7 @@ pub struct LoadResult {
     pub metadata: Option<BundleMetadata>,
 }
 
+/// Result for single-operation fetch with timing
 #[derive(Debug)]
 pub struct OperationResult {
     pub raw_json: String,
@@ -3520,6 +3609,7 @@ pub struct OperationResult {
     pub load_duration: std::time::Duration,
 }
 
+/// Specification for querying bundles
 #[derive(Debug, Clone)]
 pub struct QuerySpec {
     pub bundles: BundleRange,
@@ -3554,6 +3644,7 @@ fn format_age(duration: chrono::Duration) -> String {
     }
 }
 
+/// Bundle selection for queries, exports, and verification
 #[derive(Debug, Clone)]
 pub enum BundleRange {
     All,
@@ -3562,36 +3653,33 @@ pub enum BundleRange {
     List(Vec<u32>),
 }
 
+/// Specification for export operations
 #[derive(Debug, Clone)]
 pub struct ExportSpec {
     pub bundles: BundleRange,
     pub format: ExportFormat,
     pub filter: Option<OperationFilter>,
-    pub compression: Option<CompressionType>,
     pub count: Option<usize>,
     pub after_timestamp: Option<String>,
 }
 
+/// Output format for export
 #[derive(Debug, Clone)]
 pub enum ExportFormat {
     JsonLines,
-    Csv,
-    Parquet,
 }
 
-#[derive(Debug, Clone)]
-pub enum CompressionType {
-    Zstd,
-    Gzip,
-    None,
-}
+/// Compression type for export outputs
+// Compression options removed: export is JSONL-only
 
+/// Statistics collected during export
 #[derive(Debug, Default)]
 pub struct ExportStats {
     pub records_written: u64,
     pub bytes_written: u64,
 }
 
+/// Specification for bundle verification
 #[derive(Debug, Clone)]
 pub struct VerifySpec {
     pub check_hash: bool,
@@ -3600,12 +3688,14 @@ pub struct VerifySpec {
     pub fast: bool, // Fast mode: only check metadata frame, skip hash calculations
 }
 
+/// Result of verifying a single bundle
 #[derive(Debug)]
 pub struct VerifyResult {
     pub valid: bool,
     pub errors: Vec<String>,
 }
 
+/// Specification for chain verification
 #[derive(Debug, Clone)]
 pub struct ChainVerifySpec {
     pub start_bundle: u32,
@@ -3613,6 +3703,7 @@ pub struct ChainVerifySpec {
     pub check_parent_links: bool,
 }
 
+/// Result of chain verification across multiple bundles
 #[derive(Debug)]
 pub struct ChainVerifyResult {
     pub valid: bool,
@@ -3620,6 +3711,7 @@ pub struct ChainVerifyResult {
     pub errors: Vec<(u32, String)>,
 }
 
+/// Aggregated bundle information with optional details
 #[derive(Debug)]
 pub struct BundleInfo {
     pub metadata: BundleMetadata,
@@ -3629,24 +3721,28 @@ pub struct BundleInfo {
     pub size_info: Option<SizeInfo>,
 }
 
+/// Size information (compressed and uncompressed) for a bundle
 #[derive(Debug)]
 pub struct SizeInfo {
     pub compressed: u64,
     pub uncompressed: u64,
 }
 
+/// Flags controlling `get_bundle_info` detail inclusion
 #[derive(Debug, Clone)]
 pub struct InfoFlags {
     pub include_operations: bool,
     pub include_size_info: bool,
 }
 
+/// Specification for rollback execution
 #[derive(Debug, Clone)]
 pub struct RollbackSpec {
     pub target_bundle: u32,
     pub dry_run: bool,
 }
 
+/// Plan produced by `rollback_plan`
 #[derive(Debug)]
 pub struct RollbackPlan {
     pub target_bundle: u32,
@@ -3656,6 +3752,7 @@ pub struct RollbackPlan {
     pub estimated_time_ms: u64,
 }
 
+/// Result returned by `rollback`
 #[derive(Debug)]
 pub struct RollbackResult {
     pub success: bool,
@@ -3663,11 +3760,13 @@ pub struct RollbackResult {
     pub plan: Option<RollbackPlan>,
 }
 
+/// Specification for cache warm-up
 #[derive(Debug, Clone)]
 pub struct WarmUpSpec {
     pub strategy: WarmUpStrategy,
 }
 
+/// Strategy selection for warm-up
 #[derive(Debug, Clone)]
 pub enum WarmUpStrategy {
     Recent(u32),
@@ -3675,6 +3774,7 @@ pub enum WarmUpStrategy {
     All,
 }
 
+/// Statistics from DID index rebuild
 #[derive(Debug, Default, Clone)]
 pub struct RebuildStats {
     pub bundles_processed: u32,

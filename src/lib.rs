@@ -1,3 +1,34 @@
+//! plcbundle-rs: high-performance PLC bundle access, DID resolution, and tooling
+//!
+//! This crate provides `BundleManager` and supporting types to work with PLC repositories
+//! consisting of compressed JSONL bundle files. It focuses on:
+//! - Fast random access via multi-frame compression and metadata offsets
+//! - A memory-efficient DID index for lookups across bundles and mempool
+//! - Query, export, verification, and sync utilities
+//!
+//! # Quickstart
+//!
+//! ```no_run
+//! use plcbundle::{BundleManager, ManagerOptions, QuerySpec, BundleRange, QueryMode};
+//! use std::path::PathBuf;
+//!
+//! let mgr = BundleManager::new(PathBuf::from("/data/plc"), ManagerOptions::default())?;
+//!
+//! // Resolve a DID
+//! let resolved = mgr.resolve_did("did:plc:abcdef...")?;
+//! assert!(resolved.locations_found >= 0);
+//!
+//! // Query a bundle range
+//! let spec = QuerySpec { bundles: BundleRange::Range(1, 10), filter: None, query: String::new(), mode: QueryMode::All };
+//! for item in mgr.query(spec) { let _ = item?; }
+//! # Ok::<(), anyhow::Error>(())
+//! ```
+//!
+//! # Features
+//! - Sync new bundles from a PLC source with deduplication and verified hashes
+//! - Export results in JSONL with optional compression
+//! - Rollback, migrate, clean, and rebuild indices
+//!
 // src/lib.rs
 pub mod bundle_format;
 pub mod cache;
@@ -41,7 +72,7 @@ pub use index::{BundleMetadata, Index};
 pub use iterators::{ExportIterator, QueryIterator, RangeIterator};
 pub use manager::{
     BundleInfo, BundleManager, BundleRange, ChainVerifyResult, ChainVerifySpec, CleanPreview,
-    CleanPreviewFile, CleanResult, CompressionType, DIDIndexStats, ExportFormat, ExportSpec,
+    CleanPreviewFile, CleanResult, DIDIndexStats, ExportFormat, ExportSpec,
     InfoFlags, IntoManagerOptions, LoadOptions, LoadResult, ManagerOptions, ManagerStats,
     OperationResult, QuerySpec, RebuildStats, ResolveResult, RollbackFileStats, RollbackPlan,
     RollbackResult, RollbackSpec, SyncResult, VerifyResult, VerifySpec, WarmUpSpec, WarmUpStrategy,
