@@ -117,3 +117,188 @@ pub struct OperationWithLocation {
     pub position: usize,
     pub nullified: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sonic_rs::JsonValueTrait;
+
+    #[test]
+    fn test_operation_from_json_minimal() {
+        let json = r#"{
+            "did": "did:plc:abcdefghijklmnopqrstuvwx",
+            "operation": {"type": "create"},
+            "createdAt": "2024-01-01T00:00:00Z"
+        }"#;
+
+        let op = Operation::from_json(json).unwrap();
+        assert_eq!(op.did, "did:plc:abcdefghijklmnopqrstuvwx");
+        assert_eq!(op.nullified, false);
+        assert_eq!(op.created_at, "2024-01-01T00:00:00Z");
+        assert!(op.cid.is_none());
+        assert!(op.raw_json.is_some());
+        assert_eq!(op.raw_json.as_ref().unwrap(), json);
+    }
+
+    #[test]
+    fn test_operation_from_json_with_all_fields() {
+        let json = r#"{
+            "did": "did:plc:abcdefghijklmnopqrstuvwx",
+            "operation": {"type": "create", "data": "test"},
+            "cid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+            "nullified": true,
+            "createdAt": "2024-01-01T12:34:56Z"
+        }"#;
+
+        let op = Operation::from_json(json).unwrap();
+        assert_eq!(op.did, "did:plc:abcdefghijklmnopqrstuvwx");
+        assert_eq!(op.nullified, true);
+        assert_eq!(op.created_at, "2024-01-01T12:34:56Z");
+        assert_eq!(op.cid, Some("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi".to_string()));
+        
+        // Check operation field
+        let op_type = op.operation.get("type").and_then(|v| v.as_str()).unwrap();
+        assert_eq!(op_type, "create");
+    }
+
+    #[test]
+    fn test_operation_from_json_created_at_variant() {
+        // Test both "createdAt" and "created_at" field names
+        let json1 = r#"{
+            "did": "did:plc:test",
+            "operation": {},
+            "createdAt": "2024-01-01T00:00:00Z"
+        }"#;
+
+        let json2 = r#"{
+            "did": "did:plc:test",
+            "operation": {},
+            "created_at": "2024-01-01T00:00:00Z"
+        }"#;
+
+        let op1 = Operation::from_json(json1).unwrap();
+        let op2 = Operation::from_json(json2).unwrap();
+        
+        assert_eq!(op1.created_at, "2024-01-01T00:00:00Z");
+        assert_eq!(op2.created_at, "2024-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn test_operation_from_json_missing_did() {
+        let json = r#"{
+            "operation": {},
+            "createdAt": "2024-01-01T00:00:00Z"
+        }"#;
+
+        let result = Operation::from_json(json);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing 'did' field"));
+    }
+
+    #[test]
+    fn test_operation_from_json_missing_created_at() {
+        let json = r#"{
+            "did": "did:plc:test",
+            "operation": {}
+        }"#;
+
+        let result = Operation::from_json(json);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing 'createdAt' or 'created_at' field"));
+    }
+
+    #[test]
+    fn test_operation_from_json_invalid_json() {
+        let json = "not valid json {";
+
+        let result = Operation::from_json(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_operation_from_json_nullified_defaults_to_false() {
+        let json = r#"{
+            "did": "did:plc:test",
+            "operation": {},
+            "createdAt": "2024-01-01T00:00:00Z"
+        }"#;
+
+        let op = Operation::from_json(json).unwrap();
+        assert_eq!(op.nullified, false);
+    }
+
+    #[test]
+    fn test_operation_from_json_cid_optional() {
+        let json = r#"{
+            "did": "did:plc:test",
+            "operation": {},
+            "createdAt": "2024-01-01T00:00:00Z"
+        }"#;
+
+        let op = Operation::from_json(json).unwrap();
+        assert!(op.cid.is_none());
+    }
+
+    #[test]
+    fn test_operation_from_json_operation_field_defaults_to_empty() {
+        let json = r#"{
+            "did": "did:plc:test",
+            "createdAt": "2024-01-01T00:00:00Z"
+        }"#;
+
+        let op = Operation::from_json(json).unwrap();
+        // operation field should default to empty Value
+        assert!(op.operation.is_object() || op.operation.is_null());
+    }
+
+    #[test]
+    fn test_operation_filter_default() {
+        let filter = OperationFilter::default();
+        assert!(filter.did.is_none());
+        assert!(filter.operation_type.is_none());
+        assert!(filter.time_range.is_none());
+        assert_eq!(filter.include_nullified, false);
+    }
+
+    #[test]
+    fn test_operation_request() {
+        let request = OperationRequest {
+            bundle: 1,
+            index: Some(5),
+            filter: Some(OperationFilter {
+                did: Some("did:plc:test".to_string()),
+                ..Default::default()
+            }),
+        };
+
+        assert_eq!(request.bundle, 1);
+        assert_eq!(request.index, Some(5));
+        assert!(request.filter.is_some());
+        assert_eq!(request.filter.as_ref().unwrap().did, Some("did:plc:test".to_string()));
+    }
+
+    #[test]
+    fn test_operation_with_location() {
+        let op = Operation {
+            did: "did:plc:test".to_string(),
+            operation: sonic_rs::Value::new(),
+            cid: None,
+            nullified: false,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            extra: sonic_rs::Value::new(),
+            raw_json: None,
+        };
+
+        let op_with_loc = OperationWithLocation {
+            operation: op,
+            bundle: 1,
+            position: 42,
+            nullified: true,
+        };
+
+        assert_eq!(op_with_loc.bundle, 1);
+        assert_eq!(op_with_loc.position, 42);
+        assert_eq!(op_with_loc.nullified, true);
+        assert_eq!(op_with_loc.operation.did, "did:plc:test");
+    }
+}

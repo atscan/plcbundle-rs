@@ -3346,6 +3346,140 @@ mod tests {
     }
 
     #[test]
+    fn test_op_location_new() {
+        // Test creating OpLocation with nullified = false
+        let loc = OpLocation::new(0, false);
+        assert_eq!(loc.global_position(), 0);
+        assert_eq!(loc.nullified(), false);
+        assert_eq!(loc.bundle(), 1);
+        assert_eq!(loc.position(), 0);
+
+        // Test creating OpLocation with nullified = true
+        let loc = OpLocation::new(0, true);
+        assert_eq!(loc.global_position(), 0);
+        assert_eq!(loc.nullified(), true);
+
+        // Test with various global positions
+        let loc = OpLocation::new(42, false);
+        assert_eq!(loc.global_position(), 42);
+        assert_eq!(loc.nullified(), false);
+
+        let loc = OpLocation::new(10000, false);
+        assert_eq!(loc.global_position(), 10000);
+        assert_eq!(loc.bundle(), 2);
+        assert_eq!(loc.position(), 0);
+
+        let loc = OpLocation::new(10500, true);
+        assert_eq!(loc.global_position(), 10500);
+        assert_eq!(loc.nullified(), true);
+        assert_eq!(loc.bundle(), 2);
+        assert_eq!(loc.position(), 500);
+    }
+
+    #[test]
+    fn test_op_location_bundle_and_position() {
+        // Bundle 1, position 0
+        let loc = OpLocation::new(0, false);
+        assert_eq!(loc.bundle(), 1);
+        assert_eq!(loc.position(), 0);
+
+        // Bundle 1, position 9999
+        let loc = OpLocation::new(9999, false);
+        assert_eq!(loc.bundle(), 1);
+        assert_eq!(loc.position(), 9999);
+
+        // Bundle 2, position 0
+        let loc = OpLocation::new(10000, false);
+        assert_eq!(loc.bundle(), 2);
+        assert_eq!(loc.position(), 0);
+
+        // Bundle 2, position 500
+        let loc = OpLocation::new(10500, false);
+        assert_eq!(loc.bundle(), 2);
+        assert_eq!(loc.position(), 500);
+
+        // Bundle 3, position 42
+        let loc = OpLocation::new(20042, false);
+        assert_eq!(loc.bundle(), 3);
+        assert_eq!(loc.position(), 42);
+    }
+
+    #[test]
+    fn test_op_location_nullified_flag() {
+        // Test that nullified flag is preserved
+        let loc1 = OpLocation::new(42, false);
+        let loc2 = OpLocation::new(42, true);
+
+        assert_eq!(loc1.global_position(), loc2.global_position());
+        assert_ne!(loc1.nullified(), loc2.nullified());
+        assert_eq!(loc1.nullified(), false);
+        assert_eq!(loc2.nullified(), true);
+    }
+
+    #[test]
+    fn test_op_location_from_u32() {
+        // Create location and convert to u32, then back
+        let loc1 = OpLocation::new(42, false);
+        let u32_val = loc1.as_u32();
+        let loc2 = OpLocation::from_u32(u32_val);
+        assert_eq!(loc1.global_position(), loc2.global_position());
+        assert_eq!(loc1.nullified(), loc2.nullified());
+
+        // Test with nullified = true
+        let loc1 = OpLocation::new(100, true);
+        let u32_val = loc1.as_u32();
+        let loc2 = OpLocation::from_u32(u32_val);
+        assert_eq!(loc1.global_position(), loc2.global_position());
+        assert_eq!(loc1.nullified(), loc2.nullified());
+        assert_eq!(loc2.nullified(), true);
+    }
+
+    #[test]
+    fn test_op_location_round_trip() {
+        // Test round-trip conversion through u32
+        for global_pos in [0, 1, 42, 100, 1000, 10000, 10500, 99999] {
+            for nullified in [false, true] {
+                let loc1 = OpLocation::new(global_pos, nullified);
+                let u32_val = loc1.as_u32();
+                let loc2 = OpLocation::from_u32(u32_val);
+                
+                assert_eq!(loc1.global_position(), loc2.global_position(), 
+                    "Global position mismatch for {} (nullified={})", global_pos, nullified);
+                assert_eq!(loc1.nullified(), loc2.nullified(),
+                    "Nullified flag mismatch for {} (nullified={})", global_pos, nullified);
+                assert_eq!(loc1.bundle(), loc2.bundle(),
+                    "Bundle mismatch for {} (nullified={})", global_pos, nullified);
+                assert_eq!(loc1.position(), loc2.position(),
+                    "Position mismatch for {} (nullified={})", global_pos, nullified);
+            }
+        }
+    }
+
+    #[test]
+    fn test_op_location_edge_cases() {
+        // Test maximum u32 value (will overflow bundle/position but should not panic)
+        let loc = OpLocation::new(u32::MAX >> 1, false);
+        assert_eq!(loc.global_position(), u32::MAX >> 1);
+        assert_eq!(loc.nullified(), false);
+
+        // Test with nullified flag set on max value
+        let loc = OpLocation::new(u32::MAX >> 1, true);
+        assert_eq!(loc.nullified(), true);
+    }
+
+    #[test]
+    fn test_op_location_partial_eq() {
+        let loc1 = OpLocation::new(42, false);
+        let loc2 = OpLocation::new(42, false);
+        let loc3 = OpLocation::new(42, true);
+        let loc4 = OpLocation::new(100, false);
+
+        assert_eq!(loc1, loc2);
+        assert_ne!(loc1, loc3); // Different nullified flag
+        assert_ne!(loc1, loc4); // Different position
+    }
+
+    #[test]
     fn delta_segments_round_trip_and_compact() {
         let tmp = TempDir::new().expect("temp dir");
         let manager = Manager::new(tmp.path().to_path_buf()).expect("manager");

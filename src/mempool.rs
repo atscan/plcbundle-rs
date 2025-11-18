@@ -622,3 +622,231 @@ pub struct MempoolStats {
     pub size_bytes: Option<usize>,
     pub did_count: Option<usize>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::operations::Operation;
+    use sonic_rs::Value;
+    use tempfile::TempDir;
+
+    fn create_test_operation(did: &str, cid: &str, created_at: &str) -> Operation {
+        Operation {
+            did: did.to_string(),
+            operation: Value::new(),
+            cid: Some(cid.to_string()),
+            nullified: false,
+            created_at: created_at.to_string(),
+            extra: Value::new(),
+            raw_json: None,
+        }
+    }
+
+    #[test]
+    fn test_mempool_count() {
+        let tmp = TempDir::new().unwrap();
+        let min_time = DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut mempool = Mempool::new(tmp.path(), 1, min_time, false).unwrap();
+        
+        assert_eq!(mempool.count(), 0);
+        
+        let ops = vec![
+            create_test_operation("did:plc:test1", "cid1", "2024-01-01T00:00:01Z"),
+            create_test_operation("did:plc:test2", "cid2", "2024-01-01T00:00:02Z"),
+        ];
+        mempool.add(ops).unwrap();
+        assert_eq!(mempool.count(), 2);
+    }
+
+    #[test]
+    fn test_mempool_get_target_bundle() {
+        let tmp = TempDir::new().unwrap();
+        let min_time = DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mempool = Mempool::new(tmp.path(), 42, min_time, false).unwrap();
+        assert_eq!(mempool.get_target_bundle(), 42);
+    }
+
+    #[test]
+    fn test_mempool_get_min_timestamp() {
+        let tmp = TempDir::new().unwrap();
+        let min_time = DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mempool = Mempool::new(tmp.path(), 1, min_time, false).unwrap();
+        assert_eq!(mempool.get_min_timestamp(), min_time);
+    }
+
+    #[test]
+    fn test_mempool_get_first_time() {
+        let tmp = TempDir::new().unwrap();
+        let min_time = DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut mempool = Mempool::new(tmp.path(), 1, min_time, false).unwrap();
+        
+        assert_eq!(mempool.get_first_time(), None);
+        
+        let ops = vec![create_test_operation("did:plc:test1", "cid1", "2024-01-01T00:00:01Z")];
+        mempool.add(ops).unwrap();
+        assert_eq!(mempool.get_first_time(), Some("2024-01-01T00:00:01Z".to_string()));
+    }
+
+    #[test]
+    fn test_mempool_get_last_time() {
+        let tmp = TempDir::new().unwrap();
+        let min_time = DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut mempool = Mempool::new(tmp.path(), 1, min_time, false).unwrap();
+        
+        assert_eq!(mempool.get_last_time(), None);
+        
+        let ops = vec![
+            create_test_operation("did:plc:test1", "cid1", "2024-01-01T00:00:01Z"),
+            create_test_operation("did:plc:test2", "cid2", "2024-01-01T00:00:02Z"),
+        ];
+        mempool.add(ops).unwrap();
+        assert_eq!(mempool.get_last_time(), Some("2024-01-01T00:00:02Z".to_string()));
+    }
+
+    #[test]
+    fn test_mempool_peek() {
+        let tmp = TempDir::new().unwrap();
+        let min_time = DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut mempool = Mempool::new(tmp.path(), 1, min_time, false).unwrap();
+        
+        let ops = vec![
+            create_test_operation("did:plc:test1", "cid1", "2024-01-01T00:00:01Z"),
+            create_test_operation("did:plc:test2", "cid2", "2024-01-01T00:00:02Z"),
+            create_test_operation("did:plc:test3", "cid3", "2024-01-01T00:00:03Z"),
+        ];
+        mempool.add(ops).unwrap();
+        
+        let peeked = mempool.peek(2);
+        assert_eq!(peeked.len(), 2);
+        assert_eq!(peeked[0].cid, Some("cid1".to_string()));
+        assert_eq!(peeked[1].cid, Some("cid2".to_string()));
+        
+        // Peek should not remove operations
+        assert_eq!(mempool.count(), 3);
+    }
+
+    #[test]
+    fn test_mempool_peek_more_than_available() {
+        let tmp = TempDir::new().unwrap();
+        let min_time = DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut mempool = Mempool::new(tmp.path(), 1, min_time, false).unwrap();
+        
+        let ops = vec![create_test_operation("did:plc:test1", "cid1", "2024-01-01T00:00:01Z")];
+        mempool.add(ops).unwrap();
+        
+        let peeked = mempool.peek(10);
+        assert_eq!(peeked.len(), 1);
+    }
+
+    #[test]
+    fn test_mempool_clear() {
+        let tmp = TempDir::new().unwrap();
+        let min_time = DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut mempool = Mempool::new(tmp.path(), 1, min_time, false).unwrap();
+        
+        let ops = vec![
+            create_test_operation("did:plc:test1", "cid1", "2024-01-01T00:00:01Z"),
+            create_test_operation("did:plc:test2", "cid2", "2024-01-01T00:00:02Z"),
+        ];
+        mempool.add(ops).unwrap();
+        assert_eq!(mempool.count(), 2);
+        
+        mempool.clear();
+        assert_eq!(mempool.count(), 0);
+    }
+
+    #[test]
+    fn test_mempool_find_did_operations() {
+        let tmp = TempDir::new().unwrap();
+        let min_time = DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut mempool = Mempool::new(tmp.path(), 1, min_time, false).unwrap();
+        
+        let ops = vec![
+            create_test_operation("did:plc:test1", "cid1", "2024-01-01T00:00:01Z"),
+            create_test_operation("did:plc:test1", "cid2", "2024-01-01T00:00:02Z"),
+            create_test_operation("did:plc:test2", "cid3", "2024-01-01T00:00:03Z"),
+        ];
+        mempool.add(ops).unwrap();
+        
+        let found = mempool.find_did_operations("did:plc:test1");
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].cid, Some("cid1".to_string()));
+        assert_eq!(found[1].cid, Some("cid2".to_string()));
+        
+        let found = mempool.find_did_operations("did:plc:test2");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].cid, Some("cid3".to_string()));
+        
+        let found = mempool.find_did_operations("did:plc:nonexistent");
+        assert_eq!(found.len(), 0);
+    }
+
+    #[test]
+    fn test_mempool_stats_empty() {
+        let tmp = TempDir::new().unwrap();
+        let min_time = DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mempool = Mempool::new(tmp.path(), 1, min_time, false).unwrap();
+        
+        let stats = mempool.stats();
+        assert_eq!(stats.count, 0);
+        assert_eq!(stats.can_create_bundle, false);
+        assert_eq!(stats.target_bundle, 1);
+    }
+
+    #[test]
+    fn test_mempool_stats_with_operations() {
+        let tmp = TempDir::new().unwrap();
+        let min_time = DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut mempool = Mempool::new(tmp.path(), 1, min_time, false).unwrap();
+        
+        let ops = vec![
+            create_test_operation("did:plc:test1", "cid1", "2024-01-01T00:00:01Z"),
+            create_test_operation("did:plc:test2", "cid2", "2024-01-01T00:00:02Z"),
+        ];
+        mempool.add(ops).unwrap();
+        
+        let stats = mempool.stats();
+        assert_eq!(stats.count, 2);
+        assert_eq!(stats.can_create_bundle, false); // Need BUNDLE_SIZE (10000) ops
+        assert_eq!(stats.target_bundle, 1);
+        assert!(stats.first_time.is_some());
+        assert!(stats.last_time.is_some());
+        assert_eq!(stats.did_count, Some(2));
+    }
+
+    #[test]
+    fn test_mempool_get_filename() {
+        let tmp = TempDir::new().unwrap();
+        let min_time = DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mempool = Mempool::new(tmp.path(), 42, min_time, false).unwrap();
+        
+        let filename = mempool.get_filename();
+        assert!(filename.contains("plc_mempool_"));
+        assert!(filename.contains("000042"));
+        assert!(filename.ends_with(".jsonl"));
+    }
+}

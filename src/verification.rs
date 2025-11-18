@@ -367,3 +367,403 @@ pub fn verify_chain(
         errors,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::manager::{ChainVerifySpec, VerifySpec};
+    use tempfile::TempDir;
+
+    fn create_test_bundle_metadata(bundle_num: u32, parent: &str, cursor: &str, end_time: &str) -> BundleMetadata {
+        BundleMetadata {
+            bundle_number: bundle_num,
+            start_time: "2024-01-01T00:00:00Z".to_string(),
+            end_time: end_time.to_string(),
+            operation_count: 100,
+            did_count: 50,
+            hash: format!("hash{}", bundle_num),
+            content_hash: format!("content{}", bundle_num),
+            parent: parent.to_string(),
+            compressed_hash: format!("comp{}", bundle_num),
+            compressed_size: 1000,
+            uncompressed_size: 2000,
+            cursor: cursor.to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_verify_bundle_file_not_found() {
+        let tmp = TempDir::new().unwrap();
+        let metadata = create_test_bundle_metadata(1, "", "", "2024-01-01T01:00:00Z");
+        let spec = VerifySpec {
+            check_hash: false,
+            check_content_hash: false,
+            check_operations: false,
+            fast: false,
+        };
+
+        let result = verify_bundle(tmp.path(), &metadata, spec).unwrap();
+        assert!(!result.valid);
+        assert!(!result.errors.is_empty());
+        assert!(result.errors[0].contains("Bundle file not found"));
+    }
+
+    #[test]
+    fn test_verify_bundle_fast_mode_file_not_found() {
+        let tmp = TempDir::new().unwrap();
+        let metadata = create_test_bundle_metadata(1, "", "", "2024-01-01T01:00:00Z");
+        let spec = VerifySpec {
+            check_hash: false,
+            check_content_hash: false,
+            check_operations: false,
+            fast: true,
+        };
+
+        let result = verify_bundle(tmp.path(), &metadata, spec).unwrap();
+        assert!(!result.valid);
+        assert!(!result.errors.is_empty());
+        assert!(result.errors[0].contains("Bundle file not found"));
+    }
+
+    #[test]
+    fn test_verify_chain_empty_index() {
+        let tmp = TempDir::new().unwrap();
+        let index = Index {
+            version: "1.0".to_string(),
+            origin: "test".to_string(),
+            last_bundle: 0,
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            total_size_bytes: 0,
+            total_uncompressed_size_bytes: 0,
+            bundles: Vec::new(),
+        };
+
+        let spec = ChainVerifySpec {
+            start_bundle: 1,
+            end_bundle: None,
+            check_parent_links: true,
+        };
+
+        let result = verify_chain(tmp.path(), &index, spec).unwrap();
+        assert!(result.valid);
+        assert_eq!(result.bundles_checked, 0);
+        assert!(result.errors.is_empty());
+    }
+
+    #[test]
+    fn test_verify_chain_single_bundle_valid() {
+        let tmp = TempDir::new().unwrap();
+        let index = Index {
+            version: "1.0".to_string(),
+            origin: "test".to_string(),
+            last_bundle: 1,
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            total_size_bytes: 1000,
+            total_uncompressed_size_bytes: 2000,
+            bundles: vec![create_test_bundle_metadata(1, "", "", "2024-01-01T01:00:00Z")],
+        };
+
+        let spec = ChainVerifySpec {
+            start_bundle: 1,
+            end_bundle: None,
+            check_parent_links: true,
+        };
+
+        let result = verify_chain(tmp.path(), &index, spec).unwrap();
+        assert!(result.valid);
+        assert_eq!(result.bundles_checked, 1);
+        assert!(result.errors.is_empty());
+    }
+
+    #[test]
+    fn test_verify_chain_multiple_bundles_valid() {
+        let tmp = TempDir::new().unwrap();
+        // Bundle 1: end_time = "2024-01-01T01:00:00Z", so bundle 2's cursor should be "2024-01-01T01:00:00Z"
+        // Bundle 2: end_time = "2024-01-01T02:00:00Z", so bundle 3's cursor should be "2024-01-01T02:00:00Z"
+        let index = Index {
+            version: "1.0".to_string(),
+            origin: "test".to_string(),
+            last_bundle: 3,
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            total_size_bytes: 3000,
+            total_uncompressed_size_bytes: 6000,
+            bundles: vec![
+                create_test_bundle_metadata(1, "", "", "2024-01-01T01:00:00Z"), // end_time = "2024-01-01T01:00:00Z"
+                create_test_bundle_metadata(2, "hash1", "2024-01-01T01:00:00Z", "2024-01-01T02:00:00Z"), // cursor = bundle 1's end_time
+                create_test_bundle_metadata(3, "hash2", "2024-01-01T02:00:00Z", "2024-01-01T03:00:00Z"), // cursor = bundle 2's end_time
+            ],
+        };
+
+        let spec = ChainVerifySpec {
+            start_bundle: 1,
+            end_bundle: None,
+            check_parent_links: true,
+        };
+
+        let result = verify_chain(tmp.path(), &index, spec).unwrap();
+        assert!(result.valid);
+        assert_eq!(result.bundles_checked, 3);
+        assert!(result.errors.is_empty());
+    }
+
+    #[test]
+    fn test_verify_chain_parent_hash_mismatch() {
+        let tmp = TempDir::new().unwrap();
+        let index = Index {
+            version: "1.0".to_string(),
+            origin: "test".to_string(),
+            last_bundle: 2,
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            total_size_bytes: 2000,
+            total_uncompressed_size_bytes: 4000,
+            bundles: vec![
+                create_test_bundle_metadata(1, "", "", "2024-01-01T01:00:00Z"),
+                create_test_bundle_metadata(2, "wrong_hash", "2024-01-01T01:00:00Z", "2024-01-01T02:00:00Z"), // Wrong parent hash
+            ],
+        };
+
+        let spec = ChainVerifySpec {
+            start_bundle: 1,
+            end_bundle: None,
+            check_parent_links: true,
+        };
+
+        let result = verify_chain(tmp.path(), &index, spec).unwrap();
+        assert!(!result.valid);
+        assert_eq!(result.bundles_checked, 2);
+        assert!(!result.errors.is_empty());
+        assert!(result.errors.iter().any(|(_, msg)| msg.contains("Parent hash mismatch")));
+    }
+
+    #[test]
+    fn test_verify_chain_cursor_mismatch() {
+        let tmp = TempDir::new().unwrap();
+        let index = Index {
+            version: "1.0".to_string(),
+            origin: "test".to_string(),
+            last_bundle: 2,
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            total_size_bytes: 2000,
+            total_uncompressed_size_bytes: 4000,
+            bundles: vec![
+                create_test_bundle_metadata(1, "", "", "2024-01-01T01:00:00Z"),
+                create_test_bundle_metadata(2, "hash1", "wrong_cursor", "2024-01-01T02:00:00Z"), // Wrong cursor
+            ],
+        };
+
+        let spec = ChainVerifySpec {
+            start_bundle: 1,
+            end_bundle: None,
+            check_parent_links: true,
+        };
+
+        let result = verify_chain(tmp.path(), &index, spec).unwrap();
+        assert!(!result.valid);
+        assert_eq!(result.bundles_checked, 2);
+        assert!(!result.errors.is_empty());
+        assert!(result.errors.iter().any(|(_, msg)| msg.contains("Cursor mismatch")));
+    }
+
+    #[test]
+    fn test_verify_chain_first_bundle_non_empty_cursor() {
+        let tmp = TempDir::new().unwrap();
+        let index = Index {
+            version: "1.0".to_string(),
+            origin: "test".to_string(),
+            last_bundle: 1,
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            total_size_bytes: 1000,
+            total_uncompressed_size_bytes: 2000,
+            bundles: vec![create_test_bundle_metadata(1, "", "should_be_empty", "2024-01-01T01:00:00Z")], // First bundle has non-empty cursor
+        };
+
+        let spec = ChainVerifySpec {
+            start_bundle: 1,
+            end_bundle: None,
+            check_parent_links: false, // Don't check parent links, but still check first bundle cursor
+        };
+
+        let result = verify_chain(tmp.path(), &index, spec).unwrap();
+        assert!(!result.valid);
+        assert_eq!(result.bundles_checked, 1);
+        assert!(!result.errors.is_empty());
+        assert!(result.errors.iter().any(|(_, msg)| msg.contains("Cursor should be empty")));
+    }
+
+    #[test]
+    fn test_verify_chain_missing_bundle() {
+        let tmp = TempDir::new().unwrap();
+        let index = Index {
+            version: "1.0".to_string(),
+            origin: "test".to_string(),
+            last_bundle: 3,
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            total_size_bytes: 2000,
+            total_uncompressed_size_bytes: 4000,
+            bundles: vec![
+                create_test_bundle_metadata(1, "", "", "2024-01-01T01:00:00Z"),
+                create_test_bundle_metadata(3, "hash2", "2024-01-01T02:00:00Z", "2024-01-01T03:00:00Z"), // Missing bundle 2
+            ],
+        };
+
+        let spec = ChainVerifySpec {
+            start_bundle: 1,
+            end_bundle: None,
+            check_parent_links: true,
+        };
+
+        let result = verify_chain(tmp.path(), &index, spec).unwrap();
+        assert!(!result.valid);
+        assert_eq!(result.bundles_checked, 2); // Only bundles 1 and 3 checked
+        assert!(!result.errors.is_empty());
+        assert!(result.errors.iter().any(|(num, _)| *num == 2));
+        assert!(result.errors.iter().any(|(_, msg)| msg.contains("not in index")));
+    }
+
+    #[test]
+    fn test_verify_chain_missing_previous_bundle() {
+        let tmp = TempDir::new().unwrap();
+        let index = Index {
+            version: "1.0".to_string(),
+            origin: "test".to_string(),
+            last_bundle: 2,
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            total_size_bytes: 1000,
+            total_uncompressed_size_bytes: 2000,
+            bundles: vec![create_test_bundle_metadata(2, "hash1", "2024-01-01T01:00:00Z", "2024-01-01T02:00:00Z")], // Missing bundle 1
+        };
+
+        let spec = ChainVerifySpec {
+            start_bundle: 1,
+            end_bundle: None,
+            check_parent_links: true,
+        };
+
+        let result = verify_chain(tmp.path(), &index, spec).unwrap();
+        assert!(!result.valid);
+        assert_eq!(result.bundles_checked, 1); // Only bundle 2 checked
+        assert!(!result.errors.is_empty());
+        assert!(result.errors.iter().any(|(_, msg)| msg.contains("Previous bundle 1 not found")));
+    }
+
+    #[test]
+    fn test_verify_chain_range() {
+        let tmp = TempDir::new().unwrap();
+        // Each bundle's cursor should equal the previous bundle's end_time
+        let index = Index {
+            version: "1.0".to_string(),
+            origin: "test".to_string(),
+            last_bundle: 5,
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            total_size_bytes: 5000,
+            total_uncompressed_size_bytes: 10000,
+            bundles: vec![
+                create_test_bundle_metadata(1, "", "", "2024-01-01T01:00:00Z"), // end_time = "2024-01-01T01:00:00Z"
+                create_test_bundle_metadata(2, "hash1", "2024-01-01T01:00:00Z", "2024-01-01T02:00:00Z"), // cursor = bundle 1's end_time
+                create_test_bundle_metadata(3, "hash2", "2024-01-01T02:00:00Z", "2024-01-01T03:00:00Z"), // cursor = bundle 2's end_time
+                create_test_bundle_metadata(4, "hash3", "2024-01-01T03:00:00Z", "2024-01-01T04:00:00Z"), // cursor = bundle 3's end_time
+                create_test_bundle_metadata(5, "hash4", "2024-01-01T04:00:00Z", "2024-01-01T05:00:00Z"), // cursor = bundle 4's end_time
+            ],
+        };
+
+        let spec = ChainVerifySpec {
+            start_bundle: 2,
+            end_bundle: Some(4),
+            check_parent_links: true,
+        };
+
+        let result = verify_chain(tmp.path(), &index, spec).unwrap();
+        assert!(result.valid);
+        assert_eq!(result.bundles_checked, 3); // Bundles 2, 3, 4
+        assert!(result.errors.is_empty());
+    }
+
+    #[test]
+    fn test_verify_chain_no_parent_links_check() {
+        let tmp = TempDir::new().unwrap();
+        let index = Index {
+            version: "1.0".to_string(),
+            origin: "test".to_string(),
+            last_bundle: 2,
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            total_size_bytes: 2000,
+            total_uncompressed_size_bytes: 4000,
+            bundles: vec![
+                create_test_bundle_metadata(1, "", "", "2024-01-01T01:00:00Z"),
+                create_test_bundle_metadata(2, "wrong_hash", "wrong_cursor", "2024-01-01T02:00:00Z"), // Wrong but won't be checked
+            ],
+        };
+
+        let spec = ChainVerifySpec {
+            start_bundle: 1,
+            end_bundle: None,
+            check_parent_links: false,
+        };
+
+        let result = verify_chain(tmp.path(), &index, spec).unwrap();
+        assert!(result.valid); // Should be valid since we're not checking parent links
+        assert_eq!(result.bundles_checked, 2);
+        assert!(result.errors.is_empty());
+    }
+
+    #[test]
+    fn test_verify_chain_end_bundle_none() {
+        let tmp = TempDir::new().unwrap();
+        // Each bundle's cursor should equal the previous bundle's end_time
+        let index = Index {
+            version: "1.0".to_string(),
+            origin: "test".to_string(),
+            last_bundle: 3,
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            total_size_bytes: 3000,
+            total_uncompressed_size_bytes: 6000,
+            bundles: vec![
+                create_test_bundle_metadata(1, "", "", "2024-01-01T01:00:00Z"), // end_time = "2024-01-01T01:00:00Z"
+                create_test_bundle_metadata(2, "hash1", "2024-01-01T01:00:00Z", "2024-01-01T02:00:00Z"), // cursor = bundle 1's end_time
+                create_test_bundle_metadata(3, "hash2", "2024-01-01T02:00:00Z", "2024-01-01T03:00:00Z"), // cursor = bundle 2's end_time
+            ],
+        };
+
+        let spec = ChainVerifySpec {
+            start_bundle: 1,
+            end_bundle: None, // Should default to last_bundle (3)
+            check_parent_links: true,
+        };
+
+        let result = verify_chain(tmp.path(), &index, spec).unwrap();
+        assert!(result.valid);
+        assert_eq!(result.bundles_checked, 3);
+    }
+
+    #[test]
+    fn test_verify_chain_end_bundle_specified() {
+        let tmp = TempDir::new().unwrap();
+        // Each bundle's cursor should equal the previous bundle's end_time
+        let index = Index {
+            version: "1.0".to_string(),
+            origin: "test".to_string(),
+            last_bundle: 5,
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            total_size_bytes: 5000,
+            total_uncompressed_size_bytes: 10000,
+            bundles: vec![
+                create_test_bundle_metadata(1, "", "", "2024-01-01T01:00:00Z"), // end_time = "2024-01-01T01:00:00Z"
+                create_test_bundle_metadata(2, "hash1", "2024-01-01T01:00:00Z", "2024-01-01T02:00:00Z"), // cursor = bundle 1's end_time
+                create_test_bundle_metadata(3, "hash2", "2024-01-01T02:00:00Z", "2024-01-01T03:00:00Z"), // cursor = bundle 2's end_time
+                create_test_bundle_metadata(4, "hash3", "2024-01-01T03:00:00Z", "2024-01-01T04:00:00Z"), // cursor = bundle 3's end_time
+                create_test_bundle_metadata(5, "hash4", "2024-01-01T04:00:00Z", "2024-01-01T05:00:00Z"), // cursor = bundle 4's end_time
+            ],
+        };
+
+        let spec = ChainVerifySpec {
+            start_bundle: 1,
+            end_bundle: Some(2), // Only check first 2 bundles
+            check_parent_links: true,
+        };
+
+        let result = verify_chain(tmp.path(), &index, spec).unwrap();
+        assert!(result.valid);
+        assert_eq!(result.bundles_checked, 2);
+    }
+}

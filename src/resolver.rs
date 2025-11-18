@@ -357,3 +357,92 @@ pub fn format_audit_log(operations: &[Operation]) -> Vec<AuditLogEntry> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::operations::Operation;
+    use sonic_rs::Value;
+
+    #[test]
+    fn test_validate_did_format_valid() {
+        // Valid PLC DIDs
+        assert!(validate_did_format("did:plc:abcdefghijklmnopqrstuvwx").is_ok());
+        assert!(validate_did_format("did:plc:234567abcdefghijklmnopqr").is_ok());
+        assert!(validate_did_format("did:plc:zzzzzzzzzzzzzzzzzzzzzzzz").is_ok());
+    }
+
+    #[test]
+    fn test_validate_did_format_wrong_method() {
+        let result = validate_did_format("did:web:example.com");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid DID method"));
+    }
+
+    #[test]
+    fn test_validate_did_format_wrong_length() {
+        // Too short
+        let result = validate_did_format("did:plc:short");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid DID length"));
+
+        // Too long
+        let result = validate_did_format("did:plc:abcdefghijklmnopqrstuvwxyz");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_did_format_invalid_chars() {
+        // Invalid characters (uppercase, numbers 0-1, 8-9, special chars)
+        assert!(validate_did_format("did:plc:ABCDEFGHIJKLMNOPQRSTUVWX").is_err());
+        assert!(validate_did_format("did:plc:012345678901234567890123").is_err());
+        assert!(validate_did_format("did:plc:abcdefghijklmnopqrstuvw!").is_err());
+    }
+
+    #[test]
+    fn test_validate_did_format_base32_alphabet() {
+        // Valid base32: a-z, 2-7
+        assert!(validate_did_format("did:plc:abcdefghijklmnopqrstuvwx").is_ok());
+        assert!(validate_did_format("did:plc:234567abcdefghijklmnopqr").is_ok());
+        assert!(validate_did_format("did:plc:zzzzzzzzzzzzzzzzzzzzzzzz").is_ok());
+    }
+
+    #[test]
+    fn test_format_audit_log() {
+        let operations = vec![
+            Operation {
+                did: "did:plc:test1".to_string(),
+                operation: Value::new(),
+                cid: Some("cid1".to_string()),
+                nullified: false,
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                extra: Value::new(),
+                raw_json: None,
+            },
+            Operation {
+                did: "did:plc:test2".to_string(),
+                operation: Value::new(),
+                cid: None,
+                nullified: true,
+                created_at: "2024-01-01T01:00:00Z".to_string(),
+                extra: Value::new(),
+                raw_json: None,
+            },
+        ];
+
+        let audit_log = format_audit_log(&operations);
+        assert_eq!(audit_log.len(), 2);
+        assert_eq!(audit_log[0].did, "did:plc:test1");
+        assert_eq!(audit_log[0].cid, Some("cid1".to_string()));
+        assert_eq!(audit_log[0].nullified, None); // false is not serialized
+        assert_eq!(audit_log[1].did, "did:plc:test2");
+        assert_eq!(audit_log[1].cid, None);
+        assert_eq!(audit_log[1].nullified, Some(true));
+    }
+
+    #[test]
+    fn test_format_audit_log_empty() {
+        let audit_log = format_audit_log(&[]);
+        assert_eq!(audit_log.len(), 0);
+    }
+}

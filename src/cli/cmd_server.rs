@@ -2,14 +2,22 @@
 use anyhow::Result;
 use clap::{Args, ValueHint};
 use std::path::PathBuf;
+
+#[cfg(feature = "server")]
 use tokio::time::Duration;
 
 #[cfg(feature = "server")]
-use plcbundle::server::{start_server, StartupConfig, ProgressCallbackFactory, parse_duration};
+use plcbundle::server::{start_server, StartupConfig, ProgressCallbackFactory};
 #[cfg(feature = "server")]
 use super::progress::ProgressBar;
 #[cfg(feature = "server")]
 use std::sync::{Arc, Mutex};
+
+#[cfg(feature = "server")]
+fn parse_duration_for_clap(s: &str) -> Result<Duration, String> {
+    plcbundle::server::parse_duration(s)
+        .map_err(|e| e.to_string())
+}
 
 #[derive(Args)]
 #[command(
@@ -65,8 +73,13 @@ pub struct ServerCommand {
     pub plc: String,
 
     /// Sync interval (how often to check for new bundles)
-    #[arg(long, default_value = "60s", value_parser = |s: &str| parse_duration(s).map_err(|e| e.to_string()), help_heading = "Sync Options")]
+    #[cfg(feature = "server")]
+    #[arg(long, default_value = "60s", value_parser = parse_duration_for_clap, help_heading = "Sync Options")]
     pub interval: Duration,
+    
+    #[cfg(not(feature = "server"))]
+    #[arg(long, default_value = "60s", help_heading = "Sync Options")]
+    pub interval: String,
 
     /// Maximum bundles to fetch (0 = unlimited)
     #[arg(long, default_value = "0", help_heading = "Sync Options")]

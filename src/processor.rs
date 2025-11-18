@@ -407,3 +407,278 @@ pub fn parse_operation_range(spec: &str, max_operation: u64) -> Result<Vec<u64>>
     operations.dedup();
     Ok(operations)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_query_engine_simple() {
+        let engine = QueryEngine::new("did", QueryMode::Simple).unwrap();
+        let json = r#"{"did": "did:plc:test", "operation": {"type": "create"}}"#;
+        let result = engine.query(json).unwrap();
+        assert_eq!(result, Some("did:plc:test".to_string()));
+    }
+
+    #[test]
+    fn test_query_engine_simple_nested() {
+        let engine = QueryEngine::new("operation.type", QueryMode::Simple).unwrap();
+        let json = r#"{"did": "did:plc:test", "operation": {"type": "create"}}"#;
+        let result = engine.query(json).unwrap();
+        assert_eq!(result, Some("create".to_string()));
+    }
+
+    #[test]
+    fn test_query_engine_simple_missing() {
+        let engine = QueryEngine::new("missing.field", QueryMode::Simple).unwrap();
+        let json = r#"{"did": "did:plc:test"}"#;
+        let result = engine.query(json).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_query_engine_simple_null() {
+        let engine = QueryEngine::new("null_field", QueryMode::Simple).unwrap();
+        let json = r#"{"null_field": null}"#;
+        let result = engine.query(json).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_query_engine_jmespath() {
+        let engine = QueryEngine::new("did", QueryMode::JmesPath).unwrap();
+        let json = r#"{"did": "did:plc:test", "operation": {"type": "create"}}"#;
+        let result = engine.query(json).unwrap();
+        assert_eq!(result, Some("did:plc:test".to_string()));
+    }
+
+    #[test]
+    fn test_query_engine_jmespath_nested() {
+        let engine = QueryEngine::new("operation.type", QueryMode::JmesPath).unwrap();
+        let json = r#"{"did": "did:plc:test", "operation": {"type": "create"}}"#;
+        let result = engine.query(json).unwrap();
+        assert_eq!(result, Some("create".to_string()));
+    }
+
+    #[test]
+    fn test_output_buffer_new() {
+        let buffer = OutputBuffer::new(100);
+        assert!(buffer.is_empty());
+        assert_eq!(buffer.get_matched_bytes(), 0);
+    }
+
+    #[test]
+    fn test_output_buffer_push() {
+        let mut buffer = OutputBuffer::new(2);
+        assert!(!buffer.push("line1")); // count = 1, capacity = 2, so false
+        // When we push line2, count becomes 2, which equals capacity, so returns true
+        assert!(buffer.push("line2")); // Should return true when capacity reached
+        // After flush, count resets to 0
+        buffer.flush();
+        assert!(!buffer.push("line3")); // count = 1 again
+    }
+
+    #[test]
+    fn test_output_buffer_flush() {
+        let mut buffer = OutputBuffer::new(10);
+        buffer.push("line1");
+        buffer.push("line2");
+        
+        let flushed = buffer.flush();
+        assert_eq!(flushed, "line1\nline2\n");
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn test_output_buffer_matched_bytes() {
+        let mut buffer = OutputBuffer::new(10);
+        buffer.push("line1");
+        buffer.push("line2");
+        
+        // Each line adds len + 1 (for newline)
+        assert_eq!(buffer.get_matched_bytes(), 5 + 1 + 5 + 1);
+    }
+
+    #[test]
+    fn test_parse_bundle_range_single() {
+        let result = parse_bundle_range("1", 10).unwrap();
+        assert_eq!(result, vec![1]);
+    }
+
+    #[test]
+    fn test_parse_bundle_range_multiple() {
+        let result = parse_bundle_range("1,3,5", 10).unwrap();
+        assert_eq!(result, vec![1, 3, 5]);
+    }
+
+    #[test]
+    fn test_parse_bundle_range_range() {
+        let result = parse_bundle_range("1-3", 10).unwrap();
+        assert_eq!(result, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_parse_bundle_range_mixed() {
+        let result = parse_bundle_range("1,3-5,7", 10).unwrap();
+        assert_eq!(result, vec![1, 3, 4, 5, 7]);
+    }
+
+    #[test]
+    fn test_parse_bundle_range_dedup() {
+        let result = parse_bundle_range("1,1,2,2", 10).unwrap();
+        assert_eq!(result, vec![1, 2]);
+    }
+
+    #[test]
+    fn test_parse_bundle_range_empty_max() {
+        let result = parse_bundle_range("1", 0);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No bundles available"));
+    }
+
+    #[test]
+    fn test_parse_bundle_range_out_of_range() {
+        let result = parse_bundle_range("11", 10);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("out of range"));
+    }
+
+    #[test]
+    fn test_parse_bundle_range_invalid_range() {
+        let result = parse_bundle_range("5-3", 10);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("start must be <= end"));
+    }
+
+    #[test]
+    fn test_parse_bundle_range_invalid_format() {
+        let result = parse_bundle_range("1-2-3", 10);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid range format"));
+    }
+
+    #[test]
+    fn test_parse_bundle_range_keyword_root() {
+        let result = parse_bundle_range("root", 10).unwrap();
+        assert_eq!(result, vec![1]);
+    }
+
+    #[test]
+    fn test_parse_bundle_range_keyword_head() {
+        let result = parse_bundle_range("head", 10).unwrap();
+        assert_eq!(result, vec![10]);
+    }
+
+    #[test]
+    fn test_parse_bundle_range_keyword_head_offset() {
+        let result = parse_bundle_range("head~3", 10).unwrap();
+        assert_eq!(result, vec![7]); // 10 - 3 = 7
+    }
+
+    #[test]
+    fn test_parse_bundle_range_keyword_shorthand_offset() {
+        let result = parse_bundle_range("~2", 10).unwrap();
+        assert_eq!(result, vec![8]); // 10 - 2 = 8
+    }
+
+    #[test]
+    fn test_parse_bundle_range_keyword_mixed() {
+        let result = parse_bundle_range("root,head,head~1", 10).unwrap();
+        assert_eq!(result, vec![1, 9, 10]);
+    }
+
+    #[test]
+    fn test_parse_bundle_range_keyword_head_offset_invalid() {
+        let result = parse_bundle_range("head~10", 10);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("exceeds maximum bundle"));
+    }
+
+    #[test]
+    fn test_parse_bundle_range_keyword_shorthand_offset_invalid() {
+        let result = parse_bundle_range("~10", 10);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("exceeds maximum bundle"));
+    }
+
+    #[test]
+    fn test_parse_bundle_range_keyword_invalid_offset() {
+        let result = parse_bundle_range("head~abc", 10);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid offset"));
+    }
+
+    #[test]
+    fn test_parse_operation_range_single() {
+        let result = parse_operation_range("0", 1000).unwrap();
+        assert_eq!(result, vec![0]);
+    }
+
+    #[test]
+    fn test_parse_operation_range_multiple() {
+        let result = parse_operation_range("0,5,10", 1000).unwrap();
+        assert_eq!(result, vec![0, 5, 10]);
+    }
+
+    #[test]
+    fn test_parse_operation_range_range() {
+        let result = parse_operation_range("0-2", 1000).unwrap();
+        assert_eq!(result, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn test_parse_operation_range_mixed() {
+        let result = parse_operation_range("0,5-7,10", 1000).unwrap();
+        assert_eq!(result, vec![0, 5, 6, 7, 10]);
+    }
+
+    #[test]
+    fn test_parse_operation_range_dedup() {
+        let result = parse_operation_range("0,0,1,1", 1000).unwrap();
+        assert_eq!(result, vec![0, 1]);
+    }
+
+    #[test]
+    fn test_parse_operation_range_empty_max() {
+        let result = parse_operation_range("0", 0);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No operations available"));
+    }
+
+    #[test]
+    fn test_parse_operation_range_out_of_range() {
+        let result = parse_operation_range("1001", 1000);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("out of range"));
+    }
+
+    #[test]
+    fn test_parse_operation_range_invalid_range() {
+        let result = parse_operation_range("10-5", 1000);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("start must be <= end"));
+    }
+
+    #[test]
+    fn test_parse_operation_range_invalid_format() {
+        let result = parse_operation_range("1-2-3", 1000);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid range format"));
+    }
+
+    #[test]
+    fn test_parse_operation_range_invalid_number() {
+        let result = parse_operation_range("abc", 1000);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid operation number"));
+    }
+
+    #[test]
+    fn test_stats_default() {
+        let stats = Stats::default();
+        assert_eq!(stats.operations, 0);
+        assert_eq!(stats.matches, 0);
+        assert_eq!(stats.total_bytes, 0);
+        assert_eq!(stats.matched_bytes, 0);
+    }
+}

@@ -632,6 +632,272 @@ mod tests {
     }
 
     #[test]
+    fn test_get_bundle() {
+        let index = Index {
+            version: "1.0".to_string(),
+            origin: "test".to_string(),
+            last_bundle: 3,
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            total_size_bytes: 300,
+            total_uncompressed_size_bytes: 600,
+            bundles: vec![
+                BundleMetadata {
+                    bundle_number: 1,
+                    start_time: "2024-01-01T00:00:00Z".to_string(),
+                    end_time: "2024-01-01T01:00:00Z".to_string(),
+                    operation_count: 10,
+                    did_count: 5,
+                    hash: "hash1".to_string(),
+                    content_hash: "content1".to_string(),
+                    parent: String::new(),
+                    compressed_hash: "comp1".to_string(),
+                    compressed_size: 100,
+                    uncompressed_size: 200,
+                    cursor: String::new(),
+                    created_at: "2024-01-01T00:00:00Z".to_string(),
+                },
+                BundleMetadata {
+                    bundle_number: 2,
+                    start_time: "2024-01-01T01:00:00Z".to_string(),
+                    end_time: "2024-01-01T02:00:00Z".to_string(),
+                    operation_count: 10,
+                    did_count: 5,
+                    hash: "hash2".to_string(),
+                    content_hash: "content2".to_string(),
+                    parent: "hash1".to_string(),
+                    compressed_hash: "comp2".to_string(),
+                    compressed_size: 100,
+                    uncompressed_size: 200,
+                    cursor: "2024-01-01T01:00:00Z".to_string(),
+                    created_at: "2024-01-01T01:00:00Z".to_string(),
+                },
+                BundleMetadata {
+                    bundle_number: 3,
+                    start_time: "2024-01-01T02:00:00Z".to_string(),
+                    end_time: "2024-01-01T03:00:00Z".to_string(),
+                    operation_count: 10,
+                    did_count: 5,
+                    hash: "hash3".to_string(),
+                    content_hash: "content3".to_string(),
+                    parent: "hash2".to_string(),
+                    compressed_hash: "comp3".to_string(),
+                    compressed_size: 100,
+                    uncompressed_size: 200,
+                    cursor: "2024-01-01T02:00:00Z".to_string(),
+                    created_at: "2024-01-01T02:00:00Z".to_string(),
+                },
+            ],
+        };
+
+        assert!(index.get_bundle(1).is_some());
+        assert_eq!(index.get_bundle(1).unwrap().bundle_number, 1);
+        assert_eq!(index.get_bundle(1).unwrap().hash, "hash1");
+
+        assert!(index.get_bundle(2).is_some());
+        assert_eq!(index.get_bundle(2).unwrap().bundle_number, 2);
+        assert_eq!(index.get_bundle(2).unwrap().hash, "hash2");
+
+        assert!(index.get_bundle(3).is_some());
+        assert_eq!(index.get_bundle(3).unwrap().bundle_number, 3);
+
+        assert!(index.get_bundle(4).is_none());
+        assert!(index.get_bundle(0).is_none());
+    }
+
+    #[test]
+    fn test_total_uncompressed_size_for_bundles_all() {
+        let index = Index {
+            version: "1.0".to_string(),
+            origin: "test".to_string(),
+            last_bundle: 3,
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            total_size_bytes: 300,
+            total_uncompressed_size_bytes: 600,
+            bundles: vec![
+                BundleMetadata {
+                    bundle_number: 1,
+                    start_time: "2024-01-01T00:00:00Z".to_string(),
+                    end_time: "2024-01-01T01:00:00Z".to_string(),
+                    operation_count: 10,
+                    did_count: 5,
+                    hash: "hash1".to_string(),
+                    content_hash: "content1".to_string(),
+                    parent: String::new(),
+                    compressed_hash: "comp1".to_string(),
+                    compressed_size: 100,
+                    uncompressed_size: 200,
+                    cursor: String::new(),
+                    created_at: "2024-01-01T00:00:00Z".to_string(),
+                },
+                BundleMetadata {
+                    bundle_number: 2,
+                    start_time: "2024-01-01T01:00:00Z".to_string(),
+                    end_time: "2024-01-01T02:00:00Z".to_string(),
+                    operation_count: 10,
+                    did_count: 5,
+                    hash: "hash2".to_string(),
+                    content_hash: "content2".to_string(),
+                    parent: "hash1".to_string(),
+                    compressed_hash: "comp2".to_string(),
+                    compressed_size: 100,
+                    uncompressed_size: 200,
+                    cursor: "2024-01-01T01:00:00Z".to_string(),
+                    created_at: "2024-01-01T01:00:00Z".to_string(),
+                },
+                BundleMetadata {
+                    bundle_number: 3,
+                    start_time: "2024-01-01T02:00:00Z".to_string(),
+                    end_time: "2024-01-01T03:00:00Z".to_string(),
+                    operation_count: 10,
+                    did_count: 5,
+                    hash: "hash3".to_string(),
+                    content_hash: "content3".to_string(),
+                    parent: "hash2".to_string(),
+                    compressed_hash: "comp3".to_string(),
+                    compressed_size: 100,
+                    uncompressed_size: 200,
+                    cursor: "2024-01-01T02:00:00Z".to_string(),
+                    created_at: "2024-01-01T02:00:00Z".to_string(),
+                },
+            ],
+        };
+
+        // Test all bundles - should use pre-calculated total
+        let all_bundles = vec![1, 2, 3];
+        assert_eq!(index.total_uncompressed_size_for_bundles(&all_bundles), 600);
+    }
+
+    #[test]
+    fn test_total_uncompressed_size_for_bundles_subset() {
+        let index = Index {
+            version: "1.0".to_string(),
+            origin: "test".to_string(),
+            last_bundle: 3,
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            total_size_bytes: 300,
+            total_uncompressed_size_bytes: 600,
+            bundles: vec![
+                BundleMetadata {
+                    bundle_number: 1,
+                    start_time: "2024-01-01T00:00:00Z".to_string(),
+                    end_time: "2024-01-01T01:00:00Z".to_string(),
+                    operation_count: 10,
+                    did_count: 5,
+                    hash: "hash1".to_string(),
+                    content_hash: "content1".to_string(),
+                    parent: String::new(),
+                    compressed_hash: "comp1".to_string(),
+                    compressed_size: 100,
+                    uncompressed_size: 200,
+                    cursor: String::new(),
+                    created_at: "2024-01-01T00:00:00Z".to_string(),
+                },
+                BundleMetadata {
+                    bundle_number: 2,
+                    start_time: "2024-01-01T01:00:00Z".to_string(),
+                    end_time: "2024-01-01T02:00:00Z".to_string(),
+                    operation_count: 10,
+                    did_count: 5,
+                    hash: "hash2".to_string(),
+                    content_hash: "content2".to_string(),
+                    parent: "hash1".to_string(),
+                    compressed_hash: "comp2".to_string(),
+                    compressed_size: 100,
+                    uncompressed_size: 300,
+                    cursor: "2024-01-01T01:00:00Z".to_string(),
+                    created_at: "2024-01-01T01:00:00Z".to_string(),
+                },
+                BundleMetadata {
+                    bundle_number: 3,
+                    start_time: "2024-01-01T02:00:00Z".to_string(),
+                    end_time: "2024-01-01T03:00:00Z".to_string(),
+                    operation_count: 10,
+                    did_count: 5,
+                    hash: "hash3".to_string(),
+                    content_hash: "content3".to_string(),
+                    parent: "hash2".to_string(),
+                    compressed_hash: "comp3".to_string(),
+                    compressed_size: 100,
+                    uncompressed_size: 400,
+                    cursor: "2024-01-01T02:00:00Z".to_string(),
+                    created_at: "2024-01-01T02:00:00Z".to_string(),
+                },
+            ],
+        };
+
+        // Test subset - should sum individual bundles
+        let subset = vec![1, 3];
+        assert_eq!(index.total_uncompressed_size_for_bundles(&subset), 200 + 400);
+
+        // Test single bundle
+        let single = vec![2];
+        assert_eq!(index.total_uncompressed_size_for_bundles(&single), 300);
+    }
+
+    #[test]
+    fn test_total_uncompressed_size_for_bundles_empty() {
+        let index = Index {
+            version: "1.0".to_string(),
+            origin: "test".to_string(),
+            last_bundle: 0,
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            total_size_bytes: 0,
+            total_uncompressed_size_bytes: 0,
+            bundles: Vec::new(),
+        };
+
+        assert_eq!(index.total_uncompressed_size_for_bundles(&[]), 0);
+    }
+
+    #[test]
+    fn test_total_uncompressed_size_for_bundles_missing_bundle() {
+        let index = Index {
+            version: "1.0".to_string(),
+            origin: "test".to_string(),
+            last_bundle: 2,
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            total_size_bytes: 200,
+            total_uncompressed_size_bytes: 400,
+            bundles: vec![
+                BundleMetadata {
+                    bundle_number: 1,
+                    start_time: "2024-01-01T00:00:00Z".to_string(),
+                    end_time: "2024-01-01T01:00:00Z".to_string(),
+                    operation_count: 10,
+                    did_count: 5,
+                    hash: "hash1".to_string(),
+                    content_hash: "content1".to_string(),
+                    parent: String::new(),
+                    compressed_hash: "comp1".to_string(),
+                    compressed_size: 100,
+                    uncompressed_size: 200,
+                    cursor: String::new(),
+                    created_at: "2024-01-01T00:00:00Z".to_string(),
+                },
+                BundleMetadata {
+                    bundle_number: 2,
+                    start_time: "2024-01-01T01:00:00Z".to_string(),
+                    end_time: "2024-01-01T02:00:00Z".to_string(),
+                    operation_count: 10,
+                    did_count: 5,
+                    hash: "hash2".to_string(),
+                    content_hash: "content2".to_string(),
+                    parent: "hash1".to_string(),
+                    compressed_hash: "comp2".to_string(),
+                    compressed_size: 100,
+                    uncompressed_size: 200,
+                    cursor: "2024-01-01T01:00:00Z".to_string(),
+                    created_at: "2024-01-01T01:00:00Z".to_string(),
+                },
+            ],
+        };
+
+        // Requesting non-existent bundle should be ignored
+        let with_missing = vec![1, 3, 2];
+        assert_eq!(index.total_uncompressed_size_for_bundles(&with_missing), 200 + 200);
+    }
+
+    #[test]
     fn test_validate_last_bundle_mismatch() {
         let index = Index {
             version: "1.0".to_string(),

@@ -173,3 +173,92 @@ pub fn format_bytes_per_sec(bytes_per_sec: f64) -> String {
         format!("{:.1} {}/sec", size, UNITS[unit_idx])
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration as ChronoDuration;
+
+    #[test]
+    fn test_format_bytes() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(512), "512 B");
+        assert_eq!(format_bytes(1024), "1.00 KB");
+        assert_eq!(format_bytes(1536), "1.50 KB");
+        assert_eq!(format_bytes(1024 * 1024), "1.00 MB");
+        assert_eq!(format_bytes(1024 * 1024 * 1024), "1.00 GB");
+    }
+
+    #[test]
+    fn test_format_bytes_compact() {
+        assert_eq!(format_bytes_compact(0), "0");
+        assert_eq!(format_bytes_compact(512), "512");
+        assert_eq!(format_bytes_compact(1024), "1K");
+        assert_eq!(format_bytes_compact(1536), "1.5K");
+        assert_eq!(format_bytes_compact(1024 * 1024), "1M");
+        assert_eq!(format_bytes_compact(1024 * 1024 * 1024), "1G");
+        assert_eq!(format_bytes_compact(1536 * 1024), "1.5M");
+    }
+
+    #[test]
+    fn test_format_number() {
+        assert_eq!(format_number(0), "0");
+        assert_eq!(format_number(123), "123");
+        assert_eq!(format_number(1234), "1,234");
+        assert_eq!(format_number(12345), "12,345");
+        assert_eq!(format_number(123456), "123,456");
+        assert_eq!(format_number(1234567), "1,234,567");
+        assert_eq!(format_number(12345678), "12,345,678");
+    }
+
+    #[test]
+    fn test_format_std_duration() {
+        assert_eq!(format_std_duration(StdDuration::from_secs(0)), "0s");
+        assert_eq!(format_std_duration(StdDuration::from_secs(30)), "30s");
+        assert_eq!(format_std_duration(StdDuration::from_secs(60)), "1m");
+        assert_eq!(format_std_duration(StdDuration::from_secs(3600)), "1h");
+        assert_eq!(format_std_duration(StdDuration::from_secs(86400)), "1d");
+        assert_eq!(format_std_duration(StdDuration::from_secs(31536000)), "1y");
+    }
+
+    #[test]
+    fn test_format_std_duration_verbose() {
+        assert_eq!(format_std_duration_verbose(StdDuration::from_secs(0)), "0s");
+        assert_eq!(format_std_duration_verbose(StdDuration::from_secs(5)), "5s");
+        assert_eq!(format_std_duration_verbose(StdDuration::from_secs(65)), "1m 5s");
+        assert_eq!(format_std_duration_verbose(StdDuration::from_secs(3665)), "1h 1m 5s");
+        assert_eq!(format_std_duration_verbose(StdDuration::from_secs(90065)), "1d 1h 1m 5s");
+    }
+
+    #[test]
+    fn test_format_std_duration_ms() {
+        assert_eq!(format_std_duration_ms(StdDuration::from_millis(0)), "0.000ms");
+        assert_eq!(format_std_duration_ms(StdDuration::from_millis(50)), "50.000ms");
+        assert_eq!(format_std_duration_ms(StdDuration::from_millis(100)), "100ms");
+        assert_eq!(format_std_duration_ms(StdDuration::from_millis(1234)), "1234ms");
+    }
+
+    #[test]
+    fn test_format_duration_verbose() {
+        assert_eq!(format_duration_verbose(ChronoDuration::seconds(0)), "0s");
+        assert_eq!(format_duration_verbose(ChronoDuration::seconds(65)), "1m 5s");
+        assert_eq!(format_duration_verbose(ChronoDuration::seconds(-65)), "-1m 5s");
+    }
+
+    #[test]
+    fn test_format_duration_compact() {
+        assert_eq!(format_duration_compact(ChronoDuration::seconds(0)), "0s");
+        assert_eq!(format_duration_compact(ChronoDuration::seconds(30)), "30s");
+        assert_eq!(format_duration_compact(ChronoDuration::seconds(60)), "1m");
+        assert_eq!(format_duration_compact(ChronoDuration::seconds(-60)), "-1m");
+    }
+
+    #[test]
+    fn test_format_bytes_per_sec() {
+        assert_eq!(format_bytes_per_sec(0.0), "0.0 B/sec");
+        assert_eq!(format_bytes_per_sec(512.0), "512.0 B/sec");
+        assert_eq!(format_bytes_per_sec(1024.0), "1.0 KB/sec");
+        assert_eq!(format_bytes_per_sec(1536.0), "1.5 KB/sec");
+        assert_eq!(format_bytes_per_sec(1024.0 * 1024.0), "1.0 MB/sec");
+    }
+}

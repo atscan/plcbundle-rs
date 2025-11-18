@@ -163,3 +163,86 @@ pub fn normalize_handle(handle: &str) -> String {
         .trim_start_matches("@")
         .to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_handle_format_valid() {
+        // Valid handles
+        assert!(validate_handle_format("user.bsky.social").is_ok());
+        assert!(validate_handle_format("example.com").is_ok());
+        assert!(validate_handle_format("test.example.org").is_ok());
+        assert!(validate_handle_format("a.b").is_ok());
+        assert!(validate_handle_format("sub.domain.example.com").is_ok());
+    }
+
+    #[test]
+    fn test_validate_handle_format_empty() {
+        let result = validate_handle_format("");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("cannot be empty"));
+    }
+
+    #[test]
+    fn test_validate_handle_format_did() {
+        let result = validate_handle_format("did:plc:test");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("already a DID"));
+    }
+
+    #[test]
+    fn test_validate_handle_format_no_dot() {
+        let result = validate_handle_format("nodomain");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("must be a domain"));
+    }
+
+    #[test]
+    fn test_validate_handle_format_too_long() {
+        let long_handle = "a".repeat(254) + ".com";
+        let result = validate_handle_format(&long_handle);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("too long"));
+    }
+
+    #[test]
+    fn test_validate_handle_format_invalid_chars() {
+        // Invalid characters
+        assert!(validate_handle_format("user@bsky.social").is_err());
+        assert!(validate_handle_format("user bsky.social").is_err());
+        assert!(validate_handle_format("user_bsky.social").is_err());
+    }
+
+    #[test]
+    fn test_is_handle() {
+        assert!(is_handle("user.bsky.social"));
+        assert!(is_handle("example.com"));
+        assert!(!is_handle("did:plc:test"));
+        assert!(!is_handle("did:web:example.com"));
+        assert!(!is_handle("did:key:z6Mk"));
+    }
+
+    #[test]
+    fn test_normalize_handle() {
+        assert_eq!(normalize_handle("user.bsky.social"), "user.bsky.social");
+        assert_eq!(normalize_handle("at://user.bsky.social"), "user.bsky.social");
+        assert_eq!(normalize_handle("@user.bsky.social"), "user.bsky.social");
+        // Note: trim_start_matches removes all matches, so "at://@user" becomes "user" (both prefixes removed)
+        assert_eq!(normalize_handle("at://@user.bsky.social"), "user.bsky.social");
+        assert_eq!(normalize_handle("example.com"), "example.com");
+    }
+
+    #[test]
+    fn test_handle_resolver_new() {
+        let resolver = HandleResolver::new("https://example.com");
+        assert_eq!(resolver.get_base_url(), "https://example.com");
+    }
+
+    #[test]
+    fn test_handle_resolver_new_trim_slash() {
+        let resolver = HandleResolver::new("https://example.com/");
+        assert_eq!(resolver.get_base_url(), "https://example.com");
+    }
+}

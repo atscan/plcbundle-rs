@@ -219,3 +219,45 @@ pub fn load_local_index(target: &str) -> Result<Index> {
         Index::load(path)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_base_url() {
+        // Test removing trailing slash
+        assert_eq!(normalize_base_url("https://example.com/".to_string()), "https://example.com");
+        
+        // Test removing index.json
+        assert_eq!(normalize_base_url("https://example.com/index.json".to_string()), "https://example.com");
+        
+        // Test removing plc_bundles.json
+        assert_eq!(normalize_base_url("https://example.com/plc_bundles.json".to_string()), "https://example.com");
+        
+        // Test removing both trailing slash and index file
+        assert_eq!(normalize_base_url("https://example.com/index.json/".to_string()), "https://example.com");
+        
+        // Test already normalized URL
+        assert_eq!(normalize_base_url("https://example.com".to_string()), "https://example.com");
+        
+        // Test with path
+        assert_eq!(normalize_base_url("https://example.com/api/".to_string()), "https://example.com/api");
+    }
+
+    #[test]
+    fn test_remote_client_new() {
+        let client = RemoteClient::new("https://example.com").unwrap();
+        // Can't easily test the internal state, but we can verify it was created
+        assert!(client.base_url.contains("example.com"));
+    }
+
+    #[test]
+    fn test_remote_client_new_normalizes_url() {
+        let client = RemoteClient::new("https://example.com/").unwrap();
+        assert!(!client.base_url.ends_with('/'));
+        
+        let client2 = RemoteClient::new("https://example.com/index.json").unwrap();
+        assert!(!client2.base_url.ends_with("index.json"));
+    }
+}

@@ -80,3 +80,97 @@ impl Default for OptionsBuilder {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_options_default() {
+        let opts = Options::default();
+        assert_eq!(opts.directory, PathBuf::from("."));
+        assert_eq!(opts.query, "did");
+        assert_eq!(opts.query_mode, QueryMode::Simple);
+        assert_eq!(opts.num_threads, 0);
+        assert_eq!(opts.batch_size, 2000);
+    }
+
+    #[test]
+    fn test_query_mode_equality() {
+        assert_eq!(QueryMode::Simple, QueryMode::Simple);
+        assert_eq!(QueryMode::JmesPath, QueryMode::JmesPath);
+        assert_ne!(QueryMode::Simple, QueryMode::JmesPath);
+    }
+
+    #[test]
+    fn test_options_builder_new() {
+        let builder = OptionsBuilder::new();
+        let opts = builder.build();
+        assert_eq!(opts.query, "did");
+        assert_eq!(opts.query_mode, QueryMode::Simple);
+    }
+
+    #[test]
+    fn test_options_builder_default() {
+        let builder = OptionsBuilder::default();
+        let opts = builder.build();
+        assert_eq!(opts.query, "did");
+    }
+
+    #[test]
+    fn test_options_builder_directory() {
+        let opts = OptionsBuilder::new()
+            .directory("/tmp/test")
+            .build();
+        assert_eq!(opts.directory, PathBuf::from("/tmp/test"));
+    }
+
+    #[test]
+    fn test_options_builder_query() {
+        let opts = OptionsBuilder::new()
+            .query("operation.type")
+            .build();
+        assert_eq!(opts.query, "operation.type");
+    }
+
+    #[test]
+    fn test_options_builder_query_mode() {
+        let opts = OptionsBuilder::new()
+            .query_mode(QueryMode::JmesPath)
+            .build();
+        assert_eq!(opts.query_mode, QueryMode::JmesPath);
+    }
+
+    #[test]
+    fn test_options_builder_num_threads() {
+        let opts = OptionsBuilder::new()
+            .num_threads(4)
+            .build();
+        assert_eq!(opts.num_threads, 4);
+    }
+
+    #[test]
+    fn test_options_builder_batch_size() {
+        let opts = OptionsBuilder::new()
+            .batch_size(5000)
+            .build();
+        assert_eq!(opts.batch_size, 5000);
+    }
+
+    #[test]
+    fn test_options_builder_chain() {
+        let opts = OptionsBuilder::new()
+            .directory("/tmp/test")
+            .query("did")
+            .query_mode(QueryMode::JmesPath)
+            .num_threads(8)
+            .batch_size(1000)
+            .build();
+        
+        assert_eq!(opts.directory, PathBuf::from("/tmp/test"));
+        assert_eq!(opts.query, "did");
+        assert_eq!(opts.query_mode, QueryMode::JmesPath);
+        assert_eq!(opts.num_threads, 8);
+        assert_eq!(opts.batch_size, 1000);
+    }
+}

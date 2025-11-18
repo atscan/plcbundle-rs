@@ -280,6 +280,25 @@ fn parse_retry_after(response: &reqwest::Response) -> Duration {
     Duration::from_secs(MAX_RETRY_SECONDS)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_plc_client_new() {
+        let client = PLCClient::new("https://plc.directory").unwrap();
+        // Verify client was created successfully
+        assert!(client.base_url.contains("plc.directory"));
+    }
+
+    #[tokio::test]
+    async fn test_plc_client_new_with_trailing_slash() {
+        let client = PLCClient::new("https://plc.directory/").unwrap();
+        // URL should be stored as-is (no normalization in PLCClient)
+        assert!(client.base_url.contains("plc.directory"));
+    }
+}
+
 /// Simple token bucket rate limiter
 /// Prevents burst requests by starting with 0 permits and refilling at steady rate
 struct RateLimiter {

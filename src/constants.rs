@@ -162,3 +162,157 @@ pub fn global_to_bundle_position(global_pos: u64) -> (u32, usize) {
     let position = (global_pos % BUNDLE_SIZE as u64) as usize;
     (bundle_num, position)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn test_user_agent() {
+        let ua = user_agent();
+        assert!(ua.starts_with("plcbundle/"));
+        assert!(ua.contains("plcbundle"));
+    }
+
+    #[test]
+    fn test_created_by() {
+        let cb = created_by();
+        assert!(cb.starts_with("plcbundle/"));
+        assert!(cb.contains("plcbundle"));
+    }
+
+    #[test]
+    fn test_bundle_filename() {
+        assert_eq!(bundle_filename(1), "000001.jsonl.zst");
+        assert_eq!(bundle_filename(42), "000042.jsonl.zst");
+        assert_eq!(bundle_filename(123456), "123456.jsonl.zst");
+        assert_eq!(bundle_filename(0), "000000.jsonl.zst");
+    }
+
+    #[test]
+    fn test_bundle_path() {
+        let dir = Path::new("/tmp/test");
+        let path = bundle_path(dir, 1);
+        assert_eq!(path, Path::new("/tmp/test/000001.jsonl.zst"));
+
+        let path2 = bundle_path(dir, 42);
+        assert_eq!(path2, Path::new("/tmp/test/000042.jsonl.zst"));
+    }
+
+    #[test]
+    fn test_bundle_position_to_global() {
+        // Bundle 1, position 0 → global 0
+        assert_eq!(bundle_position_to_global(1, 0), 0);
+        
+        // Bundle 1, position 9999 → global 9999
+        assert_eq!(bundle_position_to_global(1, 9999), 9999);
+        
+        // Bundle 2, position 0 → global 10000
+        assert_eq!(bundle_position_to_global(2, 0), 10000);
+        
+        // Bundle 2, position 500 → global 10500
+        assert_eq!(bundle_position_to_global(2, 500), 10500);
+        
+        // Bundle 3, position 42 → global 20042
+        assert_eq!(bundle_position_to_global(3, 42), 20042);
+    }
+
+    #[test]
+    fn test_bundle_position_to_global_edge_cases() {
+        // Bundle 0 (edge case, should handle gracefully)
+        assert_eq!(bundle_position_to_global(0, 0), 0);
+        
+        // Large bundle numbers
+        assert_eq!(bundle_position_to_global(100, 0), 990000);
+        assert_eq!(bundle_position_to_global(100, 5000), 995000);
+    }
+
+    #[test]
+    fn test_total_operations_from_bundles() {
+        assert_eq!(total_operations_from_bundles(0), 0);
+        assert_eq!(total_operations_from_bundles(1), 10000);
+        assert_eq!(total_operations_from_bundles(2), 20000);
+        assert_eq!(total_operations_from_bundles(100), 1000000);
+    }
+
+    #[test]
+    fn test_mempool_position_to_global() {
+        // With last_bundle = 0, mempool position 0 → global 0
+        assert_eq!(mempool_position_to_global(0, 0), 0);
+        
+        // With last_bundle = 1, mempool position 0 → global 10000
+        assert_eq!(mempool_position_to_global(1, 0), 10000);
+        
+        // With last_bundle = 1, mempool position 42 → global 10042
+        assert_eq!(mempool_position_to_global(1, 42), 10042);
+        
+        // With last_bundle = 2, mempool position 100 → global 20100
+        assert_eq!(mempool_position_to_global(2, 100), 20100);
+    }
+
+    #[test]
+    fn test_global_to_bundle_position() {
+        // Global 0 → bundle 1, position 0
+        let (bundle, pos) = global_to_bundle_position(0);
+        assert_eq!(bundle, 1);
+        assert_eq!(pos, 0);
+        
+        // Global 9999 → bundle 1, position 9999
+        let (bundle, pos) = global_to_bundle_position(9999);
+        assert_eq!(bundle, 1);
+        assert_eq!(pos, 9999);
+        
+        // Global 10000 → bundle 2, position 0
+        let (bundle, pos) = global_to_bundle_position(10000);
+        assert_eq!(bundle, 2);
+        assert_eq!(pos, 0);
+        
+        // Global 10500 → bundle 2, position 500
+        let (bundle, pos) = global_to_bundle_position(10500);
+        assert_eq!(bundle, 2);
+        assert_eq!(pos, 500);
+        
+        // Global 20042 → bundle 3, position 42
+        let (bundle, pos) = global_to_bundle_position(20042);
+        assert_eq!(bundle, 3);
+        assert_eq!(pos, 42);
+    }
+
+    #[test]
+    fn test_global_to_bundle_position_round_trip() {
+        // Test round-trip conversion
+        for bundle in 1..=10 {
+            for position in [0, 100, 1000, 5000, 9999] {
+                let global = bundle_position_to_global(bundle, position);
+                let (bundle_back, pos_back) = global_to_bundle_position(global);
+                assert_eq!(bundle, bundle_back, "Bundle mismatch for global {}", global);
+                assert_eq!(position, pos_back, "Position mismatch for global {}", global);
+            }
+        }
+    }
+
+    #[test]
+    fn test_constants_values() {
+        assert_eq!(BUNDLE_SIZE, 10_000);
+        assert_eq!(FRAME_SIZE, 100);
+        assert_eq!(DEFAULT_RATE_LIMIT, 72);
+        assert_eq!(HTTP_TIMEOUT_SECS, 60);
+        assert_eq!(HTTP_INDEX_TIMEOUT_SECS, 30);
+        assert_eq!(HTTP_BUNDLE_TIMEOUT_SECS, 60);
+        assert_eq!(HTTP_RESOLVER_TIMEOUT_SECS, 10);
+        assert_eq!(HTTP_PING_TIMEOUT_SECS, 5);
+        assert_eq!(MEMPOOL_STALE_THRESHOLD_SECS, 3600);
+        assert_eq!(MIN_BUNDLE_CREATION_INTERVAL_SECS, 60);
+        assert_eq!(MEMPOOL_FILE_PREFIX, "plc_mempool_");
+        assert_eq!(DID_INDEX_DIR, ".plcbundle");
+        assert_eq!(DID_INDEX_SHARDS, "shards");
+        assert_eq!(DID_INDEX_DELTAS, "deltas");
+        assert_eq!(DID_INDEX_CONFIG, "config.json");
+        assert_eq!(DEFAULT_PLC_DIRECTORY_URL, "https://plc.directory");
+        assert_eq!(DEFAULT_HANDLE_RESOLVER_URL, "https://quickdid.smokesignal.tools");
+        assert_eq!(DEFAULT_ORIGIN, "local");
+        assert_eq!(ZSTD_COMPRESSION_LEVEL, 1);
+        assert_eq!(DID_INDEX_FLUSH_INTERVAL, 64);
+    }
+}

@@ -589,21 +589,25 @@ mod tests {
     #[test]
     fn test_parallel_compression_matches_sequential() {
         use crate::operations::Operation;
+        use sonic_rs::{Value, from_str};
 
         // Create test operations
         let mut operations = Vec::new();
         for i in 0..250 {
             // Multiple frames (250 ops = 3 frames with FRAME_SIZE=100)
+            let operation_json = format!(
+                r#"{{"type":"create","data":"test data {}"}}"#,
+                i
+            );
+            let operation_value: Value = from_str(&operation_json).unwrap();
+            let extra_value: Value = from_str("{}").unwrap_or_else(|_| Value::new());
             operations.push(Operation {
                 did: format!("did:plc:test{}", i),
-                operation: serde_json::json!({
-                    "type": "create",
-                    "data": format!("test data {}", i),
-                }),
+                operation: operation_value,
                 cid: Some(format!("cid{}", i)),
                 created_at: "2024-01-01T00:00:00Z".to_string(),
                 nullified: false,
-                extra: serde_json::Value::Object(serde_json::Map::new()),
+                extra: extra_value,
                 raw_json: None,
             });
         }
@@ -690,5 +694,144 @@ mod tests {
 
         assert_eq!(read_metadata.bundle_number, 42);
         assert_eq!(read_metadata.frame_count, 100);
+    }
+
+    #[test]
+    fn test_skippable_frame_empty_data() {
+        let data = b"";
+        let mut buffer = Vec::new();
+
+        write_skippable_frame(&mut buffer, SKIPPABLE_MAGIC_METADATA, data).unwrap();
+
+        let mut cursor = std::io::Cursor::new(&buffer);
+        let (magic, read_data) = read_skippable_frame(&mut cursor).unwrap();
+
+        assert_eq!(magic, SKIPPABLE_MAGIC_METADATA);
+        assert_eq!(read_data, data);
+        assert_eq!(read_data.len(), 0);
+    }
+
+    #[test]
+    fn test_skippable_frame_large_data() {
+        let data = vec![0x42u8; 10000];
+        let mut buffer = Vec::new();
+
+        write_skippable_frame(&mut buffer, SKIPPABLE_MAGIC_METADATA, &data).unwrap();
+
+        let mut cursor = std::io::Cursor::new(&buffer);
+        let (magic, read_data) = read_skippable_frame(&mut cursor).unwrap();
+
+        assert_eq!(magic, SKIPPABLE_MAGIC_METADATA);
+        assert_eq!(read_data, data);
+    }
+
+    #[test]
+    fn test_skippable_frame_invalid_magic() {
+        let data = b"test";
+        let mut buffer = Vec::new();
+
+        // Write with invalid magic (not in skippable range)
+        buffer.write_all(&0x12345678u32.to_le_bytes()).unwrap();
+        buffer.write_all(&(data.len() as u32).to_le_bytes()).unwrap();
+        buffer.write_all(data).unwrap();
+
+        let mut cursor = std::io::Cursor::new(&buffer);
+        let result = read_skippable_frame(&mut cursor);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Not a skippable frame"));
+    }
+
+    #[test]
+    fn test_skippable_frame_valid_magic_range() {
+        // Test all valid magic values in range 0x184D2A50 - 0x184D2A5F
+        for magic_val in 0x184D2A50..=0x184D2A5F {
+            let data = b"test";
+            let mut buffer = Vec::new();
+
+            write_skippable_frame(&mut buffer, magic_val, data).unwrap();
+
+            let mut cursor = std::io::Cursor::new(&buffer);
+            let (read_magic, read_data) = read_skippable_frame(&mut cursor).unwrap();
+
+            assert_eq!(read_magic, magic_val);
+            assert_eq!(read_data, data);
+        }
+    }
+
+    #[test]
+    fn test_metadata_frame_with_parent_hash() {
+        let metadata = BundleMetadata {
+            format: "plcbundle-v1".to_string(),
+            bundle_number: 2,
+            origin: "test".to_string(),
+            content_hash: "hash2".to_string(),
+            parent_hash: Some("hash1".to_string()),
+            uncompressed_size: Some(1000000),
+            compressed_size: Some(500000),
+            operation_count: 10000,
+            did_count: 5000,
+            start_time: "2024-01-01T00:00:00Z".to_string(),
+            end_time: "2024-01-01T23:59:59Z".to_string(),
+            created_at: "2024-01-02T00:00:00Z".to_string(),
+            created_by: "test/1.0".to_string(),
+            frame_count: 100,
+            frame_size: 100,
+            frame_offsets: vec![0, 1000, 2000, 3000],
+        };
+
+        let mut buffer = Vec::new();
+        write_metadata_frame(&mut buffer, &metadata).unwrap();
+
+        let mut cursor = std::io::Cursor::new(&buffer);
+        let read_metadata = read_metadata_frame(&mut cursor).unwrap();
+
+        assert_eq!(read_metadata.bundle_number, 2);
+        assert_eq!(read_metadata.parent_hash, Some("hash1".to_string()));
+        assert_eq!(read_metadata.uncompressed_size, Some(1000000));
+        assert_eq!(read_metadata.compressed_size, Some(500000));
+        assert_eq!(read_metadata.frame_offsets.len(), 4);
+    }
+
+    #[test]
+    fn test_metadata_frame_wrong_magic() {
+        let metadata = BundleMetadata {
+            format: "plcbundle-v1".to_string(),
+            bundle_number: 1,
+            origin: "test".to_string(),
+            content_hash: "hash1".to_string(),
+            parent_hash: None,
+            uncompressed_size: None,
+            compressed_size: None,
+            operation_count: 100,
+            did_count: 50,
+            start_time: "2024-01-01T00:00:00Z".to_string(),
+            end_time: "2024-01-01T23:59:59Z".to_string(),
+            created_at: "2024-01-02T00:00:00Z".to_string(),
+            created_by: "test/1.0".to_string(),
+            frame_count: 1,
+            frame_size: 100,
+            frame_offsets: vec![0, 1000],
+        };
+
+        let mut buffer = Vec::new();
+        // Write with wrong magic
+        write_skippable_frame(&mut buffer, 0x184D2A51, &sonic_rs::to_vec(&metadata).unwrap()).unwrap();
+
+        let mut cursor = std::io::Cursor::new(&buffer);
+        let result = read_metadata_frame(&mut cursor);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Unexpected magic"));
+    }
+
+    #[test]
+    fn test_skippable_frame_size_calculation() {
+        let data = b"hello world";
+        let mut buffer = Vec::new();
+
+        let written = write_skippable_frame(&mut buffer, SKIPPABLE_MAGIC_METADATA, data).unwrap();
+
+        // Should be: magic(4) + size(4) + data(11) = 19
+        assert_eq!(written, 8 + data.len());
+        assert_eq!(buffer.len(), written);
     }
 }

@@ -211,17 +211,18 @@ mod tests {
         };
         run(cmd).unwrap();
 
-        // Second init without force
+        // Second init without force should fail
         let cmd = InitCommand {
             dir: temp.path().to_path_buf(),
             plc: Some("second".to_string()),
             origin: None,
             force: false,
         };
-        run(cmd).unwrap(); // Should succeed but not overwrite
+        assert!(run(cmd).is_err(), "Should fail when trying to initialize already-initialized repository without --force");
 
+        // Verify the origin is still "first" (not overwritten)
         let index = Index::load(temp.path()).unwrap();
-        assert_eq!(index.origin, "first"); // Still first
+        assert_eq!(index.origin, "first");
     }
 
     #[test]

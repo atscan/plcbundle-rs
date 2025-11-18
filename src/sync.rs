@@ -313,7 +313,7 @@ impl SyncLogger for SyncLoggerImpl {
         &self,
         total_bundles: u32,
         mempool_count: usize,
-        interval: Duration,
+        _interval: Duration,
     ) {
         eprintln!(
             "[Sync] ✓ Initial sync complete ({} bundles synced)",
@@ -960,5 +960,132 @@ mod tests {
         let result = strip_boundary_duplicates(ops, &prev);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].cid.as_ref().unwrap(), "cid2");
+    }
+
+    // Additional comprehensive tests
+    fn create_operation_helper(did: &str, cid: Option<&str>, created_at: &str) -> Operation {
+        Operation {
+            did: did.to_string(),
+            operation: Value::new(),
+            cid: cid.map(|s| s.to_string()),
+            nullified: false,
+            created_at: created_at.to_string(),
+            extra: Value::new(),
+            raw_json: None,
+        }
+    }
+
+    #[test]
+    fn test_get_boundary_cids_empty() {
+        let ops = vec![];
+        let cids = get_boundary_cids(&ops);
+        assert!(cids.is_empty());
+    }
+
+    #[test]
+    fn test_get_boundary_cids_single() {
+        let ops = vec![create_operation_helper("did:plc:test", Some("cid1"), "2024-01-01T00:00:00Z")];
+        let cids = get_boundary_cids(&ops);
+        assert_eq!(cids.len(), 1);
+        assert!(cids.contains("cid1"));
+    }
+
+    #[test]
+    fn test_get_boundary_cids_multiple_same_time() {
+        let ops = vec![
+            create_operation_helper("did:plc:test1", Some("cid1"), "2024-01-01T00:00:00Z"),
+            create_operation_helper("did:plc:test2", Some("cid2"), "2024-01-01T00:00:00Z"),
+            create_operation_helper("did:plc:test3", Some("cid3"), "2024-01-01T00:00:00Z"),
+        ];
+        let cids = get_boundary_cids(&ops);
+        assert_eq!(cids.len(), 3);
+        assert!(cids.contains("cid1"));
+        assert!(cids.contains("cid2"));
+        assert!(cids.contains("cid3"));
+    }
+
+    #[test]
+    fn test_get_boundary_cids_different_times() {
+        let ops = vec![
+            create_operation_helper("did:plc:test1", Some("cid1"), "2024-01-01T00:00:00Z"),
+            create_operation_helper("did:plc:test2", Some("cid2"), "2024-01-01T00:00:01Z"),
+            create_operation_helper("did:plc:test3", Some("cid3"), "2024-01-01T00:00:01Z"),
+        ];
+        let cids = get_boundary_cids(&ops);
+        assert_eq!(cids.len(), 2);
+        assert!(!cids.contains("cid1"));
+        assert!(cids.contains("cid2"));
+        assert!(cids.contains("cid3"));
+    }
+
+    #[test]
+    fn test_get_boundary_cids_no_cid() {
+        let ops = vec![
+            create_operation_helper("did:plc:test1", None, "2024-01-01T00:00:00Z"),
+            create_operation_helper("did:plc:test2", Some("cid2"), "2024-01-01T00:00:00Z"),
+        ];
+        let cids = get_boundary_cids(&ops);
+        assert_eq!(cids.len(), 1);
+        assert!(cids.contains("cid2"));
+    }
+
+    #[test]
+    fn test_strip_boundary_duplicates_empty() {
+        let ops = vec![];
+        let prev_boundary = HashSet::new();
+        let result = strip_boundary_duplicates(ops, &prev_boundary);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_strip_boundary_duplicates_no_prev_boundary() {
+        let ops = vec![
+            create_operation_helper("did:plc:test1", Some("cid1"), "2024-01-01T00:00:00Z"),
+            create_operation_helper("did:plc:test2", Some("cid2"), "2024-01-01T00:00:00Z"),
+        ];
+        let prev_boundary = HashSet::new();
+        let result = strip_boundary_duplicates(ops, &prev_boundary);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_strip_boundary_duplicates_with_matches() {
+        let ops = vec![
+            create_operation_helper("did:plc:test1", Some("cid1"), "2024-01-01T00:00:00Z"),
+            create_operation_helper("did:plc:test2", Some("cid2"), "2024-01-01T00:00:00Z"),
+            create_operation_helper("did:plc:test3", Some("cid3"), "2024-01-01T00:00:00Z"),
+        ];
+        let mut prev_boundary = HashSet::new();
+        prev_boundary.insert("cid2".to_string());
+        let result = strip_boundary_duplicates(ops, &prev_boundary);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].cid, Some("cid1".to_string()));
+        assert_eq!(result[1].cid, Some("cid3".to_string()));
+    }
+
+    #[test]
+    fn test_strip_boundary_duplicates_no_cid() {
+        let ops = vec![
+            create_operation_helper("did:plc:test1", None, "2024-01-01T00:00:00Z"),
+            create_operation_helper("did:plc:test2", Some("cid2"), "2024-01-01T00:00:00Z"),
+        ];
+        let mut prev_boundary = HashSet::new();
+        prev_boundary.insert("cid2".to_string());
+        let result = strip_boundary_duplicates(ops, &prev_boundary);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].cid, None);
+    }
+
+    #[test]
+    fn test_strip_boundary_duplicates_all_matched() {
+        let ops = vec![
+            create_operation_helper("did:plc:test1", Some("cid1"), "2024-01-01T00:00:00Z"),
+            create_operation_helper("did:plc:test2", Some("cid2"), "2024-01-01T00:00:00Z"),
+        ];
+        let mut prev_boundary = HashSet::new();
+        prev_boundary.insert("cid1".to_string());
+        prev_boundary.insert("cid2".to_string());
+        let result = strip_boundary_duplicates(ops, &prev_boundary);
+        assert!(result.is_empty());
     }
 }
