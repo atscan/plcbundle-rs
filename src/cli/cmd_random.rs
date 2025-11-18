@@ -5,6 +5,7 @@ use std::path::PathBuf;
 #[derive(Args, Debug)]
 #[command(
     about = "Output random DIDs sampled from the index",
+    alias = "rand",
     long_about = "Sample random DIDs from the repository for testing, analysis, or statistical
 purposes. Uses the DID index to efficiently select random identifiers without
 scanning all bundles.
