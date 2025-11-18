@@ -1,4 +1,4 @@
-// Remote access module for fetching data from remote plcbundle instances
+//! Remote client for plcbundle instances: fetch index, bundles, operations, and DID documents; includes local index loader and URL normalization
 // This module is for fetching from other plcbundle repositories, not from PLC directory
 use crate::constants;
 use crate::index::Index;

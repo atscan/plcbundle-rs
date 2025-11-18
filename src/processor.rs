@@ -1,3 +1,4 @@
+//! Query engine and processor supporting simple path and JMESPath queries with parallel bundle processing and batched output
 use crate::constants;
 use crate::index::Index;
 use crate::options::{Options, QueryMode};

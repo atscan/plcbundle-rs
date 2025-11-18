@@ -1,4 +1,6 @@
 
+//! PLC synchronization: events and logger, boundary-CID deduplication, one-shot and continuous modes, and robust error/backoff handling
+
 // Sync module - PLC directory synchronization
 use crate::constants;
 use crate::operations::Operation;

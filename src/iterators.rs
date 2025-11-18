@@ -1,3 +1,4 @@
+//! Iterators for traversing bundles and operations: range iteration and streaming export
 // src/iterators.rs
 use crate::manager::{BundleManager, ExportSpec, LoadOptions, QuerySpec};
 use crate::operations::{Operation, OperationFilter};

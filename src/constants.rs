@@ -1,3 +1,4 @@
+//! Global constants and helpers for filenames/paths, networking defaults, compression, index settings, and position conversions
 // Constants for version and binary identification
 use std::path::{Path, PathBuf};
 

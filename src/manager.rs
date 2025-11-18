@@ -1,3 +1,4 @@
+//! High-level manager orchestrating loading, random access, DID resolution, querying/export, sync, verification, rollback/migration, and mempool management
 // src/manager.rs
 use crate::constants::{self, bundle_position_to_global, total_operations_from_bundles};
 use crate::index::{BundleMetadata, Index};

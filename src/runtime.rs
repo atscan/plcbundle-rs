@@ -1,3 +1,4 @@
+//! Graceful shutdown coordination for server and background tasks, with unified shutdown future and fatal-error handling
 // Runtime module - shutdown coordination for server and background tasks
 use tokio::signal;
 use tokio::sync::watch;

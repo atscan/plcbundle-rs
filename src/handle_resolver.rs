@@ -1,3 +1,4 @@
+//! AT Protocol handle resolver client using XRPC; includes validation and normalization helpers
 // Handle resolver - resolves AT Protocol handles to DIDs via XRPC
 
 use crate::constants;

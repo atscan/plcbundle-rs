@@ -1,3 +1,4 @@
+//! Persistent pre-bundle operation store with strict chronological validation, CID deduplication, incremental saving, and fast DID lookups
 // src/mempool.rs
 use crate::constants;
 use crate::operations::Operation;

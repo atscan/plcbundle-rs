@@ -1,3 +1,4 @@
+//! Memory-mapped DID index with 256 shards and delta segments; packed `OpLocation` encodes global position and nullified flag; supports build, verify, repair, and sampling
 // Simplified DID Index implementation matching Go version
 use crate::constants;
 use anyhow::{Context, Result};

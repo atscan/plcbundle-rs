@@ -1,3 +1,4 @@
+//! Processor options and builder, including `QueryMode` for simple path vs JMESPath queries
 use std::path::PathBuf;
 
 /// Configuration options for the PLC bundle processor

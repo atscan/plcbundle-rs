@@ -1,3 +1,4 @@
+//! C-compatible FFI surface exposing BundleManager and related types for integration from other languages
 use crate::constants;
 use crate::manager::*;
 use crate::operations::*;

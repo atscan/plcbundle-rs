@@ -1,3 +1,4 @@
+//! Rate-limited HTTP client for PLC directory: fetch operations and DID documents with retries/backoff and token-bucket limiting
 // PLC Client - HTTP client for interacting with PLC directory APIs
 use crate::constants;
 use crate::resolver::DIDDocument;

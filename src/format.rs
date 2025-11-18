@@ -1,3 +1,4 @@
+//! Formatting helpers for bytes, durations, rates, and numbers used across CLI/server/library components
 // Shared formatting helpers used across CLI/server/library components.
 
 use chrono::Duration as ChronoDuration;

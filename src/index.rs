@@ -1,3 +1,4 @@
+//! Bundle repository index: load/save, sequence validation, and rebuild from bundle metadata
 // Replace your current src/index.rs with this:
 
 use anyhow::Result;

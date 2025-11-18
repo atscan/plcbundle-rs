@@ -1,3 +1,4 @@
+//! Core PLC operation model backed by `sonic_rs`; preserves raw JSON for deterministic hashing; includes filters, requests, and location wrapper
 // src/operations.rs
 use serde::{Deserialize, Serialize};
 use sonic_rs::{self, Value};

@@ -1,3 +1,4 @@
+//! In-memory cache for bundle operations with simple capacity-based eviction
 // src/cache.rs
 use crate::operations::Operation;
 use std::collections::HashMap;

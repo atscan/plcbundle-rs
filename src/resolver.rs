@@ -1,3 +1,4 @@
+//! DID resolution: build PLC DID state and convert to W3C DID Documents; handles legacy fields and endpoint normalization
 // DID Resolution - Convert PLC operations to W3C DID Documents
 use crate::operations::Operation;
 use anyhow::Result;

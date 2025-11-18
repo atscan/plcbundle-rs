@@ -1,3 +1,4 @@
+//! Bundle and chain verification: fast metadata checks, compressed/content hash validation, operation count checks, and parent/cursor linkage
 // src/verification.rs
 use crate::bundle_format;
 use crate::constants;
