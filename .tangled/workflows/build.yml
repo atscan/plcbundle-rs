@@ -13,12 +13,12 @@ clone:
 
 dependencies:
   nixpkgs:
-    - rust
+    - rustc
     - gcc
     - git
     - zstd
     - pkg-config
-    - libssl
+    - openssl
 
 environment:
   RUST_BACKTRACE: "1"
