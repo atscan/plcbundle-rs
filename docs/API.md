@@ -60,8 +60,10 @@ warm_up(spec: WarmUpSpec) -> Result<()>
 clear_caches()
 
 // === DID Index ===
-rebuild_did_index(progress_cb: Option<ProgressCallback>) -> Result<RebuildStats>
-get_did_index_stats() -> DIDIndexStats
+build_did_index(flush_interval: u32, progress_cb: Option<F>, num_threads: Option<usize>, interrupted: Option<Arc<AtomicBool>>) -> Result<RebuildStats>
+verify_did_index(verbose: bool, flush_interval: u32, full: bool, progress_callback: Option<F>) -> Result<did_index::VerifyResult>
+repair_did_index(num_threads: usize, flush_interval: u32, progress_callback: Option<F>) -> Result<did_index::RepairResult>
+get_did_index_stats() -> HashMap<String, serde_json::Value>
 
 // === Sync Operations (Async) ===
 sync_next_bundle(client: &PLCClient) -> Result<u32>
@@ -676,17 +678,30 @@ pub fn clear_caches(&self)
 
 ## 9. DID Index Management
 
-### Rebuild Index
+### Build Index
 
 ```rust
-pub fn rebuild_did_index(&self, progress_cb: Option<ProgressCallback>) -> Result<RebuildStats>
+pub fn build_did_index<F>(
+    &self,
+    flush_interval: u32,
+    progress_cb: Option<F>,
+    num_threads: Option<usize>,
+    interrupted: Option<Arc<AtomicBool>>,
+) -> Result<RebuildStats>
+where
+    F: Fn(u32, u32, u64, u64) + Send + Sync, // (current, total, bytes_processed, total_bytes)
 ```
 
-**Purpose**: Rebuild the DID → operations index.
+**Purpose**: Build or rebuild the DID → operations index from scratch.
 
+**Parameters:**
+- `flush_interval`: Flush to disk every N bundles (0 = only at end)
+- `progress_cb`: Optional progress callback
+- `num_threads`: Number of threads (None = auto-detect)
+- `interrupted`: Optional flag to check for cancellation
+
+**Result:**
 ```rust
-pub type ProgressCallback = Box<dyn Fn(u32, u32) + Send>; // (current, total)
-
 pub struct RebuildStats {
     pub bundles_processed: u32,
     pub operations_indexed: u64,
@@ -695,19 +710,106 @@ pub struct RebuildStats {
 }
 ```
 
+### Verify Index
+
+```rust
+pub fn verify_did_index<F>(
+    &self,
+    verbose: bool,
+    flush_interval: u32,
+    full: bool,
+    progress_callback: Option<F>,
+) -> Result<did_index::VerifyResult>
+where
+    F: Fn(u32, u32, u64, u64) + Send + Sync, // (current, total, bytes_processed, total_bytes)
+```
+
+**Purpose**: Verify DID index integrity. Performs standard checks by default, or full verification (rebuild and compare) if `full` is true.
+
+**Parameters:**
+- `verbose`: Enable verbose logging
+- `flush_interval`: Flush interval for full rebuild (if `full` is true)
+- `full`: If true, rebuilds index in temp directory and compares with existing
+- `progress_callback`: Optional progress callback for full verification
+
+**Result:**
+```rust
+pub struct VerifyResult {
+    pub errors: usize,
+    pub warnings: usize,
+    pub missing_base_shards: usize,
+    pub missing_delta_segments: usize,
+    pub shards_checked: usize,
+    pub segments_checked: usize,
+    pub error_categories: Vec<(String, usize)>,
+    pub index_last_bundle: u32,
+    pub last_bundle_in_repo: u32,
+}
+```
+
+**Use Cases:**
+- CLI: `plcbundle index verify` (standard check)
+- CLI: `plcbundle index verify --full` (full rebuild and compare)
+- Server: Startup integrity check (call with `full=false` and check `missing_base_shards`/`missing_delta_segments`)
+
+### Repair Index
+
+```rust
+pub fn repair_did_index<F>(
+    &self,
+    num_threads: usize,
+    flush_interval: u32,
+    progress_callback: Option<F>,
+) -> Result<did_index::RepairResult>
+where
+    F: Fn(u32, u32, u64, u64) + Send + Sync, // (current, total, bytes_processed, total_bytes)
+```
+
+**Purpose**: Intelligently repair the DID index by:
+- Rebuilding missing delta segments (if base shards are intact)
+- Performing incremental update (if < 1000 bundles behind)
+- Performing full rebuild (if > 1000 bundles behind or base shards corrupted)
+- Compacting delta segments (if > 50 segments)
+
+**Parameters:**
+- `num_threads`: Number of threads (0 = auto-detect)
+- `flush_interval`: Flush to disk every N bundles (0 = only at end)
+- `progress_callback`: Optional progress callback
+
+**Result:**
+```rust
+pub struct RepairResult {
+    pub repaired: bool,
+    pub compacted: bool,
+    pub bundles_processed: u32,
+    pub segments_rebuilt: usize,
+}
+```
+
+**Use Cases:**
+- CLI: `plcbundle index repair`
+- Maintenance: Fix corrupted or incomplete index
+- Recovery: Restore index after data loss
+
 ### Index Statistics
 
 ```rust
-pub fn get_did_index_stats(&self) -> Result<DIDIndexStats>
+pub fn get_did_index_stats(&self) -> HashMap<String, serde_json::Value>
 ```
 
-```rust
-pub struct DIDIndexStats {
-    pub total_dids: usize,
-    pub total_operations: usize,
-    pub index_size_bytes: usize,
-}
-```
+**Purpose**: Get comprehensive DID index statistics.
+
+**Returns**: JSON-compatible map with fields like:
+- `exists`: Whether index exists
+- `total_dids`: Total number of unique DIDs
+- `last_bundle`: Last bundle indexed
+- `delta_segments`: Number of delta segments
+- `shard_count`: Number of shards (should be 256)
+
+**Use Cases:**
+- CLI: `plcbundle index status`
+- Server: Status endpoint
+- Monitoring: Health checks
 
 ---
 
@@ -910,7 +1012,9 @@ func (m *BundleManager) Export(spec ExportSpec, opts ExportOptions) (*ExportStat
 - `verify_bundle()`
 - `verify_chain()`
 - `get_stats()`
-- `rebuild_did_index()`
+- `build_did_index()`
+- `verify_did_index()`
+- `repair_did_index()`
 
 ### 🚧 Needs Refactoring
 - `get_operation()` - Currently in CLI, should be in `BundleManager`

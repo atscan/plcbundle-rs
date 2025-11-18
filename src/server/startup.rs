@@ -89,6 +89,7 @@ pub fn initialize_manager(config: &StartupConfig) -> Result<BundleManager> {
     Ok(manager)
 }
 
+
 /// Build or verify DID index if resolver is enabled
 /// 
 /// `progress_callback_factory` is an optional function that creates a progress callback
@@ -222,12 +223,58 @@ where
                 final_total_entries
             );
         }
+        
+        // Verify index integrity after building
+        if verbose {
+            log::debug!("[DIDResolver] Verifying DID index integrity...");
+        }
+        let verify_result = manager.verify_did_index::<fn(u32, u32, u64, u64)>(false, 64, false, None)?;
+        if verify_result.missing_base_shards > 0 {
+            anyhow::bail!(
+                "DID index is corrupted: {} missing base shard(s). Run '{} index repair' to fix.",
+                verify_result.missing_base_shards,
+                crate::constants::BINARY_NAME
+            );
+        }
+        if verify_result.missing_delta_segments > 0 {
+            anyhow::bail!(
+                "DID index is corrupted: {} missing delta segment(s). Run '{} index repair' to fix.",
+                verify_result.missing_delta_segments,
+                crate::constants::BINARY_NAME
+            );
+        }
+        if verbose {
+            log::debug!("[DIDResolver] DID index integrity check passed");
+        }
     } else {
         if verbose {
             log::debug!(
                 "[DIDResolver] DID index already exists with {} DIDs",
                 total_dids
             );
+        }
+        
+        // Verify index integrity before starting server
+        if verbose {
+            log::debug!("[DIDResolver] Verifying DID index integrity...");
+        }
+        let verify_result = manager.verify_did_index::<fn(u32, u32, u64, u64)>(false, 64, false, None)?;
+        if verify_result.missing_base_shards > 0 {
+            anyhow::bail!(
+                "DID index is corrupted: {} missing base shard(s). Run '{} index repair' to fix.",
+                verify_result.missing_base_shards,
+                crate::constants::BINARY_NAME
+            );
+        }
+        if verify_result.missing_delta_segments > 0 {
+            anyhow::bail!(
+                "DID index is corrupted: {} missing delta segment(s). Run '{} index repair' to fix.",
+                verify_result.missing_delta_segments,
+                crate::constants::BINARY_NAME
+            );
+        }
+        if verbose {
+            log::debug!("[DIDResolver] DID index integrity check passed");
         }
     }
 

@@ -106,6 +106,9 @@ pub struct ShardMeta {
     pub next_segment_id: u64,
     #[serde(default)]
     pub segments: Vec<DeltaSegmentMeta>,
+    /// SHA256 hash of the base shard file for integrity verification
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_shard_hash: Option<String>,
 }
 
 impl ShardMeta {
@@ -115,6 +118,7 @@ impl ShardMeta {
             did_count: 0,
             next_segment_id: 1,
             segments: Vec::new(),
+            base_shard_hash: None,
         }
     }
 }
@@ -1216,6 +1220,12 @@ impl Manager {
             config.last_bundle = last_bundle as i32;
             config.total_dids = total_dids;
             config.delta_segments_total = 0;
+            // Clear all segment metadata since we rebuilt from scratch
+            // All data is now in base shards, so no delta segments exist
+            for shard_meta in &mut config.shards {
+                shard_meta.segments.clear();
+                shard_meta.next_segment_id = 1; // Reset segment ID counter
+            }
         })?;
 
         let total_duration = build_start.elapsed();
@@ -1455,6 +1465,56 @@ impl Manager {
         );
 
         stats
+    }
+
+    /// Verify base shard integrity using stored SHA256 hashes
+    /// Returns (intact_shards, corrupted_shards, missing_shards)
+    pub fn verify_base_shard_integrity(&self) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+        use sha2::{Digest, Sha256};
+        
+        let config = self.config.read().unwrap();
+        let mut intact = Vec::new();
+        let mut corrupted = Vec::new();
+        let mut missing = Vec::new();
+        
+        for shard_num in 0..DID_SHARD_COUNT {
+            let shard_meta = config.shards.get(shard_num).unwrap();
+            let shard_path = self.shard_path(shard_num as u8);
+            
+            if !shard_path.exists() {
+                if shard_meta.did_count > 0 {
+                    missing.push(shard_num as u8);
+                }
+                continue;
+            }
+            
+            // If no hash stored, we can't verify (old index or empty shard)
+            if let Some(expected_hash) = &shard_meta.base_shard_hash {
+                let file_data = match fs::read(&shard_path) {
+                    Ok(data) => data,
+                    Err(_) => {
+                        missing.push(shard_num as u8);
+                        continue;
+                    }
+                };
+                
+                let mut hasher = Sha256::new();
+                hasher.update(&file_data);
+                let actual_hash = format!("{:x}", hasher.finalize());
+                
+                if actual_hash == *expected_hash {
+                    intact.push(shard_num as u8);
+                } else {
+                    corrupted.push(shard_num as u8);
+                }
+            } else if shard_meta.did_count > 0 {
+                // Shard has data but no hash - assume intact (backward compatibility)
+                // but we can't verify it
+                intact.push(shard_num as u8);
+            }
+        }
+        
+        Ok((intact, corrupted, missing))
     }
 
     // Get detailed shard information for debugging
@@ -2505,12 +2565,22 @@ impl Manager {
                 buf[cursor..cursor + DID_IDENTIFIER_LEN].copy_from_slice(&id_bytes);
                 cursor += DID_IDENTIFIER_LEN;
 
-                let locations = &builder.entries[id];
+                let mut locations = builder.entries[id].clone();
+                // Sort locations deterministically: by global_position, then by nullified flag
+                // This ensures the same data always produces the same shard file
+                locations.sort_by(|a, b| {
+                    let a_pos = a.global_position();
+                    let b_pos = b.global_position();
+                    a_pos.cmp(&b_pos).then_with(|| {
+                        // If positions are equal, sort by nullified flag (false < true)
+                        a.nullified().cmp(&b.nullified())
+                    })
+                });
                 let loc_count = locations.len();
                 buf[cursor..cursor + 2].copy_from_slice(&(loc_count as u16).to_le_bytes());
                 cursor += 2;
 
-                for loc in locations {
+                for loc in &locations {
                     buf[cursor..cursor + 4].copy_from_slice(&loc.as_u32().to_le_bytes());
                     cursor += 4;
                 }
@@ -2525,8 +2595,31 @@ impl Manager {
         drop(mmap);
         drop(file);
 
+        // Rename temp file to final location
         fs::rename(&temp_path, target)
             .with_context(|| format!("Failed to replace shard file {}", target.display()))?;
+
+        // Calculate SHA256 hash for base shards (for integrity verification)
+        // Read from final file location to ensure we hash exactly what's on disk
+        let shard_hash = if label == "base" {
+            use sha2::{Digest, Sha256};
+            let file_data = fs::read(target)
+                .with_context(|| format!("Failed to read shard file for hashing {}", target.display()))?;
+            let mut hasher = Sha256::new();
+            hasher.update(&file_data);
+            Some(format!("{:x}", hasher.finalize()))
+        } else {
+            None
+        };
+
+        // Store hash in config for base shards
+        if let Some(hash) = shard_hash {
+            self.modify_config(|config| {
+                if let Some(shard_meta) = config.shards.get_mut(shard_num as usize) {
+                    shard_meta.base_shard_hash = Some(hash);
+                }
+            })?;
+        }
 
         let total_duration = start.elapsed();
         let write_duration =
@@ -2659,6 +2752,467 @@ impl Manager {
         }
         Ok(())
     }
+
+    /// Verify index integrity (standard check, not full rebuild)
+    /// Returns verification result with errors and warnings
+    pub fn verify_integrity(&self, last_bundle_in_repo: u32) -> Result<VerifyResult> {
+        let stats = self.get_stats();
+        let index_last_bundle = stats
+            .get("last_bundle")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as u32;
+        
+        let mut errors = 0;
+        let mut warnings = 0;
+        let mut error_categories: Vec<(String, usize)> = Vec::new();
+        
+        // Check 1: Last bundle consistency
+        if index_last_bundle < last_bundle_in_repo {
+            warnings += 1;
+        }
+        
+        // Check 2: Verify shard files exist
+        let shard_details = self.get_shard_details(None)?;
+        let mut missing_base_shards = 0;
+        let mut missing_delta_segments = 0;
+        let mut shards_checked = 0;
+        let mut segments_checked = 0;
+        
+        for detail in &shard_details {
+            let base_exists = detail
+                .get("base_exists")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let did_count = detail
+                .get("did_count")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            
+            if did_count > 0 {
+                shards_checked += 1;
+                if !base_exists {
+                    missing_base_shards += 1;
+                    errors += 1;
+                }
+            }
+            
+            if let Some(segments) = detail.get("segments").and_then(|v| v.as_array()) {
+                for seg in segments {
+                    segments_checked += 1;
+                    let exists = seg.get("exists").and_then(|v| v.as_bool()).unwrap_or(false);
+                    if !exists {
+                        missing_delta_segments += 1;
+                        errors += 1;
+                    }
+                }
+            }
+        }
+        
+        if missing_base_shards > 0 {
+            error_categories.push(("Missing base shards".to_string(), missing_base_shards));
+        }
+        if missing_delta_segments > 0 {
+            error_categories.push(("Missing delta segments".to_string(), missing_delta_segments));
+        }
+        
+        // Check 3: Verify index configuration
+        let shard_count = stats
+            .get("shard_count")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        
+        if shard_count != 256 {
+            warnings += 1;
+        }
+        
+        // Check 4: Check delta segment accumulation
+        let delta_segments = stats
+            .get("delta_segments")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        
+        const SEGMENT_WARNING_THRESHOLD: u64 = 1280;
+        const SEGMENT_ERROR_THRESHOLD: u64 = 5120;
+        
+        if delta_segments >= SEGMENT_ERROR_THRESHOLD {
+            errors += 1;
+            error_categories.push(("Too many delta segments".to_string(), 1));
+        } else if delta_segments >= SEGMENT_WARNING_THRESHOLD {
+            warnings += 1;
+        }
+        
+        Ok(VerifyResult {
+            errors,
+            warnings,
+            missing_base_shards,
+            missing_delta_segments,
+            shards_checked,
+            segments_checked,
+            error_categories,
+            index_last_bundle,
+            last_bundle_in_repo,
+        })
+    }
+
+    /// Get repair information - what needs to be fixed
+    pub fn get_repair_info(&self, last_bundle_in_repo: u32) -> Result<RepairInfo> {
+        let stats = self.get_stats();
+        let index_last_bundle = stats
+            .get("last_bundle")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as u32;
+        let delta_segments = stats
+            .get("delta_segments")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        
+        let shard_details = self.get_shard_details(None)?;
+        let mut missing_base_shards = 0;
+        let mut missing_delta_segments = 0;
+        let mut missing_segment_bundles = std::collections::HashSet::new();
+        
+        for detail in &shard_details {
+            let base_exists = detail
+                .get("base_exists")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let did_count = detail
+                .get("did_count")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            
+            if did_count > 0 && !base_exists {
+                missing_base_shards += 1;
+            }
+            
+            if let Some(segments) = detail.get("segments").and_then(|v| v.as_array()) {
+                for seg in segments {
+                    let exists = seg.get("exists").and_then(|v| v.as_bool()).unwrap_or(false);
+                    if !exists {
+                        missing_delta_segments += 1;
+                        if let Some(start) = seg.get("bundle_start").and_then(|v| v.as_u64()).map(|v| v as u32) {
+                            if let Some(end) = seg.get("bundle_end").and_then(|v| v.as_u64()).map(|v| v as u32) {
+                                for bundle_num in start..=end {
+                                    missing_segment_bundles.insert(bundle_num);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        let missing_bundles = if index_last_bundle < last_bundle_in_repo {
+            last_bundle_in_repo - index_last_bundle
+        } else {
+            0
+        };
+        
+        let needs_rebuild = index_last_bundle < last_bundle_in_repo 
+            || missing_base_shards > 0 
+            || missing_delta_segments > 0;
+        let needs_compact = delta_segments > 50;
+        
+        Ok(RepairInfo {
+            needs_rebuild,
+            needs_compact,
+            missing_base_shards,
+            missing_delta_segments,
+            missing_bundles,
+            index_last_bundle,
+            last_bundle_in_repo,
+            delta_segments,
+            missing_segment_bundles: missing_segment_bundles.into_iter().collect(),
+        })
+    }
+
+    /// Full verification: rebuild index in temp directory and compare
+    pub fn verify_full<F>(
+        &self,
+        bundle_dir: &PathBuf,
+        last_bundle: u32,
+        verbose: bool,
+        flush_interval: u32,
+        progress_callback: Option<F>,
+    ) -> Result<VerifyResult>
+    where
+        F: Fn(u32, u32, u64, Option<String>) + Send + Sync,
+    {
+        use std::fs;
+
+        // Create temporary directory for rebuilt index
+        let temp_dir = std::env::temp_dir().join(format!("plcbundle_verify_{}", std::process::id()));
+        fs::create_dir_all(&temp_dir)?;
+
+        // Create temporary DID index
+        let temp_did_index = Manager::new(temp_dir.clone())?;
+
+        // Build index using streaming approach
+        let (_, _, _, _) = temp_did_index.build_from_scratch(
+            bundle_dir,
+            last_bundle,
+            flush_interval,
+            progress_callback,
+            0, // num_threads: auto-detect
+            None, // interrupted flag
+        )?;
+
+        // Compare shard files between temporary and existing index
+        let existing_shards = self.shard_dir.clone();
+        let temp_shards = temp_dir.join(constants::DID_INDEX_SHARDS);
+
+        // Get stats from both indexes
+        let temp_stats = temp_did_index.get_stats();
+        let temp_total_dids = temp_stats
+            .get("total_dids")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as usize;
+
+        let existing_stats = self.get_stats();
+        let existing_total_dids = existing_stats
+            .get("total_dids")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as usize;
+        let existing_delta_segments = existing_stats
+            .get("delta_segments")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        let mut errors = 0;
+        let mut mismatched_shards = 0;
+        let mut error_categories = Vec::new();
+
+        // Compare DID counts first (ultimate sanity check)
+        let did_count_mismatch = temp_total_dids != existing_total_dids;
+        if did_count_mismatch {
+            errors += 1;
+            if verbose {
+                log::info!(
+                    "  Total DID count mismatch: existing={}, rebuilt={}",
+                    existing_total_dids,
+                    temp_total_dids
+                );
+            }
+        }
+
+        // Compare shard files only if no delta segments exist
+        // Note: If existing index has delta segments, base shards won't match exactly
+        // because the rebuilt index has all data in base shards, while existing index
+        // has some data in delta segments.
+        if existing_delta_segments == 0 {
+            for shard_num in 0..=255u8 {
+                let existing_shard = existing_shards.join(format!("{:02x}.idx", shard_num));
+                let temp_shard = temp_shards.join(format!("{:02x}.idx", shard_num));
+
+                let existing_exists = existing_shard.exists();
+                let temp_exists = temp_shard.exists();
+
+                if existing_exists != temp_exists {
+                    // Only report as error if DID counts also mismatch
+                    // (existence mismatch alone might be due to empty shards)
+                    if did_count_mismatch {
+                        errors += 1;
+                        mismatched_shards += 1;
+                    }
+                    continue;
+                }
+
+                if !existing_exists {
+                    continue;
+                }
+
+                // Compare file contents byte-by-byte
+                // Since shards are built deterministically (sorted identifiers and sorted locations),
+                // identical data should produce identical files
+                let existing_data = fs::read(&existing_shard)?;
+                let temp_data = fs::read(&temp_shard)?;
+
+                if existing_data != temp_data {
+                    // File content differences indicate a real problem now that shards are deterministic
+                    errors += 1;
+                    mismatched_shards += 1;
+                    if verbose {
+                        log::info!(
+                            "  Shard {:02x}: file content differs (existing={} bytes, rebuilt={} bytes)",
+                            shard_num,
+                            existing_data.len(),
+                            temp_data.len()
+                        );
+                    }
+                }
+            }
+        } else {
+            // If delta segments exist, we can't do file-by-file comparison
+            // Just rely on DID count comparison
+            if verbose {
+                log::info!(
+                    "  Note: Existing index has {} delta segments, skipping file-by-file comparison",
+                    existing_delta_segments
+                );
+                log::info!("  (Base shards won't match because existing index needs compaction)");
+            }
+        }
+
+        // Report location mismatches as errors
+        if mismatched_shards > 0 {
+            error_categories.push(("Location mismatches".to_string(), mismatched_shards));
+        }
+
+        // Clean up temporary directory
+        fs::remove_dir_all(&temp_dir).ok();
+
+        Ok(VerifyResult {
+            errors,
+            warnings: 0,
+            missing_base_shards: 0,
+            missing_delta_segments: 0,
+            shards_checked: 0,
+            segments_checked: 0,
+            error_categories,
+            index_last_bundle: last_bundle,
+            last_bundle_in_repo: last_bundle,
+        })
+    }
+
+    /// Repair index - intelligently rebuilds or updates as needed
+    /// 
+    /// `bundle_loader` is a callback that loads a bundle and returns operations as (did, nullified) pairs
+    /// Returns a RepairResult indicating what was done. If `repaired` is true but `bundles_processed` is 0,
+    /// it means a full rebuild is needed (caller should call build_from_scratch).
+    pub fn repair<L>(
+        &mut self,
+        last_bundle: u32,
+        bundle_loader: L,
+    ) -> Result<RepairResult>
+    where
+        L: Fn(u32) -> Result<Vec<(String, bool)>>, // Load bundle and return operations
+    {
+        let repair_info = self.get_repair_info(last_bundle)?;
+        
+        if !repair_info.needs_rebuild && !repair_info.needs_compact {
+            return Ok(RepairResult {
+                repaired: false,
+                compacted: false,
+                bundles_processed: 0,
+                segments_rebuilt: 0,
+            });
+        }
+        
+        let mut segments_rebuilt = 0;
+        let mut bundles_processed = 0;
+        
+        // Case 1: Rebuild if needed
+        if repair_info.needs_rebuild {
+            // Optimization: If only delta segments are missing, verify base shard integrity
+            // and rebuild only missing segments if base shards are intact
+            let can_rebuild_segments_only = repair_info.missing_base_shards == 0 
+                && repair_info.missing_delta_segments > 0 
+                && repair_info.missing_bundles == 0;
+            
+            if can_rebuild_segments_only {
+                let (_intact, corrupted, missing) = self.verify_base_shard_integrity()?;
+                
+                if corrupted.is_empty() && missing.is_empty() {
+                    // Rebuild only missing segments
+                    let mut bundle_list = repair_info.missing_segment_bundles.clone();
+                    bundle_list.sort();
+                    
+                    if !bundle_list.is_empty() {
+                        for bundle_num in &bundle_list {
+                            let operations = bundle_loader(*bundle_num)?;
+                            self.update_for_bundle(*bundle_num, operations)?;
+                        }
+                        
+                        bundles_processed = bundle_list.len() as u32;
+                        segments_rebuilt = repair_info.missing_delta_segments;
+                    }
+                } else {
+                    // Base shards corrupted - need full rebuild
+                    // This will be handled by the caller via build_did_index
+                    return Ok(RepairResult {
+                        repaired: true,
+                        compacted: false,
+                        bundles_processed: 0, // Will be set by caller
+                        segments_rebuilt: 0,
+                    });
+                }
+            } else {
+                // Need full rebuild or incremental update
+                let force_full_rebuild = repair_info.missing_base_shards > 0 || repair_info.missing_bundles > 1000;
+                
+                if force_full_rebuild || repair_info.missing_bundles > 1000 {
+                    // Full rebuild - signal to caller
+                    return Ok(RepairResult {
+                        repaired: true,
+                        compacted: false,
+                        bundles_processed: 0, // Will be set by caller
+                        segments_rebuilt: 0,
+                    });
+                } else {
+                    // Incremental update
+                    for bundle_num in (repair_info.index_last_bundle + 1)..=last_bundle {
+                        let operations = bundle_loader(bundle_num)?;
+                        self.update_for_bundle(bundle_num, operations)?;
+                    }
+                    
+                    bundles_processed = repair_info.missing_bundles;
+                }
+            }
+        }
+        
+        // Case 2: Compact if needed
+        let compacted = if repair_info.needs_compact {
+            self.compact_pending_segments(None)?;
+            true
+        } else {
+            false
+        };
+        
+        Ok(RepairResult {
+            repaired: repair_info.needs_rebuild,
+            compacted,
+            bundles_processed,
+            segments_rebuilt,
+        })
+    }
+}
+
+// ============================================================================
+// Result types for verify and repair
+// ============================================================================
+
+#[derive(Debug, Clone)]
+pub struct VerifyResult {
+    pub errors: usize,
+    pub warnings: usize,
+    pub missing_base_shards: usize,
+    pub missing_delta_segments: usize,
+    pub shards_checked: usize,
+    pub segments_checked: usize,
+    pub error_categories: Vec<(String, usize)>,
+    pub index_last_bundle: u32,
+    pub last_bundle_in_repo: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct RepairInfo {
+    pub needs_rebuild: bool,
+    pub needs_compact: bool,
+    pub missing_base_shards: usize,
+    pub missing_delta_segments: usize,
+    pub missing_bundles: u32,
+    pub index_last_bundle: u32,
+    pub last_bundle_in_repo: u32,
+    pub delta_segments: u64,
+    pub missing_segment_bundles: Vec<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RepairResult {
+    pub repaired: bool,
+    pub compacted: bool,
+    pub bundles_processed: u32,
+    pub segments_rebuilt: usize,
 }
 
 // ============================================================================

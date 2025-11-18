@@ -94,6 +94,7 @@ pub struct CleanResult {
     pub errors: Option<Vec<String>>,
 }
 
+
 #[derive(Debug, Clone)]
 pub struct CleanPreview {
     pub files: Vec<CleanPreviewFile>,
@@ -830,6 +831,100 @@ impl BundleManager {
 
     pub fn get_did_index(&self) -> Arc<RwLock<Option<did_index::Manager>>> {
         Arc::clone(&self.did_index)
+    }
+
+    /// Verify DID index and return detailed result
+    /// 
+    /// Performs standard integrity check by default. If `full` is true, also rebuilds
+    /// the index in a temporary directory and compares with the existing index.
+    /// 
+    /// For server startup checks, call with `full=false` and check `verify_result.missing_base_shards`
+    /// and `verify_result.missing_delta_segments` to determine if the index is corrupted.
+    pub fn verify_did_index<F>(
+        &self,
+        verbose: bool,
+        flush_interval: u32,
+        full: bool,
+        progress_callback: Option<F>,
+    ) -> Result<did_index::VerifyResult>
+    where
+        F: Fn(u32, u32, u64, u64) + Send + Sync, // (current, total, bytes_processed, total_bytes)
+    {
+        self.ensure_did_index()?;
+        
+        let did_index = self.did_index.read().unwrap();
+        let idx = did_index.as_ref().ok_or_else(|| anyhow::anyhow!("DID index not initialized"))?;
+        
+        let last_bundle = self.get_last_bundle();
+        let mut verify_result = idx.verify_integrity(last_bundle)?;
+        
+        // If full verification requested, rebuild and compare
+        if full {
+            // Adapt callback for build_from_scratch which expects Option<String> as 4th param
+            let build_callback = progress_callback.map(|cb| {
+                move |current: u32, total: u32, bytes: u64, _stage: Option<String>| {
+                    cb(current, total, bytes, bytes); // Use bytes as total_bytes for now
+                }
+            });
+            let rebuild_result = idx.verify_full(
+                self.directory(),
+                last_bundle,
+                verbose,
+                flush_interval,
+                build_callback,
+            )?;
+            verify_result.errors += rebuild_result.errors;
+            verify_result.error_categories.extend(rebuild_result.error_categories);
+        }
+        
+        Ok(verify_result)
+    }
+
+    /// Repair DID index - intelligently rebuilds or updates as needed
+    pub fn repair_did_index<F>(
+        &self,
+        num_threads: usize,
+        flush_interval: u32,
+        progress_callback: Option<F>,
+    ) -> Result<did_index::RepairResult>
+    where
+        F: Fn(u32, u32, u64, u64) + Send + Sync, // (current, total, bytes_processed, total_bytes)
+    {
+        self.ensure_did_index()?;
+        
+        let last_bundle = self.get_last_bundle();
+        
+        // Create bundle loader closure
+        let bundle_loader = |bundle_num: u32| -> Result<Vec<(String, bool)>> {
+            let result = self.load_bundle(bundle_num, LoadOptions::default())?;
+            Ok(result
+                .operations
+                .iter()
+                .map(|op| (op.did.clone(), op.nullified))
+                .collect())
+        };
+        
+        let mut did_index = self.did_index.write().unwrap();
+        let idx = did_index.as_mut().ok_or_else(|| anyhow::anyhow!("DID index not initialized"))?;
+        
+        let mut repair_result = idx.repair(last_bundle, bundle_loader)?;
+        
+        // If repair indicates full rebuild is needed, do it
+        if repair_result.repaired && repair_result.bundles_processed == 0 {
+            drop(did_index);
+            
+            // Adapt callback signature for build_did_index
+            let build_callback = progress_callback.map(|cb| {
+                move |current: u32, total: u32, bytes: u64, total_bytes: u64| {
+                    cb(current, total, bytes, total_bytes);
+                }
+            });
+            self.build_did_index(flush_interval, build_callback, Some(num_threads), None)?;
+            
+            repair_result.bundles_processed = last_bundle;
+        }
+        
+        Ok(repair_result)
     }
 
     // === Observability ===
