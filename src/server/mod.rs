@@ -20,6 +20,8 @@ mod routes;
 #[cfg(feature = "server")]
 mod utils;
 #[cfg(feature = "server")]
+mod startup;
+#[cfg(feature = "server")]
 mod websocket;
 
 #[cfg(feature = "server")]
@@ -33,6 +35,10 @@ use std::time::Instant;
 
 #[cfg(feature = "server")]
 pub use config::ServerConfig;
+#[cfg(feature = "server")]
+pub use startup::{StartupConfig, start_server, ProgressCallback, ProgressCallbackFactory, ProgressFinish};
+#[cfg(feature = "server")]
+pub use utils::parse_duration;
 
 #[cfg(feature = "server")]
 #[derive(Clone)]

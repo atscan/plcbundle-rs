@@ -165,4 +165,33 @@ pub fn bundle_download_headers(content_type: &'static str, filename: &str) -> He
     headers
 }
 
+/// Parse duration string (e.g., "60s", "5m", "1h") into Duration
+pub fn parse_duration(s: &str) -> anyhow::Result<tokio::time::Duration> {
+    use anyhow::Context;
+    use tokio::time::Duration;
+    
+    // Simple parser: "60s", "5m", "1h"
+    let s = s.trim();
+    if s.ends_with('s') {
+        let secs: u64 = s[..s.len() - 1]
+            .parse()
+            .context("Invalid duration format")?;
+        Ok(Duration::from_secs(secs))
+    } else if s.ends_with('m') {
+        let mins: u64 = s[..s.len() - 1]
+            .parse()
+            .context("Invalid duration format")?;
+        Ok(Duration::from_secs(mins * 60))
+    } else if s.ends_with('h') {
+        let hours: u64 = s[..s.len() - 1]
+            .parse()
+            .context("Invalid duration format")?;
+        Ok(Duration::from_secs(hours * 3600))
+    } else {
+        // Try parsing as seconds
+        let secs: u64 = s.parse().context("Invalid duration format")?;
+        Ok(Duration::from_secs(secs))
+    }
+}
+
 
