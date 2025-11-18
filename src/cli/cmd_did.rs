@@ -531,34 +531,57 @@ fn compare_did_documents(
     remote_url: &str,
     fetch_duration: std::time::Duration,
 ) -> Result<()> {
+    use sha2::{Digest, Sha256};
+
+    eprintln!("📊 Document Comparison");
+    eprintln!("═══════════════════════");
+    
+    // Construct the full URL that was fetched
+    let full_url = format!("{}/{}", remote_url.trim_end_matches('/'), _did);
+    eprintln!("   Remote URL: {}", full_url);
+    eprintln!("   Fetch time: {:?}", fetch_duration);
+    eprintln!();
+
+    // Serialize both documents with serde (respects skip_serializing_if attributes)
+    // This ensures consistent handling of empty arrays for both local and remote
+    let local_json = serde_json::to_string(local)?;
+    let remote_json = serde_json::to_string(remote)?;
+
+    // Calculate SHA256 hashes
+    let mut local_hasher = Sha256::new();
+    local_hasher.update(local_json.as_bytes());
+    let local_hash = local_hasher.finalize();
+    let local_hash_hex = format!("{:x}", local_hash);
+
+    let mut remote_hasher = Sha256::new();
+    remote_hasher.update(remote_json.as_bytes());
+    let remote_hash = remote_hasher.finalize();
+    let remote_hash_hex = format!("{:x}", remote_hash);
+
+    eprintln!("   Local hash:  {}", local_hash_hex);
+    eprintln!("   Remote hash: {}", remote_hash_hex);
+    eprintln!();
+
+    // Compare hashes
+    if local_hash == remote_hash {
+        eprintln!("✅ Documents are identical (SHA256 hashes match)");
+        eprintln!();
+        return Ok(());
+    }
+
+    eprintln!("⚠️  Documents differ (SHA256 hashes do not match)");
+    eprintln!();
+
     #[cfg(feature = "similar")]
     {
         use similar::{ChangeTag, TextDiff};
 
-        eprintln!("📊 Document Comparison");
-        eprintln!("═══════════════════════");
-        
-        // Construct the full URL that was fetched
-        let full_url = format!("{}/{}", remote_url.trim_end_matches('/'), _did);
-        eprintln!("   Remote URL: {}", full_url);
-        eprintln!("   Fetch time: {:?}", fetch_duration);
-        eprintln!();
-
-        // Convert both to JSON for comparison
-        let local_json = sonic_rs::to_string_pretty(local)?;
-        let remote_json = sonic_rs::to_string_pretty(remote)?;
-
-        // Simple comparison - check if they're identical
-        if local_json == remote_json {
-            eprintln!("✅ Documents are identical");
-            eprintln!();
-            return Ok(());
-        }
-
-        eprintln!("⚠️  Documents differ\n");
+        // Convert to pretty JSON for diff display
+        let local_json_pretty = serde_json::to_string_pretty(local)?;
+        let remote_json_pretty = serde_json::to_string_pretty(remote)?;
 
         // Use similar to compute and display colored diff
-        let diff = TextDiff::from_lines(&local_json, &remote_json);
+        let diff = TextDiff::from_lines(&local_json_pretty, &remote_json_pretty);
 
         eprintln!("Diff (Local → Remote):");
         eprintln!("──────────────────────");
@@ -589,26 +612,6 @@ fn compare_did_documents(
 
     #[cfg(not(feature = "similar"))]
     {
-        // Fallback if similar feature is not enabled
-        eprintln!("📊 Document Comparison");
-        eprintln!("═══════════════════════");
-        
-        // Construct the full URL that was fetched
-        let full_url = format!("{}/{}", remote_url.trim_end_matches('/'), _did);
-        eprintln!("   Remote URL: {}", full_url);
-        eprintln!("   Fetch time: {:?}", fetch_duration);
-        eprintln!();
-
-        let local_json = sonic_rs::to_string_pretty(local)?;
-        let remote_json = sonic_rs::to_string_pretty(remote)?;
-
-        if local_json == remote_json {
-            eprintln!("✅ Documents are identical");
-            eprintln!();
-            return Ok(());
-        }
-
-        eprintln!("⚠️  Documents differ");
         eprintln!("💡 Tip: Enable 'similar' feature for colored diff output");
         eprintln!();
     }

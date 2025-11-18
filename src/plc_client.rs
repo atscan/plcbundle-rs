@@ -177,11 +177,12 @@ impl PLCClient {
         Ok(operations)
     }
 
-    /// Fetch DID document from PLC directory
+    /// Fetch DID document raw JSON from PLC directory
     ///
-    /// Fetches the W3C DID document for a given DID from the PLC directory.
-    /// Uses the /did/{did} endpoint.
-    pub async fn fetch_did_document(&self, did: &str) -> Result<DIDDocument> {
+    /// Fetches the raw JSON string for a DID document from the PLC directory.
+    /// This preserves the exact byte content as received from the source.
+    /// Uses the /{did} endpoint.
+    pub async fn fetch_did_document_raw(&self, did: &str) -> Result<String> {
         use std::time::Instant;
 
         // Construct DID document URL
@@ -232,16 +233,21 @@ impl PLCClient {
             );
         }
 
-        let parse_start = Instant::now();
         let data = response.text().await?;
         let data_size = data.len();
         log::debug!("Received response body: {} bytes", data_size);
-        
+
+        Ok(data)
+    }
+
+    /// Fetch DID document from PLC directory
+    ///
+    /// Fetches the W3C DID document for a given DID from the PLC directory.
+    /// Uses the /did/{did} endpoint.
+    pub async fn fetch_did_document(&self, did: &str) -> Result<DIDDocument> {
+        let data = self.fetch_did_document_raw(did).await?;
         let document: DIDDocument = sonic_rs::from_str(&data)
             .context("Failed to parse DID document JSON")?;
-        let parse_duration = parse_start.elapsed();
-        log::debug!("Parsed DID document JSON in {:?}", parse_duration);
-
         Ok(document)
     }
 }

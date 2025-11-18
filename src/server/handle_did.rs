@@ -82,7 +82,7 @@ async fn handle_did_document(State(state): State<ServerState>, input: &str) -> i
         None
     };
 
-    // Resolve DID
+    // Resolve DID from local operations (no HTTP requests)
     // Note: resolve_did_with_stats performs file I/O (get_operation), so we need spawn_blocking
     let result = match tokio::task::spawn_blocking({
         let manager = Arc::clone(&state.manager);
