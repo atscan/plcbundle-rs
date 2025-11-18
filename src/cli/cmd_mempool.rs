@@ -97,7 +97,7 @@ pub fn run(cmd: MempoolCommand, dir: PathBuf, global_verbose: bool) -> Result<()
 
 fn show_status(manager: &BundleManager, dir: &Path, verbose: bool) -> Result<()> {
     manager.load_mempool()?;
-    let stats: plcbundle::MempoolStats = manager.get_mempool_stats()?;
+    let stats = manager.get_mempool_stats()?;
 
     // Show mempool file location
     let mempool_filename = format!(

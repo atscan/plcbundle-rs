@@ -10,8 +10,8 @@ use std::time::Instant;
 
 use super::progress::ProgressBar;
 use super::utils;
-use plcbundle::{global_to_bundle_position, total_operations_from_bundles, bundle_position_to_global};
-use plcbundle::format_std_duration_auto;
+use plcbundle::constants::{global_to_bundle_position, total_operations_from_bundles, bundle_position_to_global};
+use plcbundle::format::format_std_duration_auto;
 
 #[derive(Args)]
 #[command(

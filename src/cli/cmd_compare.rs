@@ -2,6 +2,7 @@
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueHint};
 use plcbundle::{BundleManager, constants, remote};
+use plcbundle::constants::bundle_position_to_global;
 use sonic_rs::JsonValueTrait;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -1118,7 +1119,7 @@ fn display_operation_comparison(
                 } else {
                     target
                 };
-                let global_pos = plcbundle::bundle_position_to_global(bundle_num, *first_pos);
+                let global_pos = bundle_position_to_global(bundle_num, *first_pos);
                 eprintln!("  💡 To explore missing operations:");
                 eprintln!(
                     "     • Global position: {} (bundle {} position {})",
@@ -1162,7 +1163,7 @@ fn display_operation_comparison(
         // Add hints for exploring missing operations
         if let Some((_first_cid, first_pos)) = missing_in_remote.first() {
             let global_pos =
-                plcbundle::bundle_position_to_global(bundle_num, *first_pos);
+                bundle_position_to_global(bundle_num, *first_pos);
             eprintln!("  💡 To explore missing operations:");
             eprintln!(
                 "     • Global position: {} (bundle {} position {})",

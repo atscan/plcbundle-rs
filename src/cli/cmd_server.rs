@@ -69,7 +69,7 @@ pub struct ServerCommand {
     pub sync: bool,
 
     /// PLC directory URL (for sync mode)
-    #[arg(long, default_value = plcbundle::constants::DEFAULT_PLC_DIRECTORY_URL, help_heading = "Sync Options", value_hint = ValueHint::Url)]
+    #[arg(long, default_value = crate::constants::DEFAULT_PLC_DIRECTORY_URL, help_heading = "Sync Options", value_hint = ValueHint::Url)]
     pub plc: String,
 
     /// Sync interval (how often to check for new bundles)

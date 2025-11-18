@@ -831,8 +831,8 @@ pub fn cmd_index_verify(dir: PathBuf, verbose: bool, flush_interval: u32, full: 
 /// Get raw shard data as JSON
 fn get_raw_shard_data_json(dir: &Path, shard_num: u8) -> Result<serde_json::Value> {
     use std::fs;
-    use crate::constants;
-    use crate::did_index::OpLocation;
+    use plcbundle::constants;
+    use plcbundle::did_index::OpLocation;
     use serde_json::json;
 
     const DID_IDENTIFIER_LEN: usize = 24;
@@ -936,8 +936,8 @@ fn get_raw_shard_data_json(dir: &Path, shard_num: u8) -> Result<serde_json::Valu
 /// Get raw delta segment data as JSON
 fn get_raw_segment_data_json(dir: &Path, shard_num: u8, file_name: &str) -> Result<serde_json::Value> {
     use std::fs;
-    use crate::constants;
-    use crate::did_index::OpLocation;
+    use plcbundle::constants;
+    use plcbundle::did_index::OpLocation;
     use serde_json::json;
 
     const DID_IDENTIFIER_LEN: usize = 24;
@@ -1040,8 +1040,8 @@ fn get_raw_segment_data_json(dir: &Path, shard_num: u8, file_name: &str) -> Resu
 /// Display raw shard data in a readable format
 fn display_raw_shard_data(dir: &Path, shard_num: u8) -> Result<()> {
     use std::fs;
-    use crate::constants;
-    use crate::did_index::OpLocation;
+    use plcbundle::constants;
+    use plcbundle::did_index::OpLocation;
 
     const DID_IDENTIFIER_LEN: usize = 24;
 
@@ -1155,7 +1155,7 @@ fn display_raw_shard_data(dir: &Path, shard_num: u8) -> Result<()> {
 /// Display raw delta segment data in a readable format
 fn display_raw_segment_data(dir: &Path, shard_num: u8, file_name: &str) -> Result<()> {
     use std::fs;
-    use crate::constants;
+    use plcbundle::constants;
     use crate::did_index::OpLocation;
 
     const DID_IDENTIFIER_LEN: usize = 24;

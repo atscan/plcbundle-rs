@@ -3670,8 +3670,6 @@ pub enum ExportFormat {
     JsonLines,
 }
 
-/// Compression type for export outputs
-// Compression options removed: export is JSONL-only
 
 /// Statistics collected during export
 #[derive(Debug, Default)]

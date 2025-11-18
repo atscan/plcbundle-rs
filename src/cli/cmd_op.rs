@@ -170,7 +170,7 @@ pub fn parse_op_position(bundle: u32, position: Option<usize>) -> (u32, usize) {
                 // op get 10000 → bundle 2, position 0
                 // op get 88410345 → bundle 8842, position 345
                 let global_pos = bundle as u64;
-                let (bundle_num, op_pos) = plcbundle::global_to_bundle_position(global_pos);
+                let (bundle_num, op_pos) = plcbundle::constants::global_to_bundle_position(global_pos);
                 (bundle_num, op_pos)
             }
         }
@@ -188,7 +188,7 @@ pub fn cmd_op_get(dir: PathBuf, bundle: u32, position: Option<usize>, query: Opt
     } else {
         let result = manager.get_operation_with_stats(bundle_num, op_index)?;
         let global_pos =
-            plcbundle::bundle_position_to_global(bundle_num, op_index);
+            plcbundle::constants::bundle_position_to_global(bundle_num, op_index);
 
         log::info!(
             "[Load] Bundle {}:{:04} (pos={}) in {:?} | {} bytes",
@@ -279,7 +279,7 @@ pub fn cmd_op_show(dir: PathBuf, bundle: u32, position: Option<usize>, quiet: bo
     // Operation is already parsed by get_operation
     let parse_duration = parse_start.elapsed();
 
-    let global_pos = plcbundle::bundle_position_to_global(bundle_num, op_index);
+    let global_pos = plcbundle::constants::bundle_position_to_global(bundle_num, op_index);
 
     // Extract operation details
     let op_type = op
@@ -410,7 +410,7 @@ pub fn cmd_op_find(dir: PathBuf, cid: String, quiet: bool) -> Result<()> {
 
             if cid_matches {
                 let global_pos =
-                    plcbundle::bundle_position_to_global(bundle_num, i);
+                    plcbundle::constants::bundle_position_to_global(bundle_num, i);
 
                 println!("Found: bundle {}, position {}", bundle_num, i);
                 println!("Global position: {}\n", global_pos);

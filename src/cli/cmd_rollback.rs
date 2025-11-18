@@ -374,7 +374,7 @@ fn handle_did_index(
         }
 
         // Use default flush interval for rollback
-        let _stats = manager.build_did_index(plcbundle::constants::DID_INDEX_FLUSH_INTERVAL, None::<fn(u32, u32, u64, u64)>, None, None)?;
+        let _stats = manager.build_did_index(crate::constants::DID_INDEX_FLUSH_INTERVAL, None::<fn(u32, u32, u64, u64)>, None, None)?;
         println!(
             "      ✓ DID index rebuilt ({} bundles)",
             plan.bundles_to_keep
@@ -390,7 +390,7 @@ fn handle_did_index(
         {
             println!(
                 "         Run: {} index rebuild",
-                plcbundle::constants::BINARY_NAME
+                crate::constants::BINARY_NAME
             );
         }
     }
@@ -442,7 +442,7 @@ fn display_rollback_success(plan: &RollbackPlan, cmd: &RollbackCommand) -> Resul
     if !cmd.rebuild_did_index && plan.has_did_index {
         println!("💡 Next Steps");
         println!("   DID index is out of date. Rebuild with:");
-        println!("   {} index rebuild\n", plcbundle::constants::BINARY_NAME);
+        println!("   {} index rebuild\n", crate::constants::BINARY_NAME);
     }
 
     Ok(())

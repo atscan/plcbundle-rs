@@ -1,4 +1,5 @@
 use anyhow::Result;
+use plcbundle::processor::{Stats, OutputHandler};
 use clap::{Args, ValueEnum, ValueHint};
 use plcbundle::*;
 use std::io::Write;
@@ -137,7 +138,7 @@ pub fn run(cmd: QueryCommand, dir: PathBuf, quiet: bool, verbose: bool) -> Resul
         .batch_size(batch_size)
         .build();
 
-    let processor = Processor::new(options)?;
+    let processor = plcbundle::processor::Processor::new(options)?;
     let index = processor.load_index()?;
 
     if verbose && !quiet {

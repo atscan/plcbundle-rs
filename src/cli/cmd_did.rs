@@ -286,7 +286,7 @@ pub fn cmd_did_resolve(
     // If compare is enabled, fetch remote document and compare
     if let Some(maybe_url) = compare {
         use tokio::runtime::Runtime;
-        use plcbundle::plc_client::PLCClient;
+        use crate::plc_client::PLCClient;
         use std::time::Instant;
 
         // Use provided URL, or use repository origin, or fall back to default
@@ -326,7 +326,8 @@ pub fn cmd_did_resolve(
         
         let fetch_start = Instant::now();
         let rt = Runtime::new().context("Failed to create tokio runtime")?;
-        let (remote_doc, remote_json_raw): (plcbundle::DIDDocument, String) = rt.block_on(async {
+        use plcbundle::resolver::DIDDocument;
+        let (remote_doc, remote_json_raw): (DIDDocument, String) = rt.block_on(async {
             let client = PLCClient::new(&plc_url)
                 .context("Failed to create PLC client")?;
             if verbose {
@@ -335,7 +336,7 @@ pub fn cmd_did_resolve(
             // Fetch both the parsed document and raw JSON for accurate comparison
             let raw_json = client.fetch_did_document_raw(&did).await?;
             let parsed_doc = client.fetch_did_document(&did).await?;
-            Ok::<(plcbundle::DIDDocument, String), anyhow::Error>((parsed_doc, raw_json))
+            Ok::<(DIDDocument, String), anyhow::Error>((parsed_doc, raw_json))
         })
         .context("Failed to fetch DID document from remote PLC directory")?;
         let fetch_duration = fetch_start.elapsed();
@@ -478,7 +479,7 @@ pub fn cmd_did_resolve(
         if result.bundle_number == 0 {
             // Operation from mempool
             let index = manager.get_index();
-            let global_pos = plcbundle::mempool_position_to_global(index.last_bundle, result.position);
+            let global_pos = plcbundle::constants::mempool_position_to_global(index.last_bundle, result.position);
             log::info!(
                 "Source: mempool position {} (global: {})\n",
                 result.position,
@@ -486,7 +487,7 @@ pub fn cmd_did_resolve(
             );
         } else {
             // Operation from bundle
-            let global_pos = plcbundle::bundle_position_to_global(result.bundle_number, result.position);
+            let global_pos = plcbundle::constants::bundle_position_to_global(result.bundle_number, result.position);
             log::info!(
                 "Source: bundle {}, position {} (global: {})\n",
                 result.bundle_number,
@@ -566,8 +567,8 @@ pub fn cmd_did_resolve(
 
 /// Compare two DID documents and show differences
 fn compare_did_documents(
-    local: &plcbundle::DIDDocument,
-    _remote: &plcbundle::DIDDocument,
+    local: &plcbundle::resolver::DIDDocument,
+    _remote: &plcbundle::resolver::DIDDocument,
     remote_json_raw: &str,
     _did: &str,
     remote_url: &str,
@@ -1170,7 +1171,7 @@ fn get_lookup_field_value(
         "bundle" => format!("{}", owl.bundle),
         "position" | "pos" => format!("{:04}", owl.position),
         "global" | "global_pos" => {
-            let global_pos = plcbundle::bundle_position_to_global(owl.bundle, owl.position);
+            let global_pos = plcbundle::constants::bundle_position_to_global(owl.bundle, owl.position);
             format!("{}", global_pos)
         },
         "status" => {

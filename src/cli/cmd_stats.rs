@@ -150,7 +150,7 @@ struct TimelineStats {
 
 fn collect_summary_stats(
     _manager: &BundleManager,
-    index: &plcbundle::index::Index,
+    index: &crate::index::Index,
     bundle_nums: &[u32],
 ) -> Result<serde_json::Value> {
     let bundle_metadatas: Vec<_> = index
@@ -259,7 +259,7 @@ fn collect_operation_stats(
 
 fn collect_did_stats(
     _manager: &BundleManager,
-    index: &plcbundle::index::Index,
+    index: &crate::index::Index,
     bundle_nums: &[u32],
 ) -> Result<serde_json::Value> {
     let bundle_metadatas: Vec<_> = index
@@ -298,7 +298,7 @@ fn collect_did_stats(
 
 fn collect_timeline_stats(
     _manager: &BundleManager,
-    index: &plcbundle::index::Index,
+    index: &crate::index::Index,
     bundle_nums: &[u32],
 ) -> Result<serde_json::Value> {
     let bundle_metadatas: Vec<_> = index

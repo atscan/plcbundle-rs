@@ -69,7 +69,8 @@ pub fn parse_bundle_spec(spec: Option<String>, max_bundle: u32) -> Result<Vec<u3
                 let start = max_bundle.saturating_sub(count.saturating_sub(1));
                 Ok((start..=max_bundle).collect())
             } else {
-                plcbundle::parse_bundle_range(&s, max_bundle)
+                use plcbundle::processor::parse_bundle_range;
+                parse_bundle_range(&s, max_bundle)
             }
         }
     }

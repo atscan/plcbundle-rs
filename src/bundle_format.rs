@@ -310,88 +310,6 @@ pub fn compress_operations_to_frames_parallel(
     })
 }
 
-/// Compress operations into multiple frames (sequential version)
-///
-/// Each frame contains FRAME_SIZE operations (except possibly the last frame).
-/// Returns the compressed frames and their relative offsets.
-pub fn compress_operations_to_frames(
-    operations: &[crate::operations::Operation],
-) -> anyhow::Result<FrameCompressionResult> {
-    use std::time::Instant;
-
-    let mut frame_offsets = Vec::new();
-    let mut compressed_frames: Vec<Vec<u8>> = Vec::new();
-    let mut total_uncompressed = 0u64;
-
-    let mut total_serialize_time = std::time::Duration::ZERO;
-    let mut total_compress_time = std::time::Duration::ZERO;
-
-    // Process operations in frames of FRAME_SIZE
-    let num_frames = operations.len().div_ceil(constants::FRAME_SIZE);
-
-    for frame_idx in 0..num_frames {
-        let frame_start = frame_idx * constants::FRAME_SIZE;
-        let frame_end = (frame_start + constants::FRAME_SIZE).min(operations.len());
-        let frame_ops = &operations[frame_start..frame_end];
-
-        // Serialize frame to JSONL
-        let serialize_start = Instant::now();
-        let mut frame_data = Vec::new();
-        for op in frame_ops {
-            let json = if let Some(raw) = &op.raw_json {
-                raw.clone()
-            } else {
-                sonic_rs::to_string(op)?
-            };
-            frame_data.extend_from_slice(json.as_bytes());
-            frame_data.push(b'\n');
-        }
-        total_serialize_time += serialize_start.elapsed();
-        total_uncompressed += frame_data.len() as u64;
-
-        // Compress frame with content size and checksum
-        let compress_start = Instant::now();
-        let mut compressed_frame = Vec::new();
-        {
-            let mut encoder =
-                zstd::Encoder::new(&mut compressed_frame, constants::ZSTD_COMPRESSION_LEVEL)?;
-            encoder.set_pledged_src_size(Some(frame_data.len() as u64))?;
-            encoder.include_contentsize(true)?;
-            encoder.include_checksum(true)?; // Enable XXH64 checksum
-            std::io::copy(&mut frame_data.as_slice(), &mut encoder)?;
-            encoder.finish()?;
-        }
-        total_compress_time += compress_start.elapsed();
-
-        // Record offset (relative to first data frame)
-        let offset = if frame_offsets.is_empty() {
-            0i64
-        } else {
-            let prev_frame_size = compressed_frames.last().unwrap().len() as i64;
-            frame_offsets.last().unwrap() + prev_frame_size
-        };
-        frame_offsets.push(offset);
-
-        compressed_frames.push(compressed_frame);
-    }
-
-    // Add final offset (end of last frame)
-    if let Some(last_frame) = compressed_frames.last() {
-        let final_offset = frame_offsets.last().unwrap() + last_frame.len() as i64;
-        frame_offsets.push(final_offset);
-    }
-
-    let compressed_size: u64 = compressed_frames.iter().map(|f| f.len() as u64).sum();
-
-    Ok(FrameCompressionResult {
-        compressed_frames,
-        frame_offsets,
-        uncompressed_size: total_uncompressed,
-        compressed_size,
-        serialize_time_ms: total_serialize_time.as_secs_f64() * 1000.0,
-        compress_time_ms: total_compress_time.as_secs_f64() * 1000.0,
-    })
-}
 
 /// Serialize operations to JSONL (uncompressed)
 ///
@@ -431,59 +349,7 @@ pub fn calculate_content_hash(
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-/// Calculate compressed hash (SHA256 of compressed data)
-pub fn calculate_compressed_hash(compressed_data: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
 
-    let mut hasher = Sha256::new();
-    hasher.update(compressed_data);
-    format!("{:x}", hasher.finalize())
-}
-
-/// Load all operations from a bundle file as raw JSON strings
-///
-/// This function reads a bundle file and returns the operations as raw JSON strings
-/// without parsing them into Operation structs. Useful for calculating uncompressed
-/// sizes and other metadata operations.
-///
-/// # Arguments
-/// * `path` - Path to the bundle file
-///
-/// # Returns
-/// Vector of raw JSON strings, one per operation
-pub fn load_bundle_as_json_strings(path: &std::path::Path) -> Result<Vec<String>> {
-    use std::io::Read;
-
-    let file = std::fs::File::open(path)?;
-    let mut reader = std::io::BufReader::new(file);
-
-    // Skip metadata frame if present
-    let mut magic_buf = [0u8; 4];
-    reader.read_exact(&mut magic_buf)?;
-    let magic = u32::from_le_bytes(magic_buf);
-
-    if (0x184D2A50..=0x184D2A5F).contains(&magic) {
-        // Skip metadata frame
-        let mut size_buf = [0u8; 4];
-        reader.read_exact(&mut size_buf)?;
-        let frame_size = u32::from_le_bytes(size_buf);
-
-        let mut skip_buf = vec![0u8; frame_size as usize];
-        reader.read_exact(&mut skip_buf)?;
-    } else {
-        // Rewind if not a skippable frame
-        drop(reader);
-        reader = std::io::BufReader::new(std::fs::File::open(path)?);
-    }
-
-    // Decompress remaining data
-    let decoder = zstd::Decoder::new(reader)?;
-    let mut decompressed = String::new();
-    std::io::BufReader::new(decoder).read_to_string(&mut decompressed)?;
-
-    // Split into lines
-    Ok(decompressed.lines().map(|s| s.to_string()).collect())
-}
 
 /// Create bundle metadata structure
 #[allow(clippy::too_many_arguments)]

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use plcbundle::*;
+use plcbundle::index::Index;
 use std::path::{Path, PathBuf};
 
 use super::utils;
@@ -93,7 +94,7 @@ fn print_human_status(
         println!();
     } else {
         let total_bundles = index.last_bundle;
-        let total_operations = plcbundle::total_operations_from_bundles(total_bundles);
+        let total_operations = plcbundle::constants::total_operations_from_bundles(total_bundles);
 
         println!("  Total Bundles:   {}", utils::format_number(total_bundles as u64));
         println!("  Operations:      ~{}", utils::format_number(total_operations));
@@ -188,7 +189,7 @@ fn print_human_status(
         }
 
         if let Ok(mempool_stats) = manager.get_mempool_stats()
-            && mempool_stats.count >= constants::BUNDLE_SIZE {
+            && mempool_stats.count >= plcbundle::constants::BUNDLE_SIZE {
                 suggestions.push("Mempool ready to create new bundle: plcbundle sync");
         }
 
@@ -290,7 +291,7 @@ fn print_json_status(
         health.push("did_index_not_built");
     }
     if let Ok(mempool_stats) = manager.get_mempool_stats()
-        && mempool_stats.count >= constants::BUNDLE_SIZE {
+        && mempool_stats.count >= plcbundle::constants::BUNDLE_SIZE {
             health.push("mempool_ready_to_bundle");
     }
     status["health"] = json!(health);
@@ -301,7 +302,7 @@ fn print_json_status(
 }
 
 fn check_did_index_exists(dir: &Path) -> bool {
-    let did_index_dir = dir.join(constants::DID_INDEX_DIR).join(constants::DID_INDEX_SHARDS);
+    let did_index_dir = dir.join(plcbundle::constants::DID_INDEX_DIR).join(plcbundle::constants::DID_INDEX_SHARDS);
     did_index_dir.exists() && did_index_dir.is_dir()
 }
 

@@ -6,7 +6,7 @@ use plcbundle::{
     constants,
     plc_client::PLCClient,
     sync::{SyncLoggerImpl, SyncConfig, SyncManager},
-    BundleRuntime,
+    runtime::BundleRuntime,
 };
 use std::path::PathBuf;
 use std::sync::Arc;

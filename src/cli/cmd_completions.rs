@@ -147,4 +147,3 @@ fn show_instructions() {
     println!("After installation, restart your shell or source the configuration file.");
     println!("Then you can use tab completion for {} commands and arguments!", bin_name);
 }
-
