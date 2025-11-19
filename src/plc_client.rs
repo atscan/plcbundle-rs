@@ -98,10 +98,8 @@ impl PLCClient {
         let mut total_http = Duration::from_secs(0);
 
         for attempt in 1..=max_retries {
-            if let Some(ref rx) = shutdown_rx {
-                if *rx.borrow() {
-                    anyhow::bail!("Shutdown requested");
-                }
+            if let Some(ref rx) = shutdown_rx && *rx.borrow() {
+                anyhow::bail!("Shutdown requested");
             }
             let export_url = format!(
                 "{}/export?after={}&count={}",

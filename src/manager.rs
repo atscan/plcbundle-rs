@@ -1873,10 +1873,8 @@ impl BundleManager {
             }
 
             let fetch_op_start = Instant::now();
-            if let Some(ref rx) = shutdown_rx {
-                if *rx.borrow() {
-                    anyhow::bail!("Shutdown requested");
-                }
+            if let Some(ref rx) = shutdown_rx && *rx.borrow() {
+                anyhow::bail!("Shutdown requested");
             }
             let (plc_ops, wait_dur, http_dur) = if let Some(rx) = shutdown_rx.clone() {
                 client

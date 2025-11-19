@@ -270,7 +270,7 @@ impl SyncLogger for SyncLoggerImpl {
         bundle_num: u32,
         hash: &str,
         age: &str,
-        fetch_duration_ms: u64,
+        _fetch_duration_ms: u64,
         bundle_save_ms: u64,
         index_ms: u64,
         _total_duration_ms: u64,
