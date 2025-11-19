@@ -1648,7 +1648,12 @@ impl BundleManager {
     ///
     /// IMPORTANT: This method performs heavy blocking I/O and should be called from async
     /// contexts using spawn_blocking to avoid freezing the async runtime (and HTTP server).
-    pub fn batch_update_did_index(&self, start_bundle: u32, end_bundle: u32) -> Result<()> {
+    pub fn batch_update_did_index(
+        &self,
+        start_bundle: u32,
+        end_bundle: u32,
+        compact: bool,
+    ) -> Result<()> {
         use std::time::Instant;
 
         if start_bundle > end_bundle {
@@ -1657,6 +1662,35 @@ impl BundleManager {
 
         let total_start = Instant::now();
         let bundle_count = end_bundle - start_bundle + 1;
+        if bundle_count > 10 {
+            use std::time::Instant;
+            eprintln!(
+                "[DID Index] Rebuild triggered for {} bundles ({} → {})",
+                bundle_count, start_bundle, end_bundle
+            );
+            let rebuild_start = Instant::now();
+            let _ = self.build_did_index(
+                crate::constants::DID_INDEX_FLUSH_INTERVAL,
+                Some(
+                    |current: u32, total: u32, bytes_processed: u64, total_bytes: u64| {
+                        let percent = if total_bytes > 0 {
+                            (bytes_processed as f64 / total_bytes as f64) * 100.0
+                        } else {
+                            0.0
+                        };
+                        eprintln!(
+                            "[DID Index] Rebuild progress: {}/{} ({:.1}%)",
+                            current, total, percent
+                        );
+                    },
+                ),
+                None,
+                None,
+            )?;
+            let dur = rebuild_start.elapsed();
+            eprintln!("[DID Index] Rebuild complete in {:.1}s", dur.as_secs_f64());
+            return Ok(());
+        }
 
         if *self.verbose.lock().unwrap() {
             log::info!(
@@ -1710,6 +1744,14 @@ impl BundleManager {
             total_operations as f64 / update_duration.as_secs_f64()
         );
 
+        // Optionally compact all shards immediately to avoid leaving delta segments
+        if compact {
+            let idx_guard = self.did_index.read().unwrap();
+            if let Some(idx) = idx_guard.as_ref() {
+                idx.compact_pending_segments(None)?;
+            }
+        }
+
         let total_duration = total_start.elapsed();
 
         if *self.verbose.lock().unwrap() {
@@ -1734,14 +1776,18 @@ impl BundleManager {
         &self,
         start_bundle: u32,
         end_bundle: u32,
+        compact: bool,
     ) -> Result<()> {
         let manager = self.clone_for_arc();
 
-        tokio::task::spawn_blocking(move || {
-            manager.batch_update_did_index(start_bundle, end_bundle)
+        // First perform the batch update in a blocking task
+        let _ = tokio::task::spawn_blocking(move || {
+            manager.batch_update_did_index(start_bundle, end_bundle, compact)
         })
         .await
-        .map_err(|e| anyhow::anyhow!("Batch DID index update task failed: {}", e))?
+        .map_err(|e| anyhow::anyhow!("Batch DID index update task failed: {}", e))?;
+
+        Ok(())
     }
 
     /// Fetch and save next bundle from PLC directory
@@ -1750,6 +1796,7 @@ impl BundleManager {
         &self,
         client: &crate::plc_client::PLCClient,
         shutdown_rx: Option<tokio::sync::watch::Receiver<bool>>,
+        update_did_index: bool,
     ) -> Result<SyncResult> {
         use crate::sync::{get_boundary_cids, strip_boundary_duplicates};
         use std::time::Instant;
@@ -1873,7 +1920,9 @@ impl BundleManager {
             }
 
             let fetch_op_start = Instant::now();
-            if let Some(ref rx) = shutdown_rx && *rx.borrow() {
+            if let Some(ref rx) = shutdown_rx
+                && *rx.borrow()
+            {
                 anyhow::bail!("Shutdown requested");
             }
             let (plc_ops, wait_dur, http_dur) = if let Some(rx) = shutdown_rx.clone() {
@@ -2064,7 +2113,7 @@ impl BundleManager {
             index_write_time,
             did_index_compacted,
         ) = self
-            .save_bundle_with_timing(next_bundle_num, operations)
+            .save_bundle_with_timing(next_bundle_num, operations, update_did_index)
             .await?;
         let save_duration = save_start.elapsed();
 
@@ -2113,9 +2162,18 @@ impl BundleManager {
         let total_duration_ms = (fetch_total_duration + save_duration).as_millis() as u64;
         let fetch_duration_ms = fetch_total_duration.as_millis() as u64;
 
-        // Calculate separate timings: bundle save (serialize + compress + hash) vs index (did_index + index_write)
-        let bundle_save_ms = (serialize_time + compress_time + hash_time).as_millis() as u64;
-        let index_ms = (did_index_time + index_write_time).as_millis() as u64;
+        // Calculate separate timings: bundle save vs index write/DID index
+        let (bundle_save_ms, index_ms) = if update_did_index {
+            (
+                (serialize_time + compress_time + hash_time).as_millis() as u64,
+                (did_index_time + index_write_time).as_millis() as u64,
+            )
+        } else {
+            (
+                (serialize_time + compress_time + hash_time + index_write_time).as_millis() as u64,
+                0,
+            )
+        };
 
         // Only log detailed info in verbose mode
         if *self.verbose.lock().unwrap() {
@@ -2164,7 +2222,7 @@ impl BundleManager {
         let mut synced = 0;
 
         loop {
-            match self.sync_next_bundle(client, None).await {
+            match self.sync_next_bundle(client, None, true).await {
                 Ok(SyncResult::BundleCreated { .. }) => {
                     synced += 1;
 
@@ -2193,6 +2251,7 @@ impl BundleManager {
         &self,
         bundle_num: u32,
         operations: Vec<Operation>,
+        update_did_index: bool,
     ) -> Result<(
         std::time::Duration,
         std::time::Duration,
@@ -2491,22 +2550,25 @@ impl BundleManager {
             );
         }
 
-        // Update DID index (now fast with delta segments)
-        let did_index_start = Instant::now();
-        let did_ops: Vec<(String, bool)> = operations
-            .iter()
-            .map(|op| (op.did.clone(), op.nullified))
-            .collect();
+        let (did_index_time, did_index_compacted) = if update_did_index {
+            let did_index_start = Instant::now();
+            let did_ops: Vec<(String, bool)> = operations
+                .iter()
+                .map(|op| (op.did.clone(), op.nullified))
+                .collect();
 
-        self.ensure_did_index()?;
-        let did_index_compacted = self
-            .did_index
-            .write()
-            .unwrap()
-            .as_mut()
-            .unwrap()
-            .update_for_bundle(bundle_num, did_ops)?;
-        let did_index_time = did_index_start.elapsed();
+            self.ensure_did_index()?;
+            let compacted = self
+                .did_index
+                .write()
+                .unwrap()
+                .as_mut()
+                .unwrap()
+                .update_for_bundle(bundle_num, did_ops)?;
+            (did_index_start.elapsed(), compacted)
+        } else {
+            (std::time::Duration::from_millis(0), false)
+        };
 
         // Update main index
         let index_write_start = Instant::now();

@@ -29,7 +29,7 @@ async fn test_bundle_manager_core() -> Result<()> {
 
     // Build DID index so DID lookups work
     manager
-        .batch_update_did_index_async(1, manager.get_last_bundle())
+        .batch_update_did_index_async(1, manager.get_last_bundle(), false)
         .await?;
 
     // Query DID operations and resolve DID
@@ -127,7 +127,7 @@ async fn test_delete_bundle_and_sample_dids() -> Result<()> {
     common::add_dummy_bundle(&dir2_path)?;
     let manager2 = plcbundle::BundleManager::new(dir2_path.clone(), ())?;
     manager2
-        .batch_update_did_index_async(1, manager2.get_last_bundle())
+        .batch_update_did_index_async(1, manager2.get_last_bundle(), false)
         .await?;
 
     // Verify we can query DID operations from the newly built index

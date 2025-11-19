@@ -58,7 +58,7 @@ async fn test_server_did_endpoints() -> Result<()> {
     let manager = Arc::new(manager);
     // Build DID index so the resolver can find operations in bundles
     manager
-        .batch_update_did_index_async(1, manager.get_last_bundle())
+        .batch_update_did_index_async(1, manager.get_last_bundle(), false)
         .await?;
     let port = 3032;
     let server_handle = common::start_test_server(Arc::clone(&manager), port).await?;
@@ -149,7 +149,7 @@ async fn test_server_data_endpoints() -> Result<()> {
     let manager = Arc::new(manager);
     // Ensure DID index is available for data/op lookups
     manager
-        .batch_update_did_index_async(1, manager.get_last_bundle())
+        .batch_update_did_index_async(1, manager.get_last_bundle(), false)
         .await?;
     let port = 3031;
     let server_handle = common::start_test_server(Arc::clone(&manager), port).await?;

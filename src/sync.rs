@@ -289,9 +289,8 @@ impl SyncLogger for SyncLoggerImpl {
         } else {
             format!("{:.0}KB", size_kb)
         };
-
-        eprintln!(
-            "[INFO] → Bundle {:06} | {} | {} dids | {} | fetch: {:.2}s ({} reqs, {:.1}s wait) | save: {}ms | index: {}ms | {}",
+        let base = format!(
+            "[INFO] → Bundle {:06} | {} | {} dids | {} | fetch: {:.2}s ({} reqs, {:.1}s wait) | save: {}ms",
             bundle_num,
             hash,
             unique_dids,
@@ -299,10 +298,13 @@ impl SyncLogger for SyncLoggerImpl {
             fetch_secs,
             fetch_requests,
             wait_secs,
-            bundle_save_ms,
-            index_ms,
-            age
+            bundle_save_ms
         );
+        if index_ms > 0 {
+            eprintln!("{} | index: {}ms | {}", base, index_ms, age);
+        } else {
+            eprintln!("{} | {}", base, age);
+        }
     }
 
     fn on_caught_up(
@@ -504,7 +506,7 @@ impl SyncManager {
 
             match self
                 .manager
-                .sync_next_bundle(&self.client, None)
+                .sync_next_bundle(&self.client, None, true)
                 .await
             {
                 Ok(crate::manager::SyncResult::BundleCreated {
@@ -597,6 +599,8 @@ impl SyncManager {
 
         let mut total_synced = 0u32;
         let mut is_initial_sync = true;
+        let mut did_index_batch_done = false;
+        let mut initial_sync_first_bundle: Option<u32> = None;
 
         // Notify logger that sync is starting
         if let Some(logger) = &self.logger {
@@ -635,7 +639,11 @@ impl SyncManager {
 
             let sync_result = self
                 .manager
-                .sync_next_bundle(&self.client, self.config.shutdown_rx.clone())
+                .sync_next_bundle(
+                    &self.client,
+                    self.config.shutdown_rx.clone(),
+                    !is_initial_sync,
+                )
                 .await;
 
             match sync_result {
@@ -656,6 +664,9 @@ impl SyncManager {
                     fetch_http_ms,
                 }) => {
                     total_synced += 1;
+                    if is_initial_sync && initial_sync_first_bundle.is_none() {
+                        initial_sync_first_bundle = Some(bundle_num);
+                    }
 
                     // Reset error counter on successful sync
                     use std::sync::atomic::{AtomicU32, Ordering};
@@ -748,12 +759,48 @@ impl SyncManager {
                     }
 
                     // Caught up to the end of the chain
-                    // Mark initial sync as complete ONLY if we actually synced at least one bundle.
-                    // This prevents premature "initial sync complete" when we just have a full
-                    // mempool from a previous run but still have thousands of bundles to sync.
-                    if is_initial_sync && total_synced > 0 {
-                        is_initial_sync = false;
+                    // When initial sync finishes, perform a single batch DID index update if the index is empty
+                    // or if we created bundles during initial sync with per-bundle updates disabled.
+                    if is_initial_sync && !did_index_batch_done {
+                        let stats = self.manager.get_did_index_stats();
+                        let total_dids = stats
+                            .get("total_dids")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        let total_entries = stats
+                            .get("total_entries")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
 
+                        let end_bundle = self.manager.get_last_bundle();
+                        let start_bundle = initial_sync_first_bundle.unwrap_or(1);
+
+                        // Only run batch update if there are bundles to process and either index is empty
+                        // or we created some bundles during this initial sync.
+                        let created_bundles = total_synced > 0;
+                        let index_is_empty = total_dids == 0 && total_entries == 0;
+                        if end_bundle >= start_bundle && (index_is_empty || created_bundles) {
+                            if self.config.verbose {
+                                eprintln!(
+                                    "[Sync] Performing batch DID index update: {} → {} (index empty={}, created_bundles={})",
+                                    start_bundle, end_bundle, index_is_empty, created_bundles
+                                );
+                            }
+                            if let Err(e) = self
+                                .manager
+                                .batch_update_did_index_async(start_bundle, end_bundle, true)
+                                .await
+                            {
+                                eprintln!(
+                                    "[Sync] Batch DID index update failed after initial sync: {}",
+                                    e
+                                );
+                            } else {
+                                did_index_batch_done = true;
+                            }
+                        }
+
+                        is_initial_sync = false;
                         self.handle_event(&SyncEvent::InitialSyncComplete {
                             total_bundles: total_synced,
                             mempool_count,

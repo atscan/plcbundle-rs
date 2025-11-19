@@ -330,7 +330,6 @@ pub struct Manager {
     // LRU cache for hot shards
     shard_cache: Arc<RwLock<HashMap<u8, Arc<Shard>>>>,
     max_cache: usize,
-    max_segments_per_shard: usize,
 
     config: Arc<RwLock<Config>>,
 
@@ -398,7 +397,6 @@ impl Manager {
             config_path,
             shard_cache: Arc::new(RwLock::new(HashMap::new())),
             max_cache: 5,
-            max_segments_per_shard: 8,
             config: Arc::new(RwLock::new(config.clone())),
             cache_hits: AtomicI64::new(0),
             cache_misses: AtomicI64::new(0),
@@ -1395,7 +1393,8 @@ impl Manager {
                 }
 
                 let compacted = if meta_opt.is_some() {
-                    self.auto_compact_if_needed(shard_num)?
+                    self.compact_shard(shard_num)?;
+                    true
                 } else {
                     false
                 };
@@ -1681,17 +1680,21 @@ impl Manager {
     }
 
     /// Compact pending delta segments. If `shards` is `None`, all shards are compacted.
+    /// Uses parallel execution across shards for faster compaction.
     pub fn compact_pending_segments(&self, shards: Option<Vec<u8>>) -> Result<()> {
+        use rayon::prelude::*;
+
         match shards {
             Some(list) if !list.is_empty() => {
-                for shard in list {
-                    self.compact_shard(shard)?;
-                }
+                list.into_par_iter()
+                    .map(|shard| self.compact_shard(shard))
+                    .collect::<Result<Vec<_>>>()?;
             }
             _ => {
-                for shard in 0..DID_SHARD_COUNT {
-                    self.compact_shard(shard as u8)?;
-                }
+                (0..DID_SHARD_COUNT)
+                    .into_par_iter()
+                    .map(|shard| self.compact_shard(shard as u8))
+                    .collect::<Result<Vec<_>>>()?;
             }
         }
 
@@ -1761,23 +1764,7 @@ impl Manager {
         Ok(layers)
     }
 
-    fn auto_compact_if_needed(&self, shard_num: u8) -> Result<bool> {
-        let should_compact = {
-            let config = self.config.read().unwrap();
-            config
-                .shards
-                .get(shard_num as usize)
-                .map(|meta| meta.segments.len() >= self.max_segments_per_shard)
-                .unwrap_or(false)
-        };
-
-        if should_compact {
-            self.compact_shard(shard_num)?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
+    // removed: auto_compact_if_needed (compaction now happens immediately after updates)
 
     fn compact_shard(&self, shard_num: u8) -> Result<()> {
         use std::time::Instant;
@@ -3622,10 +3609,9 @@ mod tests {
                 .get("delta_segments")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
-            assert!(
-                delta_segments > 0,
-                "expected pending delta segments, got {}",
-                delta_segments
+            assert_eq!(
+                delta_segments, 0,
+                "expected no pending delta segments after immediate compaction"
             );
         }
 

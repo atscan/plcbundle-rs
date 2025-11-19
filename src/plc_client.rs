@@ -73,7 +73,8 @@ impl PLCClient {
         after: &str,
         count: usize,
     ) -> Result<(Vec<PLCOperation>, Duration, Duration)> {
-        self.fetch_operations_with_retry_cancelable(after, count, 5, None).await
+        self.fetch_operations_with_retry_cancelable(after, count, 5, None)
+            .await
     }
 
     pub async fn fetch_operations_cancelable(
@@ -82,7 +83,8 @@ impl PLCClient {
         count: usize,
         shutdown_rx: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> Result<(Vec<PLCOperation>, Duration, Duration)> {
-        self.fetch_operations_with_retry_cancelable(after, count, 5, shutdown_rx).await
+        self.fetch_operations_with_retry_cancelable(after, count, 5, shutdown_rx)
+            .await
     }
 
     async fn fetch_operations_with_retry_cancelable(
@@ -98,13 +100,12 @@ impl PLCClient {
         let mut total_http = Duration::from_secs(0);
 
         for attempt in 1..=max_retries {
-            if let Some(ref rx) = shutdown_rx && *rx.borrow() {
+            if let Some(ref rx) = shutdown_rx
+                && *rx.borrow()
+            {
                 anyhow::bail!("Shutdown requested");
             }
-            let export_url = format!(
-                "{}/export?after={}&count={}",
-                self.base_url, after, count
-            );
+            let export_url = format!("{}/export?after={}&count={}", self.base_url, after, count);
 
             let permits = self.rate_limiter.available_permits();
             let requests_in_period = self.count_requests_in_period();
@@ -369,7 +370,8 @@ impl RateLimiter {
         let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
         let sem_clone = semaphore.clone();
 
-        let refill_rate = Duration::from_secs_f64(period.as_secs_f64() / requests_per_period as f64);
+        let refill_rate =
+            Duration::from_secs_f64(period.as_secs_f64() / requests_per_period as f64);
 
         // Spawn background task to refill permits at steady rate
         // CRITICAL: Add first permit immediately, then refill at steady rate
