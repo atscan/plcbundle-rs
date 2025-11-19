@@ -82,8 +82,27 @@ impl PLCClient {
         let mut last_err = None;
 
         for attempt in 1..=max_retries {
-            // Wait for rate limiter token
+            let export_url = format!(
+                "{}/export?after={}&count={}",
+                self.base_url, after, count
+            );
+
+            let permits = self.rate_limiter.available_permits();
+            let requests_in_period = self.count_requests_in_period();
+            log::debug!(
+                "[PLCClient] Preparing /export request: {} | permits={} | window={:?} | requests_in_window={}",
+                export_url,
+                permits,
+                self.rate_limit_period,
+                requests_in_period
+            );
+
+            let wait_start = Instant::now();
             self.rate_limiter.wait().await;
+            let wait_elapsed = wait_start.elapsed();
+            if wait_elapsed.as_nanos() > 0 {
+                log::debug!("[PLCClient] Rate limiter wait: {:?}", wait_elapsed);
+            }
 
             // Clear previous retry_after
             *self.last_retry_after.lock().await = None;
@@ -195,19 +214,6 @@ impl PLCClient {
         // PLC directory exposes DID documents at /{did} (same as plcbundle instances)
         let url = format!("{}/{}", self.base_url.trim_end_matches('/'), did);
 
-        log::debug!("Waiting for rate limiter token...");
-        let wait_start = Instant::now();
-        self.rate_limiter.wait().await;
-        let wait_duration = wait_start.elapsed();
-        if wait_duration.as_millis() > 0 {
-            log::debug!("Rate limiter wait: {:?}", wait_duration);
-        }
-
-        // Record this request attempt
-        self.record_request();
-        let request_count = self.count_requests_in_period();
-        log::debug!("Request count in last period: {}", request_count);
-
         log::debug!("Fetching DID document from: {}", url);
         let request_start = Instant::now();
 
@@ -307,9 +313,7 @@ impl RateLimiter {
         let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
         let sem_clone = semaphore.clone();
 
-        // Calculate refill rate: period / requests_per_period
-        // For 72 req/min: 60 seconds / 72 = 0.833 seconds per request
-        let refill_rate = period / requests_per_period as u32;
+        let refill_rate = Duration::from_secs_f64(period.as_secs_f64() / requests_per_period as f64);
 
         // Spawn background task to refill permits at steady rate
         // CRITICAL: Add first permit immediately, then refill at steady rate
@@ -334,6 +338,10 @@ impl RateLimiter {
         // Wait for a permit to become available
         // This will block until a permit is available (from refill task)
         let _ = self.semaphore.acquire().await;
+    }
+
+    fn available_permits(&self) -> usize {
+        self.semaphore.available_permits()
     }
 }
 
