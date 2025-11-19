@@ -335,9 +335,8 @@ impl RateLimiter {
     }
 
     async fn wait(&self) {
-        // Wait for a permit to become available
-        // This will block until a permit is available (from refill task)
-        let _ = self.semaphore.acquire().await;
+        let permit = self.semaphore.acquire().await.expect("semaphore closed");
+        permit.forget();
     }
 
     fn available_permits(&self) -> usize {
