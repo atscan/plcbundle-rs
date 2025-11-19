@@ -521,20 +521,15 @@ impl Mempool {
                 .last()
                 .and_then(|op| self.parse_timestamp(&op.created_at).ok());
 
-            // Calculate size and unique DIDs
             let mut total_size = 0;
-            let mut did_set: HashSet<String> = HashSet::new();
-
             for op in &self.operations {
-                // Approximate JSON size
                 if let Ok(json) = serde_json::to_string(op) {
                     total_size += json.len();
                 }
-                did_set.insert(op.did.clone());
             }
 
             stats.size_bytes = Some(total_size);
-            stats.did_count = Some(did_set.len());
+            stats.did_count = Some(self.did_index.len());
         }
 
         stats

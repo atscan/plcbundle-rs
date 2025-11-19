@@ -76,6 +76,7 @@ pub async fn handle_status(State(state): State<ServerState>) -> impl IntoRespons
             "progress_percent": (mempool_stats.count as f64 / constants::BUNDLE_SIZE as f64) * 100.0,
             "bundle_size": constants::BUNDLE_SIZE,
             "operations_needed": constants::BUNDLE_SIZE - mempool_stats.count,
+            "did_count": mempool_stats.did_count,
         });
     }
 

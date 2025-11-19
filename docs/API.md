@@ -890,6 +890,17 @@ pub fn get_current_cursor(&self) -> u64
 - WebSocket: `/ws?cursor=N` to resume from a specific position
 - Server: Status endpoint showing current position
 
+#### Global Position Mapping
+
+- Positions are 0-indexed per bundle (`0..9,999`).
+- Global position formula: `global = ((bundle - 1) × 10,000) + position`.
+- Conversion back: `bundle = floor(global / 10,000) + 1`, `position = global % 10,000`.
+- Examples:
+  - `global 0 → bundle 1, position 0`
+  - `global 10000 → bundle 2, position 0`
+  - `global 88410345 → bundle 8842, position 345`
+- Shorthand: Small numbers `< 10000` are treated as `bundle 1` positions.
+
 ### Handle & DID Resolution
 
 ```rust

@@ -19,12 +19,18 @@ pub async fn handle_root(
     let bundle_count = index.bundles.len();
     let origin = state.manager.get_plc_origin();
     let uptime = state.start_time.elapsed();
+    let mempool_stats_opt = if state.config.sync_mode {
+        state.manager.get_mempool_stats().ok()
+    } else {
+        None
+    };
 
     let mut response = String::new();
 
     // ASCII art banner
     response.push('\n');
     response.push_str(&crate::server::get_ascii_art_banner(&state.config.version));
+    response.push('\n');
     response.push_str(&format!("  {} server\n\n", constants::BINARY_NAME));
     response.push_str("*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*\n");
     response.push_str("| ⚠️ Preview Version – Do Not Use In Production!                 |\n");
@@ -82,9 +88,7 @@ pub async fn handle_root(
         }
     }
 
-    if state.config.sync_mode
-        && let Ok(mempool_stats) = state.manager.get_mempool_stats()
-    {
+    if let Some(mempool_stats) = mempool_stats_opt.as_ref() {
         response.push_str("\nMempool\n");
         response.push_str("━━━━━━━\n");
         response.push_str(&format!(
@@ -127,9 +131,9 @@ pub async fn handle_root(
     }
 
     if state.config.enable_resolver {
-        response.push_str("\nResolver\n");
-        response.push_str("━━━━━━━━\n");
-        response.push_str("  Status:        enabled\n");
+        response.push_str("\nDID Resolver\n");
+        response.push_str("━━━━━━━━━━━━\n");
+        response.push_str("  Status:  enabled\n");
 
         let did_stats = state.manager.get_did_index_stats();
         if did_stats
@@ -138,31 +142,21 @@ pub async fn handle_root(
             .unwrap_or(false)
         {
             let indexed_dids = did_stats
-                .get("indexed_dids")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            let mempool_dids = did_stats
-                .get("mempool_dids")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            let total_dids = did_stats
                 .get("total_dids")
                 .and_then(|v| v.as_i64())
-                .unwrap_or(0);
+                .unwrap_or(0) as u64;
+            let mempool_dids = mempool_stats_opt
+                .as_ref()
+                .and_then(|s| s.did_count)
+                .unwrap_or(0) as u64;
 
-            if mempool_dids > 0 {
-                response.push_str(&format!(
-                    "  Total DIDs:    {} ({} indexed + {} mempool)\n",
-                    format_number(total_dids as u64),
-                    format_number(indexed_dids as u64),
-                    format_number(mempool_dids as u64)
-                ));
-            } else {
-                response.push_str(&format!(
-                    "  Total DIDs:    {}\n",
-                    format_number(total_dids as u64)
-                ));
-            }
+            let total_dids = indexed_dids + mempool_dids;
+            response.push_str(&format!(
+                "  DIDs:    {} (Bundles {} + Mempool {})\n",
+                format_number(total_dids),
+                format_number(indexed_dids),
+                format_number(mempool_dids)
+            ));
         }
         response.push('\n');
     }
@@ -200,17 +194,16 @@ pub async fn handle_root(
     response.push_str("  GET  /bundle/:number      Bundle metadata (JSON)\n");
     response.push_str("  GET  /data/:number        Raw bundle (zstd compressed)\n");
     response.push_str("  GET  /jsonl/:number       Decompressed JSONL stream\n");
-    response.push_str("  GET  /op/:pointer         Get single operation\n");
+    response.push_str("  GET  /op/:cursor          Get single operation\n");
     response.push_str("  GET  /status              Server status\n");
     response.push_str("  GET  /mempool             Mempool operations (JSONL)\n");
-    response.push_str("  GET  /random              Random DID sample (JSON)\n");
 
     if state.config.enable_websocket {
         response.push_str("\nWebSocket Endpoints\n");
         response.push_str("━━━━━━━━━━━━━━━━━━━━━━━━\n");
         response.push_str("  WS   /ws                      Live stream (new operations only)\n");
         response.push_str("  WS   /ws?cursor=0             Stream all from beginning\n");
-        response.push_str("  WS   /ws?cursor=N              Stream from cursor N\n\n");
+        response.push_str("  WS   /ws?cursor=N             Stream from cursor N\n\n");
     }
 
     if state.config.enable_resolver {
@@ -219,6 +212,37 @@ pub async fn handle_root(
         response.push_str("  GET  /:did                    DID Document (W3C format)\n");
         response.push_str("  GET  /:did/data               PLC State (raw format)\n");
         response.push_str("  GET  /:did/log/audit          Operation history\n");
+        response.push_str("  GET  /random                  Random DID sample (JSON)\n");
+    }
+
+    response.push_str("\nCursor Format\n");
+    response.push_str("━━━━━━━━━━━━━\n");
+    response.push_str("  Global record number: ((bundle - 1) × 10,000) + position\n");
+    response.push_str("  Example: global 0 = bundle 1, position 0\n");
+    response.push_str("  Default: starts from latest (skips all historical data)\n");
+    response.push_str("  Positions are 0-indexed (per bundle: 0..9,999)\n");
+    response.push_str("  Example: global 10000 = bundle 2, position 0\n");
+
+    let bundled_ops = crate::constants::total_operations_from_bundles(index.last_bundle);
+    let mempool_ops = mempool_stats_opt
+        .as_ref()
+        .map(|s| s.count as u64)
+        .unwrap_or(0);
+    let current_latest = bundled_ops + mempool_ops;
+
+    if mempool_ops > 0 {
+        response.push_str(&format!(
+            "  Current latest: {} ({} bundled + {} mempool)\n\n",
+            format_number(current_latest),
+            format_number(bundled_ops),
+            format_number(mempool_ops)
+        ));
+    } else {
+        response.push_str(&format!(
+            "  Current latest: {} ({} bundled)\n\n",
+            format_number(current_latest),
+            format_number(bundled_ops)
+        ));
     }
 
     response.push_str("\nExamples\n");
