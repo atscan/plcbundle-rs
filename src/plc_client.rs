@@ -361,6 +361,7 @@ fn parse_retry_after(response: &reqwest::Response) -> Duration {
 /// Prevents burst requests by starting with 0 permits and refilling at steady rate
 struct RateLimiter {
     semaphore: std::sync::Arc<tokio::sync::Semaphore>,
+    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl RateLimiter {
@@ -369,6 +370,8 @@ impl RateLimiter {
         // Start with 0 permits to prevent initial burst
         let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
         let sem_clone = semaphore.clone();
+        let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let shutdown_clone = shutdown.clone();
 
         let refill_rate =
             Duration::from_secs_f64(period.as_secs_f64() / requests_per_period as f64);
@@ -385,6 +388,9 @@ impl RateLimiter {
 
             // Then refill at steady rate
             loop {
+                if shutdown_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
                 tokio::time::sleep(refill_rate_clone).await;
                 // Add one permit if under capacity (burst allowed up to capacity)
                 if sem_clone.available_permits() < capacity {
@@ -393,7 +399,7 @@ impl RateLimiter {
             }
         });
 
-        Self { semaphore }
+        Self { semaphore, shutdown }
     }
 
     async fn wait(&self) {
@@ -409,6 +415,12 @@ impl RateLimiter {
 
     fn available_permits(&self) -> usize {
         self.semaphore.available_permits()
+    }
+}
+
+impl Drop for RateLimiter {
+    fn drop(&mut self) {
+        self.shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
 

@@ -100,7 +100,7 @@ async fn stream_live_operations(
     }
 
     // Stream mempool operations
-    let bundle_record_base = crate::constants::total_operations_from_bundles(bundles.len() as u32);
+    let mut bundle_record_base = crate::constants::total_operations_from_bundles(bundles.len() as u32);
     let mut last_seen_mempool_count = 0;
 
     stream_mempool(
@@ -121,14 +121,14 @@ async fn stream_live_operations(
         ticker.tick().await;
 
         // Check for new bundles
-        let index = state.manager.get_index();
-        let bundles = &index.bundles;
+        let current_bundle_count = state.manager.bundle_count();
 
-        if bundles.len() > last_bundle_count {
-            let new_bundle_count = bundles.len() - last_bundle_count;
+        if current_bundle_count > last_bundle_count {
+            let new_bundle_count = current_bundle_count - last_bundle_count;
             current_record +=
                 crate::constants::total_operations_from_bundles(new_bundle_count as u32);
-            last_bundle_count = bundles.len();
+            last_bundle_count = current_bundle_count;
+            bundle_record_base = crate::constants::total_operations_from_bundles(last_bundle_count as u32);
             last_seen_mempool_count = 0;
         }
 

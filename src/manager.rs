@@ -1808,7 +1808,15 @@ impl BundleManager {
 
         // ALWAYS get boundaries from last bundle initially
         let (mut after_time, mut prev_boundary) = if next_bundle_num > 1 {
-            let last = self.load_bundle(next_bundle_num - 1, LoadOptions::default())?;
+            let last = self.load_bundle(
+                next_bundle_num - 1,
+                LoadOptions {
+                    cache: false,
+                    decompress: true,
+                    filter: None,
+                    limit: None,
+                },
+            )?;
             let boundary = get_boundary_cids(&last.operations);
             let cursor = last
                 .operations
@@ -2921,6 +2929,25 @@ impl BundleManager {
     /// Get a copy of the current index
     pub fn get_index(&self) -> Index {
         self.index.read().unwrap().clone()
+    }
+
+    pub fn bundle_count(&self) -> usize {
+        self.index.read().unwrap().bundles.len()
+    }
+
+    pub fn get_mempool_operations_from(&self, start: usize) -> Result<Vec<Operation>> {
+        let mempool_guard = self.mempool.read().unwrap();
+        match mempool_guard.as_ref() {
+            Some(mp) => {
+                let ops = mp.get_operations();
+                if start >= ops.len() {
+                    Ok(Vec::new())
+                } else {
+                    Ok(ops[start..].to_vec())
+                }
+            }
+            None => Ok(Vec::new()),
+        }
     }
 
     // === Remote Access ===
