@@ -30,6 +30,8 @@ pub enum SyncResult {
         did_index_compacted: bool,
         unique_dids: u32,
         size_bytes: u64,
+        fetch_wait_ms: u64,
+        fetch_http_ms: u64,
     },
     /// Caught up to latest PLC data, mempool has partial operations
     CaughtUp {
@@ -1838,6 +1840,8 @@ impl BundleManager {
         let fetch_start = Instant::now();
         let mut caught_up = false;
         const MAX_ATTEMPTS: usize = 50;
+        let mut total_wait = std::time::Duration::from_secs(0);
+        let mut total_http = std::time::Duration::from_secs(0);
 
         while fetch_num < MAX_ATTEMPTS {
             let stats = self.get_mempool_stats()?;
@@ -1874,13 +1878,15 @@ impl BundleManager {
                     anyhow::bail!("Shutdown requested");
                 }
             }
-            let plc_ops = if let Some(rx) = shutdown_rx.clone() {
+            let (plc_ops, wait_dur, http_dur) = if let Some(rx) = shutdown_rx.clone() {
                 client
                     .fetch_operations_cancelable(&after_time, request_count, Some(rx))
                     .await?
             } else {
                 client.fetch_operations(&after_time, request_count).await?
             };
+            total_wait += wait_dur;
+            total_http += http_dur;
 
             let fetched_count = plc_ops.len();
 
@@ -2143,6 +2149,8 @@ impl BundleManager {
             did_index_compacted,
             unique_dids,
             size_bytes,
+            fetch_wait_ms: total_wait.as_millis() as u64,
+            fetch_http_ms: total_http.as_millis() as u64,
         })
     }
 

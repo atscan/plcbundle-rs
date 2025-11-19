@@ -100,6 +100,8 @@ pub enum SyncEvent {
 
         unique_dids: u32,
         size_bytes: u64,
+        fetch_wait_ms: u64,
+        fetch_http_ms: u64,
     },
     CaughtUp {
         next_bundle: u32,
@@ -174,6 +176,8 @@ pub trait SyncLogger: Send + Sync {
         did_index_compacted: bool,
         unique_dids: u32,
         size_bytes: u64,
+        fetch_wait_ms: u64,
+        fetch_http_ms: u64,
     );
 
     // Allow the sync logger to accept multiple arguments for detailed bundle info
@@ -274,8 +278,11 @@ impl SyncLogger for SyncLoggerImpl {
         _did_index_compacted: bool,
         unique_dids: u32,
         size_bytes: u64,
+        fetch_wait_ms: u64,
+        fetch_http_ms: u64,
     ) {
-        let fetch_secs = fetch_duration_ms as f64 / 1000.0;
+        let fetch_secs = fetch_http_ms as f64 / 1000.0;
+        let wait_secs = fetch_wait_ms as f64 / 1000.0;
         let size_kb = size_bytes as f64 / 1024.0;
         let size_str = if size_kb >= 1024.0 {
             format!("{:.1}MB", size_kb / 1024.0)
@@ -284,13 +291,14 @@ impl SyncLogger for SyncLoggerImpl {
         };
 
         eprintln!(
-            "[INFO] → Bundle {:06} | {} | {} dids | {} | fetch: {:.2}s ({} reqs) | save: {}ms | index: {}ms | {}",
+            "[INFO] → Bundle {:06} | {} | {} dids | {} | fetch: {:.2}s ({} reqs, {:.1}s wait) | save: {}ms | index: {}ms | {}",
             bundle_num,
             hash,
             unique_dids,
             size_str,
             fetch_secs,
             fetch_requests,
+            wait_secs,
             bundle_save_ms,
             index_ms,
             age
@@ -411,6 +419,8 @@ impl SyncManager {
                     did_index_compacted,
                     unique_dids,
                     size_bytes,
+                    fetch_wait_ms,
+                    fetch_http_ms,
                 } => {
                     logger.on_bundle_created(
                         *bundle_num,
@@ -424,6 +434,8 @@ impl SyncManager {
                         *did_index_compacted,
                         *unique_dids,
                         *size_bytes,
+                        *fetch_wait_ms,
+                        *fetch_http_ms,
                     );
                 }
                 SyncEvent::CaughtUp {
@@ -508,6 +520,8 @@ impl SyncManager {
                     did_index_compacted,
                     unique_dids,
                     size_bytes,
+                    fetch_wait_ms,
+                    fetch_http_ms,
                 }) => {
                     synced += 1;
 
@@ -523,6 +537,8 @@ impl SyncManager {
                         did_index_compacted,
                         unique_dids,
                         size_bytes,
+                        fetch_wait_ms,
+                        fetch_http_ms,
                     });
 
                     // Show compaction message if index was compacted
@@ -636,6 +652,8 @@ impl SyncManager {
                     did_index_compacted,
                     unique_dids,
                     size_bytes,
+                    fetch_wait_ms,
+                    fetch_http_ms,
                 }) => {
                     total_synced += 1;
 
@@ -656,6 +674,8 @@ impl SyncManager {
                         did_index_compacted,
                         unique_dids,
                         size_bytes,
+                        fetch_wait_ms,
+                        fetch_http_ms,
                     });
 
                     // Show compaction message if index was compacted

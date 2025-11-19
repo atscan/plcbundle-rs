@@ -68,7 +68,11 @@ impl PLCClient {
     }
 
     /// Fetch operations from PLC directory export endpoint
-    pub async fn fetch_operations(&self, after: &str, count: usize) -> Result<Vec<PLCOperation>> {
+    pub async fn fetch_operations(
+        &self,
+        after: &str,
+        count: usize,
+    ) -> Result<(Vec<PLCOperation>, Duration, Duration)> {
         self.fetch_operations_with_retry_cancelable(after, count, 5, None).await
     }
 
@@ -77,7 +81,7 @@ impl PLCClient {
         after: &str,
         count: usize,
         shutdown_rx: Option<tokio::sync::watch::Receiver<bool>>,
-    ) -> Result<Vec<PLCOperation>> {
+    ) -> Result<(Vec<PLCOperation>, Duration, Duration)> {
         self.fetch_operations_with_retry_cancelable(after, count, 5, shutdown_rx).await
     }
 
@@ -87,9 +91,11 @@ impl PLCClient {
         count: usize,
         max_retries: usize,
         shutdown_rx: Option<tokio::sync::watch::Receiver<bool>>,
-    ) -> Result<Vec<PLCOperation>> {
+    ) -> Result<(Vec<PLCOperation>, Duration, Duration)> {
         let mut backoff = Duration::from_secs(1);
         let mut last_err = None;
+        let mut total_wait = Duration::from_secs(0);
+        let mut total_http = Duration::from_secs(0);
 
         for attempt in 1..=max_retries {
             if let Some(ref rx) = shutdown_rx {
@@ -127,6 +133,7 @@ impl PLCClient {
             if wait_elapsed.as_nanos() > 0 {
                 log::debug!("[PLCClient] Rate limiter wait: {:?}", wait_elapsed);
             }
+            total_wait += wait_elapsed;
 
             // Clear previous retry_after
             *self.last_retry_after.lock().await = None;
@@ -135,7 +142,10 @@ impl PLCClient {
             self.record_request();
 
             match self.do_fetch_operations(after, count).await {
-                Ok(operations) => return Ok(operations),
+                Ok((operations, http_duration)) => {
+                    total_http += http_duration;
+                    return Ok((operations, total_wait, total_http));
+                }
                 Err(e) => {
                     last_err = Some(e);
 
@@ -200,8 +210,13 @@ impl PLCClient {
         )
     }
 
-    async fn do_fetch_operations(&self, after: &str, count: usize) -> Result<Vec<PLCOperation>> {
+    async fn do_fetch_operations(
+        &self,
+        after: &str,
+        count: usize,
+    ) -> Result<(Vec<PLCOperation>, Duration)> {
         let url = format!("{}/export", self.base_url);
+        let request_start = Instant::now();
         let response = self
             .client
             .get(&url)
@@ -222,6 +237,7 @@ impl PLCClient {
         }
 
         let body = response.text().await?;
+        let request_duration = request_start.elapsed();
         let mut operations = Vec::new();
 
         for line in body.lines() {
@@ -241,7 +257,7 @@ impl PLCClient {
             }
         }
 
-        Ok(operations)
+        Ok((operations, request_duration))
     }
 
     /// Fetch DID document raw JSON from PLC directory
