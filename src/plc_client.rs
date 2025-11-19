@@ -315,17 +315,13 @@ impl RateLimiter {
         // CRITICAL: Add first permit immediately, then refill at steady rate
         let refill_rate_clone = refill_rate;
         tokio::spawn(async move {
-            // Add first permit immediately so first request can proceed
-            if sem_clone.available_permits() < requests_per_period {
+            if sem_clone.available_permits() < 1 {
                 sem_clone.add_permits(1);
             }
 
-            // Then refill at steady rate
             loop {
                 tokio::time::sleep(refill_rate_clone).await;
-                // Add one permit if under capacity
-                // This creates a token bucket: max capacity is requests_per_period
-                if sem_clone.available_permits() < requests_per_period {
+                if sem_clone.available_permits() < 1 {
                     sem_clone.add_permits(1);
                 }
             }
