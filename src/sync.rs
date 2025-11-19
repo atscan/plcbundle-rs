@@ -490,7 +490,11 @@ impl SyncManager {
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
 
-            match self.manager.sync_next_bundle(&self.client).await {
+            match self
+                .manager
+                .sync_next_bundle(&self.client, None)
+                .await
+            {
                 Ok(crate::manager::SyncResult::BundleCreated {
                     bundle_num,
                     mempool_count: _,
@@ -613,7 +617,10 @@ impl SyncManager {
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
 
-            let sync_result = self.manager.sync_next_bundle(&self.client).await;
+            let sync_result = self
+                .manager
+                .sync_next_bundle(&self.client, self.config.shutdown_rx.clone())
+                .await;
 
             match sync_result {
                 Ok(crate::manager::SyncResult::BundleCreated {

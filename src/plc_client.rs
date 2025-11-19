@@ -69,19 +69,34 @@ impl PLCClient {
 
     /// Fetch operations from PLC directory export endpoint
     pub async fn fetch_operations(&self, after: &str, count: usize) -> Result<Vec<PLCOperation>> {
-        self.fetch_operations_with_retry(after, count, 5).await
+        self.fetch_operations_with_retry_cancelable(after, count, 5, None).await
     }
 
-    async fn fetch_operations_with_retry(
+    pub async fn fetch_operations_cancelable(
+        &self,
+        after: &str,
+        count: usize,
+        shutdown_rx: Option<tokio::sync::watch::Receiver<bool>>,
+    ) -> Result<Vec<PLCOperation>> {
+        self.fetch_operations_with_retry_cancelable(after, count, 5, shutdown_rx).await
+    }
+
+    async fn fetch_operations_with_retry_cancelable(
         &self,
         after: &str,
         count: usize,
         max_retries: usize,
+        shutdown_rx: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> Result<Vec<PLCOperation>> {
         let mut backoff = Duration::from_secs(1);
         let mut last_err = None;
 
         for attempt in 1..=max_retries {
+            if let Some(ref rx) = shutdown_rx {
+                if *rx.borrow() {
+                    anyhow::bail!("Shutdown requested");
+                }
+            }
             let export_url = format!(
                 "{}/export?after={}&count={}",
                 self.base_url, after, count
@@ -98,7 +113,16 @@ impl PLCClient {
             );
 
             let wait_start = Instant::now();
-            self.rate_limiter.wait().await;
+            if let Some(mut rx) = shutdown_rx.clone() {
+                tokio::select! {
+                    _ = self.rate_limiter.wait() => {}
+                    _ = rx.changed() => {
+                        if *rx.borrow() { anyhow::bail!("Shutdown requested"); }
+                    }
+                }
+            } else {
+                self.rate_limiter.wait().await;
+            }
             let wait_elapsed = wait_start.elapsed();
             if wait_elapsed.as_nanos() > 0 {
                 log::debug!("[PLCClient] Rate limiter wait: {:?}", wait_elapsed);
@@ -131,7 +155,16 @@ impl PLCClient {
                             attempt,
                             max_retries
                         );
-                        tokio::time::sleep(retry_after).await;
+                        if let Some(mut rx) = shutdown_rx.clone() {
+                            tokio::select! {
+                                _ = tokio::time::sleep(retry_after) => {}
+                                _ = rx.changed() => {
+                                    if *rx.borrow() { anyhow::bail!("Shutdown requested"); }
+                                }
+                            }
+                        } else {
+                            tokio::time::sleep(retry_after).await;
+                        }
                         continue;
                     }
 
@@ -144,7 +177,16 @@ impl PLCClient {
                             last_err.as_ref().unwrap(),
                             backoff
                         );
-                        tokio::time::sleep(backoff).await;
+                        if let Some(mut rx) = shutdown_rx.clone() {
+                            tokio::select! {
+                                _ = tokio::time::sleep(backoff) => {}
+                                _ = rx.changed() => {
+                                    if *rx.borrow() { anyhow::bail!("Shutdown requested"); }
+                                }
+                            }
+                        } else {
+                            tokio::time::sleep(backoff).await;
+                        }
                         backoff *= 2; // Exponential backoff
                     }
                 }
@@ -318,14 +360,18 @@ impl RateLimiter {
         // Spawn background task to refill permits at steady rate
         // CRITICAL: Add first permit immediately, then refill at steady rate
         let refill_rate_clone = refill_rate;
+        let capacity = requests_per_period;
         tokio::spawn(async move {
-            if sem_clone.available_permits() < 1 {
+            // Add first permit immediately so first request can proceed
+            if sem_clone.available_permits() < capacity {
                 sem_clone.add_permits(1);
             }
 
+            // Then refill at steady rate
             loop {
                 tokio::time::sleep(refill_rate_clone).await;
-                if sem_clone.available_permits() < 1 {
+                // Add one permit if under capacity (burst allowed up to capacity)
+                if sem_clone.available_permits() < capacity {
                     sem_clone.add_permits(1);
                 }
             }
@@ -335,8 +381,14 @@ impl RateLimiter {
     }
 
     async fn wait(&self) {
-        let permit = self.semaphore.acquire().await.expect("semaphore closed");
-        permit.forget();
+        match self.semaphore.acquire().await {
+            Ok(permit) => permit.forget(),
+            Err(_) => {
+                log::warn!(
+                    "[PLCClient] Rate limiter disabled (semaphore closed), proceeding without delay"
+                );
+            }
+        }
     }
 
     fn available_permits(&self) -> usize {

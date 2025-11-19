@@ -1747,6 +1747,7 @@ impl BundleManager {
     pub async fn sync_next_bundle(
         &self,
         client: &crate::plc_client::PLCClient,
+        shutdown_rx: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> Result<SyncResult> {
         use crate::sync::{get_boundary_cids, strip_boundary_duplicates};
         use std::time::Instant;
@@ -1868,7 +1869,18 @@ impl BundleManager {
             }
 
             let fetch_op_start = Instant::now();
-            let plc_ops = client.fetch_operations(&after_time, request_count).await?;
+            if let Some(ref rx) = shutdown_rx {
+                if *rx.borrow() {
+                    anyhow::bail!("Shutdown requested");
+                }
+            }
+            let plc_ops = if let Some(rx) = shutdown_rx.clone() {
+                client
+                    .fetch_operations_cancelable(&after_time, request_count, Some(rx))
+                    .await?
+            } else {
+                client.fetch_operations(&after_time, request_count).await?
+            };
 
             let fetched_count = plc_ops.len();
 
@@ -2146,7 +2158,7 @@ impl BundleManager {
         let mut synced = 0;
 
         loop {
-            match self.sync_next_bundle(client).await {
+            match self.sync_next_bundle(client, None).await {
                 Ok(SyncResult::BundleCreated { .. }) => {
                     synced += 1;
 
