@@ -17,6 +17,7 @@ RUN apk update && \
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY tests ./tests
 
 ENV OPENSSL_STATIC=1
 ENV OPENSSL_DIR=/usr
