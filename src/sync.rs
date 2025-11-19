@@ -889,6 +889,7 @@ fn is_retryable_error(error_msg: &str) -> bool {
         "404",
         "403",
         "401",
+        "shutdown requested",
     ];
 
     // Check for fatal patterns first
