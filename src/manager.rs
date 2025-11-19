@@ -5,7 +5,7 @@ use crate::index::{BundleMetadata, Index};
 use crate::iterators::{ExportIterator, QueryIterator, RangeIterator};
 use crate::operations::{Operation, OperationFilter, OperationRequest, OperationWithLocation};
 use crate::options::QueryMode;
-use crate::{cache, did_index, handle_resolver, mempool, verification};
+use crate::{did_index, handle_resolver, mempool, verification};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use std::collections::{HashMap, HashSet};
@@ -84,8 +84,7 @@ pub enum SyncResult {
 /// ```
 pub struct BundleManager {
     directory: PathBuf,
-    index: Arc<RwLock<Index>>,
-    cache: Arc<cache::BundleCache>,
+    index: Arc<RwLock<Index>>, 
     did_index: Arc<RwLock<Option<did_index::Manager>>>,
     stats: Arc<RwLock<ManagerStats>>,
     mempool: Arc<RwLock<Option<mempool::Mempool>>>,
@@ -246,7 +245,6 @@ impl BundleManager {
         let manager = Self {
             directory: directory.clone(),
             index: Arc::new(RwLock::new(index)),
-            cache: Arc::new(cache::BundleCache::new(100)),
             did_index: Arc::new(RwLock::new(None)),
             stats: Arc::new(RwLock::new(ManagerStats::default())),
             mempool: Arc::new(RwLock::new(None)),
@@ -323,19 +321,8 @@ impl BundleManager {
     pub fn load_bundle(&self, num: u32, options: LoadOptions) -> Result<LoadResult> {
         self.stats.write().unwrap().bundles_loaded += 1;
 
-        if let Some(cached) = self.cache.get(num) {
-            self.stats.write().unwrap().cache_hits += 1;
-            return Ok(self.filter_load_result(cached, &options));
-        }
-
-        self.stats.write().unwrap().cache_misses += 1;
-
         let bundle_path = constants::bundle_path(&self.directory, num);
         let operations = self.load_bundle_from_disk(&bundle_path)?;
-
-        if options.cache {
-            self.cache.insert(num, operations.clone());
-        }
 
         Ok(self.filter_load_result(operations, &options))
     }
@@ -932,7 +919,6 @@ impl BundleManager {
         let mut info = BundleInfo {
             metadata: metadata.clone(),
             exists: constants::bundle_path(&self.directory, num).exists(),
-            cached: self.cache.contains(num),
             operations: None,
             size_info: None,
         };
@@ -995,7 +981,6 @@ impl BundleManager {
             if path.exists() {
                 std::fs::remove_file(path)?;
             }
-            self.cache.remove(*bundle_num);
         }
 
         let mut index = self.index.write().unwrap();
@@ -1020,33 +1005,10 @@ impl BundleManager {
     }
 
     // === Cache Hints ===
+    pub fn prefetch_bundles(&self, _nums: Vec<u32>) -> Result<()> { Ok(()) }
+
     /// Preload specified bundles into the cache for faster subsequent access
-    pub fn prefetch_bundles(&self, nums: Vec<u32>) -> Result<()> {
-        for num in nums {
-            self.load_bundle(
-                num,
-                LoadOptions {
-                    cache: true,
-                    ..Default::default()
-                },
-            )?;
-        }
-        Ok(())
-    }
-
-    /// Warm up caches according to strategy (recent, range, all)
-    pub fn warm_up(&self, spec: WarmUpSpec) -> Result<()> {
-        let bundles: Vec<u32> = match spec.strategy {
-            WarmUpStrategy::Recent(n) => {
-                let last = self.get_last_bundle();
-                (last.saturating_sub(n - 1)..=last).collect()
-            }
-            WarmUpStrategy::Range(start, end) => (start..=end).collect(),
-            WarmUpStrategy::All => (1..=self.get_last_bundle()).collect(),
-        };
-
-        self.prefetch_bundles(bundles)
-    }
+    pub fn warm_up(&self, _spec: WarmUpSpec) -> Result<()> { Ok(()) }
 
     // === DID Index ===
     pub fn build_did_index<F>(
@@ -1309,7 +1271,6 @@ impl BundleManager {
     }
 
     pub fn clear_caches(&self) {
-        self.cache.clear();
         self.stats.write().unwrap().cache_hits = 0;
         self.stats.write().unwrap().cache_misses = 0;
     }
@@ -3555,7 +3516,6 @@ impl BundleManager {
         Self {
             directory: self.directory.clone(),
             index: Arc::clone(&self.index),
-            cache: Arc::clone(&self.cache),
             did_index: Arc::clone(&self.did_index),
             stats: Arc::clone(&self.stats),
             mempool: Arc::clone(&self.mempool),
@@ -3806,7 +3766,6 @@ impl BundleManager {
         if bundle_path.exists() {
             std::fs::remove_file(bundle_path)?;
         }
-        self.cache.remove(bundle_num);
         Ok(())
     }
 }
@@ -3952,7 +3911,6 @@ pub struct ChainVerifyResult {
 pub struct BundleInfo {
     pub metadata: BundleMetadata,
     pub exists: bool,
-    pub cached: bool,
     pub operations: Option<Vec<Operation>>,
     pub size_info: Option<SizeInfo>,
 }

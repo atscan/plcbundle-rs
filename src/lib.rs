@@ -31,7 +31,6 @@
 //!
 // src/lib.rs
 pub(crate) mod bundle_format;
-pub(crate) mod cache;
 pub mod constants;
 pub mod did_index;
 pub(crate) mod ffi;
