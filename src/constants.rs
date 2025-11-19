@@ -42,9 +42,14 @@ pub const FRAME_SIZE: usize = 100;
 // Rate Limiting Constants
 // ============================================================================
 
-/// Default rate limit for PLC API requests (requests per minute)
-/// Set to 80% of quota (72 req/min) to provide safety margin and prevent rate limiting
-pub const DEFAULT_RATE_LIMIT: usize = 72;
+/// PLC directory quota: maximum requests allowed per period
+pub const PLC_RATE_LIMIT_REQUEST: usize = 500;
+
+/// Rate limiting window length in seconds (measurement and enforcement are equal)
+pub const PLC_RATE_LIMIT_PERIOD: u64 = 300;
+
+/// Safety margin applied to quota to avoid hitting limits (e.g., 0.8 = 80%)
+pub const PLC_RATE_LIMIT_SAFETY_FACTOR: f64 = 0.8;
 
 // ============================================================================
 // Timeout Constants (in seconds)
@@ -301,7 +306,9 @@ mod tests {
     fn test_constants_values() {
         assert_eq!(BUNDLE_SIZE, 10_000);
         assert_eq!(FRAME_SIZE, 100);
-        assert_eq!(DEFAULT_RATE_LIMIT, 72);
+        assert_eq!(PLC_RATE_LIMIT_REQUEST, 500);
+        assert_eq!(PLC_RATE_LIMIT_PERIOD, 300);
+        assert!((PLC_RATE_LIMIT_SAFETY_FACTOR - 0.8).abs() < f64::EPSILON);
         assert_eq!(HTTP_TIMEOUT_SECS, 60);
         assert_eq!(HTTP_INDEX_TIMEOUT_SECS, 30);
         assert_eq!(HTTP_BUNDLE_TIMEOUT_SECS, 60);

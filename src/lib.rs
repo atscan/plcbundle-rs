@@ -19,7 +19,7 @@
 //! assert!(resolved.locations_found >= 0);
 //!
 //! // Query a bundle range
-//! let spec = QuerySpec { bundles: BundleRange::Range(1, 10), filter: None, query: String::new(), mode: QueryMode::All };
+//! let spec = QuerySpec { bundles: BundleRange::Range(1, 10), filter: None, query: String::new(), mode: QueryMode::Simple };
 //! for item in mgr.query(spec) { let _ = item?; }
 //! # Ok::<(), anyhow::Error>(())
 //! ```

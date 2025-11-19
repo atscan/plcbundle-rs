@@ -74,7 +74,7 @@ pub enum SyncResult {
 /// println!("Resolved to shard {}", resolved.shard_num);
 ///
 /// // Query a range and export
-/// let spec = QuerySpec { bundles: BundleRange::Range(40, 45), filter: None, query: String::new(), mode: QueryMode::All };
+/// let spec = QuerySpec { bundles: BundleRange::Range(40, 45), filter: None, query: String::new(), mode: QueryMode::Simple };
 /// let mut count = 0u64;
 /// for item in mgr.query(spec) { count += 1; }
 /// assert!(count > 0);

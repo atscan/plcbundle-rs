@@ -91,7 +91,6 @@ async fn test_range_and_export_iterators() -> Result<()> {
         bundles: plcbundle::BundleRange::Single(1),
         format: plcbundle::ExportFormat::JsonLines,
         filter: None,
-        compression: None,
         count: Some(5),
         after_timestamp: None,
     };

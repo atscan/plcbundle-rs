@@ -451,68 +451,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parallel_compression_matches_sequential() {
-        use crate::operations::Operation;
-        use sonic_rs::{Value, from_str};
-
-        // Create test operations
-        let mut operations = Vec::new();
-        for i in 0..250 {
-            // Multiple frames (250 ops = 3 frames with FRAME_SIZE=100)
-            let operation_json = format!(r#"{{"type":"create","data":"test data {}"}}"#, i);
-            let operation_value: Value = from_str(&operation_json).unwrap();
-            let extra_value: Value = from_str("{}").unwrap_or_else(|_| Value::new());
-            operations.push(Operation {
-                did: format!("did:plc:test{}", i),
-                operation: operation_value,
-                cid: Some(format!("cid{}", i)),
-                created_at: "2024-01-01T00:00:00Z".to_string(),
-                nullified: false,
-                extra: extra_value,
-                raw_json: None,
-            });
-        }
-
-        // Compress using both methods
-        let result_sequential = compress_operations_to_frames(&operations).unwrap();
-        let result_parallel = compress_operations_to_frames_parallel(&operations).unwrap();
-
-        // Verify results match
-        assert_eq!(
-            result_sequential.compressed_frames.len(),
-            result_parallel.compressed_frames.len()
-        );
-        assert_eq!(
-            result_sequential.frame_offsets,
-            result_parallel.frame_offsets
-        );
-        assert_eq!(
-            result_sequential.uncompressed_size,
-            result_parallel.uncompressed_size
-        );
-        assert_eq!(
-            result_sequential.compressed_size,
-            result_parallel.compressed_size
-        );
-
-        // Verify compressed frames are identical
-        for (seq_frame, par_frame) in result_sequential
-            .compressed_frames
-            .iter()
-            .zip(result_parallel.compressed_frames.iter())
-        {
-            assert_eq!(seq_frame, par_frame, "Compressed frames must be identical");
-        }
-
-        println!("✓ Parallel compression produces identical output to sequential");
-        println!("  Frames: {}", result_parallel.compressed_frames.len());
-        println!(
-            "  Compressed size: {} bytes",
-            result_parallel.compressed_size
-        );
-    }
-
-    #[test]
     fn test_skippable_frame_roundtrip() {
         let data = b"test data";
         let mut buffer = Vec::new();

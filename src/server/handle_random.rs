@@ -24,14 +24,12 @@ pub async fn handle_random_dids(
     if count > 1000 {
         return bad_request("count must be <= 1000").into_response();
     }
-    let effective_seed = params
-        .seed
-        .unwrap_or_else(|| {
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos() as u64
-        });
+    let effective_seed = params.seed.unwrap_or_else(|| {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64
+    });
     if count == 0 {
         return (
             StatusCode::OK,
@@ -51,10 +49,13 @@ pub async fn handle_random_dids(
         Err(e) => return task_join_error(e).into_response(),
     };
 
-    (StatusCode::OK, axum::Json(json!({
-        "dids": dids,
-        "count": count,
-        "seed": effective_seed
-    })))
+    (
+        StatusCode::OK,
+        axum::Json(json!({
+            "dids": dids,
+            "count": count,
+            "seed": effective_seed
+        })),
+    )
         .into_response()
 }

@@ -5,11 +5,11 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 use plcbundle::BundleManager;
+use plcbundle::Operation;
 use plcbundle::index::{BundleMetadata, Index};
-use plcbundle::operations::Operation;
 
 pub fn setup_manager(dir: &PathBuf) -> Result<BundleManager> {
-    plcbundle::Index::init(dir, "http://localhost:1234".to_string(), true)?;
+    Index::init(dir, "http://localhost:1234".to_string(), true)?;
     let manager = BundleManager::new(dir.clone(), ())?;
     Ok(manager)
 }

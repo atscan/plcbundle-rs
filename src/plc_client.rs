@@ -22,16 +22,19 @@ pub struct PLCClient {
 
 impl PLCClient {
     pub fn new(base_url: impl Into<String>) -> Result<Self> {
-        let rate_limit_period = Duration::from_secs(constants::HTTP_TIMEOUT_SECS);
+        let period = Duration::from_secs(constants::PLC_RATE_LIMIT_PERIOD);
+        let requests_per_period = (constants::PLC_RATE_LIMIT_REQUEST as f64
+            * constants::PLC_RATE_LIMIT_SAFETY_FACTOR)
+            .floor() as usize;
         Ok(Self {
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(constants::HTTP_TIMEOUT_SECS))
                 .build()?,
             base_url: base_url.into(),
-            rate_limiter: RateLimiter::new(constants::DEFAULT_RATE_LIMIT, rate_limit_period),
+            rate_limiter: RateLimiter::new(requests_per_period, period),
             last_retry_after: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
             request_timestamps: Arc::new(std::sync::Mutex::new(VecDeque::new())),
-            rate_limit_period,
+            rate_limit_period: period,
         })
     }
 
@@ -97,7 +100,9 @@ impl PLCClient {
                     let retry_after = self.last_retry_after.lock().await.take();
                     if let Some(retry_after) = retry_after {
                         let requests_in_period = self.count_requests_in_period();
-                        let rate_limit = constants::DEFAULT_RATE_LIMIT;
+                        let rate_limit = (constants::PLC_RATE_LIMIT_REQUEST as f64
+                            * constants::PLC_RATE_LIMIT_SAFETY_FACTOR)
+                            .floor() as usize;
                         eprintln!(
                             "[Sync] Rate limited by PLC directory ({} requests in last {:?}, limit: {}), waiting {:?} before retry {}/{}",
                             requests_in_period,
