@@ -1,6 +1,6 @@
 [package]
 name = "plcbundle"
-version = "0.9.0-alpha.1"
+version = "0.9.0-alpha.2"
 edition = "2024"
 authors = ["Tree <tree@tree.fail>"]
 description = "DID PLC Bundle Management Tool"
