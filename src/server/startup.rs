@@ -25,6 +25,7 @@ pub struct StartupConfig {
     pub sync_interval: Duration,
     pub max_bundles: u32,
     pub enable_websocket: bool,
+    pub fetch_log: bool,
 }
 
 /// Progress callback for DID index building
@@ -453,6 +454,7 @@ pub fn setup_sync_loop(
     let interval = config.sync_interval;
     let max_bundles = config.max_bundles;
     let verbose = config.verbose;
+    let fetch_log = config.fetch_log;
     let shutdown_signal = server_runtime.shutdown_signal();
     let sync_runtime = server_runtime.clone();
 
@@ -477,6 +479,7 @@ pub fn setup_sync_loop(
             verbose,
             shutdown_rx: Some(shutdown_signal),
             shutdown_tx: Some(sync_runtime.shutdown_sender()),
+            fetch_log,
         };
 
         use crate::sync::SyncLoggerImpl;

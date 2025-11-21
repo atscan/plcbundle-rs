@@ -20,6 +20,12 @@ pub struct PLCClient {
     rate_limit_period: Duration,
 }
 
+pub struct RawExportResponse {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: String,
+}
+
 impl PLCClient {
     pub fn new(base_url: impl Into<String>) -> Result<Self> {
         let period = Duration::from_secs(constants::PLC_RATE_LIMIT_PERIOD);
@@ -36,6 +42,10 @@ impl PLCClient {
             request_timestamps: Arc::new(std::sync::Mutex::new(VecDeque::new())),
             rate_limit_period: period,
         })
+    }
+
+    pub fn build_export_url(&self, after: &str, count: usize) -> String {
+        format!("{}/export?after={}&count={}", self.base_url, after, count)
     }
 
     /// Record a request timestamp and clean up old entries
@@ -72,37 +82,41 @@ impl PLCClient {
         &self,
         after: &str,
         count: usize,
-    ) -> Result<(Vec<PLCOperation>, Duration, Duration)> {
-        self.fetch_operations_with_retry_cancelable(after, count, 5, None)
+        shutdown_rx: Option<tokio::sync::watch::Receiver<bool>>,
+        capture_raw: bool,
+    ) -> Result<(
+        Vec<PLCOperation>,
+        Duration,
+        Duration,
+        Option<RawExportResponse>,
+    )> {
+        self.fetch_operations_unified(after, count, shutdown_rx, capture_raw)
             .await
     }
 
-    pub async fn fetch_operations_cancelable(
+    // merged into `fetch_operations`
+
+    // merged into `fetch_operations`
+
+    async fn fetch_operations_unified(
         &self,
         after: &str,
         count: usize,
         shutdown_rx: Option<tokio::sync::watch::Receiver<bool>>,
-    ) -> Result<(Vec<PLCOperation>, Duration, Duration)> {
-        self.fetch_operations_with_retry_cancelable(after, count, 5, shutdown_rx)
-            .await
-    }
-
-    async fn fetch_operations_with_retry_cancelable(
-        &self,
-        after: &str,
-        count: usize,
-        max_retries: usize,
-        shutdown_rx: Option<tokio::sync::watch::Receiver<bool>>,
-    ) -> Result<(Vec<PLCOperation>, Duration, Duration)> {
+        capture_raw: bool,
+    ) -> Result<(
+        Vec<PLCOperation>,
+        Duration,
+        Duration,
+        Option<RawExportResponse>,
+    )> {
         let mut backoff = Duration::from_secs(1);
         let mut last_err = None;
         let mut total_wait = Duration::from_secs(0);
         let mut total_http = Duration::from_secs(0);
 
-        for attempt in 1..=max_retries {
-            if let Some(ref rx) = shutdown_rx
-                && *rx.borrow()
-            {
+        for attempt in 1..=5 {
+            if let Some(ref rx) = shutdown_rx && *rx.borrow() {
                 anyhow::bail!("Shutdown requested");
             }
             let export_url = format!("{}/export?after={}&count={}", self.base_url, after, count);
@@ -121,9 +135,7 @@ impl PLCClient {
             if let Some(mut rx) = shutdown_rx.clone() {
                 tokio::select! {
                     _ = self.rate_limiter.wait() => {}
-                    _ = rx.changed() => {
-                        if *rx.borrow() { anyhow::bail!("Shutdown requested"); }
-                    }
+                    _ = rx.changed() => { if *rx.borrow() { anyhow::bail!("Shutdown requested"); } }
                 }
             } else {
                 self.rate_limiter.wait().await;
@@ -134,21 +146,22 @@ impl PLCClient {
             }
             total_wait += wait_elapsed;
 
-            // Clear previous retry_after
             *self.last_retry_after.lock().await = None;
-
-            // Record this request attempt
             self.record_request();
 
-            match self.do_fetch_operations(after, count).await {
-                Ok((operations, http_duration)) => {
+            let result = if capture_raw {
+                self.do_fetch_operations(after, count, true).await
+            } else {
+                self.do_fetch_operations(after, count, false).await
+            };
+
+            match result {
+                Ok((operations, http_duration, capture)) => {
                     total_http += http_duration;
-                    return Ok((operations, total_wait, total_http));
+                    return Ok((operations, total_wait, total_http, capture));
                 }
                 Err(e) => {
                     last_err = Some(e);
-
-                    // Check if it's a rate limit error (429)
                     let retry_after = self.last_retry_after.lock().await.take();
                     if let Some(retry_after) = retry_after {
                         let requests_in_period = self.count_requests_in_period();
@@ -162,14 +175,12 @@ impl PLCClient {
                             rate_limit,
                             retry_after,
                             attempt,
-                            max_retries
+                            5
                         );
                         if let Some(mut rx) = shutdown_rx.clone() {
                             tokio::select! {
                                 _ = tokio::time::sleep(retry_after) => {}
-                                _ = rx.changed() => {
-                                    if *rx.borrow() { anyhow::bail!("Shutdown requested"); }
-                                }
+                                _ = rx.changed() => { if *rx.borrow() { anyhow::bail!("Shutdown requested"); } }
                             }
                         } else {
                             tokio::time::sleep(retry_after).await;
@@ -177,26 +188,23 @@ impl PLCClient {
                         continue;
                     }
 
-                    // Other errors - exponential backoff
-                    if attempt < max_retries {
+                    if attempt < 5 {
                         eprintln!(
                             "[Sync] Request failed (attempt {}/{}): {}, retrying in {:?}",
                             attempt,
-                            max_retries,
+                            5,
                             last_err.as_ref().unwrap(),
                             backoff
                         );
                         if let Some(mut rx) = shutdown_rx.clone() {
                             tokio::select! {
                                 _ = tokio::time::sleep(backoff) => {}
-                                _ = rx.changed() => {
-                                    if *rx.borrow() { anyhow::bail!("Shutdown requested"); }
-                                }
+                                _ = rx.changed() => { if *rx.borrow() { anyhow::bail!("Shutdown requested"); } }
                             }
                         } else {
                             tokio::time::sleep(backoff).await;
                         }
-                        backoff *= 2; // Exponential backoff
+                        backoff *= 2;
                     }
                 }
             }
@@ -204,16 +212,23 @@ impl PLCClient {
 
         anyhow::bail!(
             "Failed after {} attempts: {}",
-            max_retries,
+            5,
             last_err.unwrap_or_else(|| anyhow::anyhow!("Unknown error"))
         )
     }
+
+    // Removed legacy duplicate retry path; unified via `fetch_operations_unified`
 
     async fn do_fetch_operations(
         &self,
         after: &str,
         count: usize,
-    ) -> Result<(Vec<PLCOperation>, Duration)> {
+        capture_raw: bool,
+    ) -> Result<(
+        Vec<PLCOperation>,
+        Duration,
+        Option<RawExportResponse>,
+    )> {
         let url = format!("{}/export", self.base_url);
         let request_start = Instant::now();
         let response = self
@@ -224,7 +239,6 @@ impl PLCClient {
             .send()
             .await?;
 
-        // Handle rate limiting (429)
         if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
             let retry_after = parse_retry_after(&response);
             *self.last_retry_after.lock().await = Some(retry_after);
@@ -234,6 +248,18 @@ impl PLCClient {
         if !response.status().is_success() {
             anyhow::bail!("PLC request failed: {}", response.status());
         }
+        let status = if capture_raw { Some(response.status().as_u16()) } else { None };
+        let headers_vec: Option<Vec<(String, String)>> = if capture_raw {
+            Some(
+                response
+                    .headers()
+                    .iter()
+                    .filter_map(|(k, v)| Some((k.as_str().to_string(), v.to_str().ok()?.to_string())))
+                    .collect(),
+            )
+        } else {
+            None
+        };
 
         let body = response.text().await?;
         let request_duration = request_start.elapsed();
@@ -256,7 +282,17 @@ impl PLCClient {
             }
         }
 
-        Ok((operations, request_duration))
+        let capture = if capture_raw {
+            Some(RawExportResponse {
+                status: status.unwrap(),
+                headers: headers_vec.unwrap(),
+                body,
+            })
+        } else {
+            None
+        };
+
+        Ok((operations, request_duration, capture))
     }
 
     /// Fetch DID document raw JSON from PLC directory

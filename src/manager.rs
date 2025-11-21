@@ -1407,15 +1407,13 @@ impl BundleManager {
     /// Add operations to mempool, returning number added
     ///
     /// Mempool must be loaded first (call `load_mempool()`).
-    pub fn add_to_mempool(&self, ops: Vec<Operation>) -> Result<usize> {
-        self.get_mempool()?; // Check if loaded
-
+    pub fn add_to_mempool(&self, ops: Vec<Operation>, collect_cids: bool) -> Result<(usize, Vec<String>)> {
+        self.get_mempool()?;
         let mut mempool_guard = self.mempool.write().unwrap();
-
         if let Some(mp) = mempool_guard.as_mut() {
-            let added = mp.add(ops)?;
+            let result = if collect_cids { mp.add_and_collect_cids(ops)? } else { (mp.add(ops)?, Vec::new()) };
             mp.save_if_needed()?;
-            Ok(added)
+            Ok(result)
         } else {
             anyhow::bail!("Mempool not initialized")
         }
@@ -1758,6 +1756,7 @@ impl BundleManager {
         client: &crate::plc_client::PLCClient,
         shutdown_rx: Option<tokio::sync::watch::Receiver<bool>>,
         update_did_index: bool,
+        fetch_log: bool,
     ) -> Result<SyncResult> {
         use crate::sync::{get_boundary_cids, strip_boundary_duplicates};
         use std::time::Instant;
@@ -1894,12 +1893,29 @@ impl BundleManager {
             {
                 anyhow::bail!("Shutdown requested");
             }
-            let (plc_ops, wait_dur, http_dur) = if let Some(rx) = shutdown_rx.clone() {
-                client
-                    .fetch_operations_cancelable(&after_time, request_count, Some(rx))
-                    .await?
+            let (plc_ops, wait_dur, http_dur, raw_capture_opt) = if fetch_log {
+                if let Some(rx) = shutdown_rx.clone() {
+                    let (ops, w, h, capture_opt) = client
+                        .fetch_operations(&after_time, request_count, Some(rx), true)
+                        .await?;
+                    (ops, w, h, capture_opt)
+                } else {
+                    let (ops, w, h, capture_opt) = client
+                        .fetch_operations(&after_time, request_count, None, true)
+                        .await?;
+                    (ops, w, h, capture_opt)
+                }
             } else {
-                client.fetch_operations(&after_time, request_count).await?
+                if let Some(rx) = shutdown_rx.clone() {
+                    let (ops, w, h, _) = client
+                        .fetch_operations(&after_time, request_count, Some(rx), false)
+                        .await?;
+                    (ops, w, h, None)
+                } else {
+                    let (ops, w, h, _) =
+                        client.fetch_operations(&after_time, request_count, None, false).await?;
+                    (ops, w, h, None)
+                }
             };
             total_wait += wait_dur;
             total_http += http_dur;
@@ -1921,10 +1937,18 @@ impl BundleManager {
 
             total_fetched += fetched_count;
 
-            // Convert and deduplicate
-            let mut ops: Vec<Operation> = plc_ops.into_iter().map(Into::into).collect();
-            let before_dedup = ops.len();
-            ops = strip_boundary_duplicates(ops, &prev_boundary);
+            // Convert to operations
+            let ops_pre: Vec<Operation> = plc_ops.into_iter().map(Into::into).collect();
+            let mut all_cids_pre: Vec<String> = Vec::new();
+            if fetch_log {
+                all_cids_pre = ops_pre
+                    .iter()
+                    .filter_map(|op| op.cid.clone())
+                    .collect();
+            }
+            // Deduplicate against boundary
+            let before_dedup = ops_pre.len();
+            let ops: Vec<Operation> = strip_boundary_duplicates(ops_pre.clone(), &prev_boundary);
             let after_dedup = ops.len();
 
             let boundary_removed = before_dedup - after_dedup;
@@ -1938,12 +1962,64 @@ impl BundleManager {
                 }
             }
 
-            // Add to mempool
-            let added = if !ops.is_empty() {
-                self.add_to_mempool(ops)?
+            let export_url = if fetch_log {
+                client.build_export_url(&after_time, request_count)
             } else {
-                0
+                String::new()
             };
+
+            let mut all_cids: Vec<String> = Vec::new();
+            if fetch_log {
+                all_cids = all_cids_pre;
+            }
+
+            let (added, added_cids) = if !ops.is_empty() {
+                self.add_to_mempool(ops, fetch_log)?
+            } else {
+                (0, Vec::new())
+            };
+
+            if fetch_log {
+                use serde_json::json;
+                let log_dir = self.directory.join(constants::DID_INDEX_DIR).join("logs");
+                let _ = std::fs::create_dir_all(&log_dir);
+                let log_path = log_dir.join(format!("{:06}.json", next_bundle_num));
+                let added_set: std::collections::HashSet<String> =
+                    added_cids.iter().cloned().collect();
+                let skipped: Vec<String> = all_cids
+                    .iter()
+                    .filter(|c| !added_set.contains(*c))
+                    .cloned()
+                    .collect();
+                let entry = json!({
+                    "time": chrono::Utc::now().to_rfc3339(),
+                    "url": export_url,
+                    "count": fetched_count,
+                    "cids": all_cids,
+                    "skipped": skipped,
+                });
+                let mut file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(log_path)?;
+                use std::io::Write;
+                writeln!(file, "{}", entry.to_string())?;
+
+                if let Some(capture) = raw_capture_opt.as_ref() {
+                    let raw_path = log_dir.join(format!("{:06}-{}", next_bundle_num, after_time));
+                    let mut raw_file = std::fs::OpenOptions::new()
+                        .create(true)
+                        .write(true)
+                        .truncate(true)
+                        .open(raw_path)?;
+                    writeln!(raw_file, "Status: {}", capture.status)?;
+                    for (name, value) in &capture.headers {
+                        writeln!(raw_file, "{}: {}", name, value)?;
+                    }
+                    writeln!(raw_file)?;
+                    write!(raw_file, "{}", capture.body)?;
+                }
+            }
 
             let dupes_in_fetch = after_dedup - added;
             total_dupes += dupes_in_fetch;
@@ -2191,7 +2267,7 @@ impl BundleManager {
         let mut synced = 0;
 
         loop {
-            match self.sync_next_bundle(client, None, true).await {
+            match self.sync_next_bundle(client, None, true, false).await {
                 Ok(SyncResult::BundleCreated { .. }) => {
                     synced += 1;
 

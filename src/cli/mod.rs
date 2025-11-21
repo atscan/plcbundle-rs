@@ -3,6 +3,10 @@ use clap::{Parser, Subcommand, ValueHint};
 use plcbundle::*;
 use std::path::PathBuf;
 
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 // CLI Commands (cmd_ prefix)
 mod cmd_bench;
 mod cmd_clean;
@@ -147,6 +151,9 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
+    #[cfg(feature = "dhat-heap")]
+    let _profiler = dhat::Profiler::new_heap();
+
     let cli = Cli::parse();
 
     // Initialize logger based on verbosity flags

@@ -186,7 +186,6 @@ struct Shard {
 struct SegmentLayer {
     meta: DeltaSegmentMeta,
     mmap: Mmap,
-    _file: File,
 }
 
 impl SegmentLayer {
@@ -1757,7 +1756,6 @@ impl Manager {
             layers.push(SegmentLayer {
                 meta,
                 mmap,
-                _file: file,
             });
         }
 

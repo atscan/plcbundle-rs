@@ -84,6 +84,10 @@ pub struct ServerCommand {
     #[arg(long, default_value = "0", help_heading = "Sync Options")]
     pub max_bundles: u32,
 
+    /// Enable extended per-request fetch logging
+    #[arg(long, help_heading = "Sync Options")]
+    pub fetch_log: bool,
+
     /// Enable WebSocket endpoint for streaming
     #[arg(long, help_heading = "Feature Options")]
     pub websocket: bool,
@@ -139,6 +143,7 @@ fn run_server(cmd: ServerCommand, dir: PathBuf, global_verbose: bool) -> Result<
         sync_interval: cmd.interval,
         max_bundles: cmd.max_bundles,
         enable_websocket: cmd.websocket,
+        fetch_log: cmd.fetch_log,
     };
 
     // Create progress callback factory for DID index building (CLI-specific)

@@ -8,3 +8,5 @@ test_bundles*
 .DS_Store
 .trae
 .github
+jeprof*
+dhat*

@@ -76,6 +76,10 @@ pub struct SyncCommand {
     /// Maximum bundles to fetch (0 = all, only for one-time sync)
     #[arg(long, default_value = "0", conflicts_with = "continuous")]
     pub max_bundles: usize,
+
+    /// Enable extended per-request fetch logging
+    #[arg(long)]
+    pub fetch_log: bool,
 }
 
 impl HasGlobalFlags for SyncCommand {
@@ -113,6 +117,7 @@ pub fn run(cmd: SyncCommand, dir: PathBuf, global_quiet: bool, global_verbose: b
             verbose: global_verbose,
             shutdown_rx: None,
             shutdown_tx: None,
+            fetch_log: cmd.fetch_log,
         };
 
         let quiet = global_quiet;
@@ -131,6 +136,7 @@ pub fn run(cmd: SyncCommand, dir: PathBuf, global_quiet: bool, global_verbose: b
                 verbose: global_verbose,
                 shutdown_rx: Some(shutdown_signal),
                 shutdown_tx: Some(shutdown_sender),
+                fetch_log: cmd.fetch_log,
             };
 
             let logger = SyncLoggerImpl::new_server(global_verbose, cmd.interval);

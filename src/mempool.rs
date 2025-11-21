@@ -69,13 +69,11 @@ impl Mempool {
         Ok(mempool)
     }
 
-    /// Add operations to the mempool with strict validation
-    pub fn add(&mut self, ops: Vec<Operation>) -> Result<usize> {
+    fn add_internal(&mut self, ops: Vec<Operation>, collect_cids: bool) -> Result<(usize, Vec<String>)> {
         if ops.is_empty() {
-            return Ok(0);
+            return Ok((0, Vec::new()));
         }
 
-        // Build existing CID set
         let mut existing_cids: HashSet<String> = self
             .operations
             .iter()
@@ -86,8 +84,8 @@ impl Mempool {
         let total_in = ops.len();
         let mut skipped_no_cid = 0usize;
         let mut skipped_dupe = 0usize;
+        let mut added_cids = Vec::new();
 
-        // Start from last operation time if we have any
         let mut last_time = if !self.operations.is_empty() {
             self.parse_timestamp(&self.operations.last().unwrap().created_at)?
         } else {
@@ -98,7 +96,6 @@ impl Mempool {
         let mut first_added_time: Option<DateTime<Utc>> = None;
         let mut last_added_time: Option<DateTime<Utc>> = None;
         for op in ops {
-            // Skip if no CID
             let cid = match &op.cid {
                 Some(c) => c,
                 None => {
@@ -107,15 +104,12 @@ impl Mempool {
                 }
             };
 
-            // Skip duplicates
             if existing_cids.contains(cid) {
                 skipped_dupe += 1;
                 continue;
             }
 
             let op_time = self.parse_timestamp(&op.created_at)?;
-
-            // CRITICAL: Validate chronological order
             if op_time < last_time {
                 bail!(
                     "chronological violation: operation {} at {} is before {}",
@@ -124,8 +118,6 @@ impl Mempool {
                     last_time.to_rfc3339()
                 );
             }
-
-            // Validate operation is after minimum timestamp
             if op_time < self.min_timestamp {
                 bail!(
                     "operation {} at {} is before minimum timestamp {} (belongs in earlier bundle)",
@@ -136,6 +128,9 @@ impl Mempool {
             }
 
             new_ops.push(op.clone());
+            if collect_cids {
+                added_cids.push(cid.clone());
+            }
             existing_cids.insert(cid.clone());
             last_time = op_time;
             if first_added_time.is_none() {
@@ -146,11 +141,9 @@ impl Mempool {
 
         let added = new_ops.len();
 
-        // Add new operations and update DID index
         let start_idx = self.operations.len();
         self.operations.extend(new_ops);
 
-        // Update DID index for new operations
         for (offset, op) in self.operations[start_idx..].iter().enumerate() {
             let idx = start_idx + offset;
             self.did_index.entry(op.did.clone()).or_default().push(idx);
@@ -182,7 +175,17 @@ impl Mempool {
             }
         }
 
+        Ok((added, added_cids))
+    }
+
+    /// Add operations to the mempool with strict validation
+    pub fn add(&mut self, ops: Vec<Operation>) -> Result<usize> {
+        let (added, _) = self.add_internal(ops, false)?;
         Ok(added)
+    }
+
+    pub fn add_and_collect_cids(&mut self, ops: Vec<Operation>) -> Result<(usize, Vec<String>)> {
+        self.add_internal(ops, true)
     }
 
     /// Validate performs a full chronological validation of all operations
@@ -308,7 +311,9 @@ impl Mempool {
     pub fn clear(&mut self) {
         let prev = self.operations.len();
         self.operations.clear();
+        self.operations.shrink_to_fit();
         self.did_index.clear();
+        self.did_index.shrink_to_fit();
         self.validated = false;
         self.dirty = true;
         if self.verbose {
