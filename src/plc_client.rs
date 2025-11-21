@@ -24,6 +24,7 @@ pub struct RawExportResponse {
     pub status: u16,
     pub headers: Vec<(String, String)>,
     pub body: String,
+    pub http_start: String,
 }
 
 impl PLCClient {
@@ -230,6 +231,7 @@ impl PLCClient {
         Option<RawExportResponse>,
     )> {
         let url = format!("{}/export", self.base_url);
+        let request_start_wall = chrono::Utc::now();
         let request_start = Instant::now();
         let response = self
             .client
@@ -287,6 +289,7 @@ impl PLCClient {
                 status: status.unwrap(),
                 headers: headers_vec.unwrap(),
                 body,
+                http_start: request_start_wall.to_rfc3339(),
             })
         } else {
             None

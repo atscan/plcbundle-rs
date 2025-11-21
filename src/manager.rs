@@ -1997,6 +1997,7 @@ impl BundleManager {
                     "count": fetched_count,
                     "cids": all_cids,
                     "skipped": skipped,
+                    "http_start": raw_capture_opt.as_ref().map(|c| c.http_start.clone()).unwrap_or_default(),
                 });
                 let mut file = std::fs::OpenOptions::new()
                     .create(true)
