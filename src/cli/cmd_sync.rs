@@ -118,6 +118,7 @@ pub fn run(cmd: SyncCommand, dir: PathBuf, global_quiet: bool, global_verbose: b
             shutdown_rx: None,
             shutdown_tx: None,
             fetch_log: cmd.fetch_log,
+            safety_lag: Duration::from_millis(constants::DEFAULT_SAFETY_LAG_MS),
         };
 
         let quiet = global_quiet;
@@ -137,6 +138,7 @@ pub fn run(cmd: SyncCommand, dir: PathBuf, global_quiet: bool, global_verbose: b
                 shutdown_rx: Some(shutdown_signal),
                 shutdown_tx: Some(shutdown_sender),
                 fetch_log: cmd.fetch_log,
+                safety_lag: Duration::from_millis(constants::DEFAULT_SAFETY_LAG_MS),
             };
 
             let logger = SyncLoggerImpl::new_server(global_verbose, cmd.interval);

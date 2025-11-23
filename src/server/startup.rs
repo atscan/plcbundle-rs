@@ -480,6 +480,7 @@ pub fn setup_sync_loop(
             shutdown_rx: Some(shutdown_signal),
             shutdown_tx: Some(sync_runtime.shutdown_sender()),
             fetch_log,
+            safety_lag: Duration::from_millis(constants::DEFAULT_SAFETY_LAG_MS),
         };
 
         use crate::sync::SyncLoggerImpl;

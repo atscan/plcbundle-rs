@@ -76,6 +76,11 @@ pub const MEMPOOL_STALE_THRESHOLD_SECS: u64 = 3600;
 /// Minimum time between bundle creation attempts (60 seconds)
 pub const MIN_BUNDLE_CREATION_INTERVAL_SECS: i64 = 60;
 
+/// Default safety lag for sync operations (in milliseconds)
+/// This buffer prevents race conditions where the indexer might miss operations
+/// that were committed just before the fetch but not yet visible or indexed.
+pub const DEFAULT_SAFETY_LAG_MS: u64 = 1000;
+
 // ============================================================================
 // File and Directory Constants
 // ============================================================================

@@ -90,6 +90,7 @@ impl PLCClient {
         Duration,
         Duration,
         Option<RawExportResponse>,
+        Option<chrono::DateTime<chrono::Utc>>,
     )> {
         self.fetch_operations_unified(after, count, shutdown_rx, capture_raw)
             .await
@@ -110,6 +111,7 @@ impl PLCClient {
         Duration,
         Duration,
         Option<RawExportResponse>,
+        Option<chrono::DateTime<chrono::Utc>>,
     )> {
         let mut backoff = Duration::from_secs(1);
         let mut last_err = None;
@@ -157,9 +159,9 @@ impl PLCClient {
             };
 
             match result {
-                Ok((operations, http_duration, capture)) => {
+                Ok((operations, http_duration, capture, server_time)) => {
                     total_http += http_duration;
-                    return Ok((operations, total_wait, total_http, capture));
+                    return Ok((operations, total_wait, total_http, capture, server_time));
                 }
                 Err(e) => {
                     last_err = Some(e);
@@ -229,6 +231,7 @@ impl PLCClient {
         Vec<PLCOperation>,
         Duration,
         Option<RawExportResponse>,
+        Option<chrono::DateTime<chrono::Utc>>,
     )> {
         let url = format!("{}/export", self.base_url);
         let request_start_wall = chrono::Utc::now();
@@ -263,6 +266,14 @@ impl PLCClient {
             None
         };
 
+        // Extract Date header for server time
+        let server_time = response
+            .headers()
+            .get("date")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| httpdate::parse_http_date(s).ok())
+            .map(|t| chrono::DateTime::<chrono::Utc>::from(t));
+
         let body = response.text().await?;
         let request_duration = request_start.elapsed();
         let mut operations = Vec::new();
@@ -295,7 +306,7 @@ impl PLCClient {
             None
         };
 
-        Ok((operations, request_duration, capture))
+        Ok((operations, request_duration, capture, server_time))
     }
 
     /// Fetch DID document raw JSON from PLC directory

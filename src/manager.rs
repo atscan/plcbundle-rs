@@ -1757,6 +1757,7 @@ impl BundleManager {
         shutdown_rx: Option<tokio::sync::watch::Receiver<bool>>,
         update_did_index: bool,
         fetch_log: bool,
+        safety_lag: Option<std::time::Duration>,
     ) -> Result<SyncResult> {
         use crate::sync::{get_boundary_cids, strip_boundary_duplicates};
         use std::time::Instant;
@@ -1858,6 +1859,9 @@ impl BundleManager {
         let mut total_wait = std::time::Duration::from_secs(0);
         let mut total_http = std::time::Duration::from_secs(0);
 
+        // Cutoff time will be calculated per-request based on server time
+        // (removed static cutoff calculation)
+
         while fetch_num < MAX_ATTEMPTS {
             let stats = self.get_mempool_stats()?;
 
@@ -1893,28 +1897,28 @@ impl BundleManager {
             {
                 anyhow::bail!("Shutdown requested");
             }
-            let (plc_ops, wait_dur, http_dur, raw_capture_opt) = if fetch_log {
+            let (plc_ops, wait_dur, http_dur, raw_capture_opt, server_time) = if fetch_log {
                 if let Some(rx) = shutdown_rx.clone() {
-                    let (ops, w, h, capture_opt) = client
+                    let (ops, w, h, capture_opt, st) = client
                         .fetch_operations(&after_time, request_count, Some(rx), true)
                         .await?;
-                    (ops, w, h, capture_opt)
+                    (ops, w, h, capture_opt, st)
                 } else {
-                    let (ops, w, h, capture_opt) = client
+                    let (ops, w, h, capture_opt, st) = client
                         .fetch_operations(&after_time, request_count, None, true)
                         .await?;
-                    (ops, w, h, capture_opt)
+                    (ops, w, h, capture_opt, st)
                 }
             } else {
                 if let Some(rx) = shutdown_rx.clone() {
-                    let (ops, w, h, _) = client
+                    let (ops, w, h, _, st) = client
                         .fetch_operations(&after_time, request_count, Some(rx), false)
                         .await?;
-                    (ops, w, h, None)
+                    (ops, w, h, None, st)
                 } else {
-                    let (ops, w, h, _) =
+                    let (ops, w, h, _, st) =
                         client.fetch_operations(&after_time, request_count, None, false).await?;
-                    (ops, w, h, None)
+                    (ops, w, h, None, st)
                 }
             };
             total_wait += wait_dur;
@@ -1937,8 +1941,67 @@ impl BundleManager {
 
             total_fetched += fetched_count;
 
+            // Calculate cutoff time based on server time if available, otherwise local time
+            let cutoff_time = if let Some(lag) = safety_lag {
+                let base_time = server_time.unwrap_or_else(chrono::Utc::now);
+                let cutoff = base_time - chrono::Duration::from_std(lag).unwrap_or(chrono::Duration::seconds(0));
+                
+                // Only log if we're using server time (to avoid spamming logs) or if verbose
+                if *self.verbose.lock().unwrap() {
+                    let source = if server_time.is_some() { "server" } else { "local" };
+                    log::debug!(
+                        "Safety lag cutoff: {} (source: {}, lag: {:?})",
+                        cutoff.to_rfc3339(),
+                        source,
+                        lag
+                    );
+                }
+                Some(cutoff)
+            } else {
+                None
+            };
+
             // Convert to operations
-            let ops_pre: Vec<Operation> = plc_ops.into_iter().map(Into::into).collect();
+            let ops_pre_raw: Vec<Operation> = plc_ops.into_iter().map(Into::into).collect();
+
+            // Apply safety lag filtering
+            let (ops_pre, filtered_count) = if let Some(cutoff) = cutoff_time {
+                let mut kept = Vec::with_capacity(ops_pre_raw.len());
+                let mut filtered = 0;
+                for op in ops_pre_raw {
+                    if let Ok(op_time) = chrono::DateTime::parse_from_rfc3339(&op.created_at) {
+                        if op_time <= cutoff {
+                            kept.push(op);
+                        } else {
+                            filtered += 1;
+                        }
+                    } else {
+                        // If we can't parse the time, keep it (safe default? or unsafe?)
+                        // Keeping it is safer for data availability, but risky for consistency.
+                        // Given the issue is about race conditions, keeping it might be risky.
+                        // But failing to parse is a bigger issue. Let's keep it and log warning.
+                        log::warn!("Failed to parse timestamp for op {}, keeping it", op.did);
+                        kept.push(op);
+                    }
+                }
+                (kept, filtered)
+            } else {
+                (ops_pre_raw, 0)
+            };
+
+            if filtered_count > 0 {
+                if *self.verbose.lock().unwrap() {
+                    log::info!(
+                        "  Safety lag: filtered {} operations newer than cutoff",
+                        filtered_count
+                    );
+                }
+                // If we filtered any operations, we must consider ourselves "caught up"
+                // because we can't proceed past the cutoff time safely.
+                // We also stop fetching in this cycle.
+                caught_up = true;
+            }
+
             let mut all_cids_pre: Vec<String> = Vec::new();
             if fetch_log {
                 all_cids_pre = ops_pre
@@ -2063,10 +2126,15 @@ impl BundleManager {
             }
 
             // Stop if we got an incomplete batch or made no progress
-            if got_incomplete_batch || added == 0 {
+            // Also stop if we filtered operations due to safety lag (caught_up is set above)
+            if got_incomplete_batch || added == 0 || (filtered_count > 0 && caught_up) {
                 caught_up = true;
                 if *self.verbose.lock().unwrap() {
-                    log::debug!("Caught up to latest PLC data");
+                    if filtered_count > 0 {
+                        log::debug!("Caught up to safety lag cutoff");
+                    } else {
+                        log::debug!("Caught up to latest PLC data");
+                    }
                 }
                 break;
             }
@@ -2268,7 +2336,7 @@ impl BundleManager {
         let mut synced = 0;
 
         loop {
-            match self.sync_next_bundle(client, None, true, false).await {
+            match self.sync_next_bundle(client, None, true, false, None).await {
                 Ok(SyncResult::BundleCreated { .. }) => {
                     synced += 1;
 

@@ -132,6 +132,7 @@ pub struct SyncConfig {
     pub shutdown_rx: Option<tokio::sync::watch::Receiver<bool>>,
     pub shutdown_tx: Option<tokio::sync::watch::Sender<bool>>,
     pub fetch_log: bool,
+    pub safety_lag: Duration,
 }
 
 impl Default for SyncConfig {
@@ -145,6 +146,7 @@ impl Default for SyncConfig {
             shutdown_rx: None,
             shutdown_tx: None,
             fetch_log: false,
+            safety_lag: Duration::from_millis(crate::constants::DEFAULT_SAFETY_LAG_MS),
         }
     }
 }
@@ -508,7 +510,13 @@ impl SyncManager {
 
             match self
                 .manager
-                .sync_next_bundle(&self.client, None, true, self.config.fetch_log)
+                .sync_next_bundle(
+                    &self.client,
+                    None,
+                    true,
+                    self.config.fetch_log,
+                    Some(self.config.safety_lag),
+                )
                 .await
             {
                 Ok(crate::manager::SyncResult::BundleCreated {
@@ -646,6 +654,7 @@ impl SyncManager {
                     self.config.shutdown_rx.clone(),
                     !is_initial_sync,
                     self.config.fetch_log,
+                    Some(self.config.safety_lag),
                 )
                 .await;
 
